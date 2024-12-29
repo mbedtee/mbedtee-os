@@ -1,0 +1,80 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ */
+
+/dts-v1/;
+
+#include "memory.dtsi"
+
+#define GIC_SPI(x) ((x) + 32)
+#define GIC_PPI(x) ((x))
+
+/ {
+	cpu {
+		compatible = "arm,cpu";
+		/* mpid of each CPU */
+		cpus = <0 1 2 3>;
+	};
+
+	platform {
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/*
+		 * pinctrls cells information
+		 * 0: reg offset,
+		 * 1: first bit position,
+		 * 2: number of bits,
+		 * 3: value
+		 */
+		pinctrl@0 {
+			/* unnecessary for QEMU */
+			compatible = "module,pinctrl";
+			reg = <0 0>;
+			pinctrls = <0 0 0 0>;
+		};
+
+		cpu-power@1 {
+			compatible = "module,cpu-power";
+			/* unnecessary for QEMU */
+			reg = <0 0>;
+		};
+	};
+
+	uart {
+		compatible = "module,uart";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		pl011@9040000 {
+			compatible = "arm,pl011";
+			reg = <0x09040000 0x1000>;
+			interrupts = <GIC_SPI(8)>;
+			interrupt-parent = <&gic>;
+			clock-frequency = <24000000>;
+			current-speed = <115200>;
+			clock-divisor = <16>;
+		};
+	};
+
+	/* interrupt-controller: CPU side */
+	gic: interrupt-controller@8000000 {
+		compatible = "arm,gic-v2";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+		#address-cells = <1>;
+
+		reg = <0x08000000 0x1000>, /* GICD */
+			<0x08010000 0x2000>; /* GICC */
+	};
+
+	timer {
+		compatible = "arm,armv7-generic-timer";
+		interrupts = <GIC_PPI(29)>; /* PPI 29 for SecureWorld tick_timer, 30 for REE */
+		interrupt-parent = <&gic>;
+		clock-frequency = <125000000>;
+	};
+};

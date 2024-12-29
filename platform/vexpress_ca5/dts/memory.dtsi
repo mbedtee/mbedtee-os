@@ -1,0 +1,35 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ */
+
+/{
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	memory@80000000 {
+		compatible = "memory";
+		device_type = "memory";
+		/*
+		 * SoC installed memory mapping, this is a guideline for OS
+		 * to setup the early mmu-memory-section-mapping
+		 *
+		 * Mandatory node for ARM, MIPS SoC does not require it,
+		 * since MIPS already has the fix-mapping-table in MMU.
+		 *
+		 * e.g. AArch32@ARMV7-A FVP with 2G Bytes memory installed:
+		 */
+		mapping = <0x80000000 0x80000000>;
+
+		/* dedicated memory region for current OS */
+		reg = <0x80000000 0x5800000>;
+
+		/* TAs loaded from REE will be placed in this area */
+		ta-ramfs = <0x85A00000 0x200000>;
+
+		ree-dtb = <0x85F00000 0x10000>;
+		rpc-t2r-ring = <0x85F10000 0x20000>;
+		rpc-t2r-shm = <0x85F30000 0x40000>;
+		ree-addr = <0x86008000 0x1800000>;
+	};
+};

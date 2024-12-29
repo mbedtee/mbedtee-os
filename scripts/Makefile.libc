@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+#
+# ===============================================
+# rules for mbedtee libc
+# ===============================================
+
+include $(SCRIPTS_DIR)/Makefile.include
+
+libc_cflags  = $(cflags) $(user-inc-y) $(TARGET_PICFLAGS)
+libc_asflags = $(asflags) $(user-inc-y) $(TARGET_PICFLAGS)
+libc_ldflags = -EL -nostdlib -shared -z max-page-size=4096
+
+libc-objs-y = $(foreach dir,$(obj-dirs),$(foreach obj,\
+	$($(subst /,-,$(subst $(TOP_DIR)/,,$(dir)))-uobjs-y),\
+	$(LIBC_BUILD)/$(subst $(TOP_DIR)/,,$(dir))/$(obj)))
+
+-include $(libc-objs-y:.o=.d)
+
+.PHONY: all
+all: $(libc-objs-y)
+	$(Q)rm -rf $(LIBC_BUILD)/newlib
+	$(Q)rm -f $(LIBC_BUILD)/libuser.a $(LIBC_BUILD)/libc.a
+	$(Q)mkdir -p $(LIBC_BUILD)/newlib
+	$(Q)cp $(libc) $(LIBC_BUILD)/newlib
+	$(Q)cd $(LIBC_BUILD)/newlib/ && $(ar) -x libc.a
+
+	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-signal.o
+	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-signalr.o
+	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-exit.o
+	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-rpmatch.o
+	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-lock.o
+	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-getreent.o
+	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-memcmp*.o
+	$(Q)$(ar) -r $(LIBC_BUILD)/libuser.a $(libc-objs-y) 2>/dev/null
+	$(Q)$(ar) -r $(LIBC_BUILD)/libc.a $(LIBC_BUILD)/newlib/*.o 2>/dev/null
+
+	$(Q)$(ld) $(libc_ldflags) --defsym _start=0 --defsym __start=0 --gc-sections \
+		 -o $(LIBC_BUILD)/libc.so $(libc-objs-y) $(LIBC_BUILD)/newlib/*.o $(libgcc)
+
+	$(if $(CONFIG_USER_BACKTRACE:n=), $(Q)$(strip) --strip-debug \
+		$(LIBC_BUILD)/libc.so -o $(BINARY_DIR)/libc.so, \
+		$(Q)$(strip) --strip-unneeded -R .eh_frame \
+		$(LIBC_BUILD)/libc.so -o $(BINARY_DIR)/libc.so)
+
+	$(Q)$(objdump) -d $(BINARY_DIR)/libc.so > $(BINARY_DIR)/libc.dis
+	$(Q)$(call fatcopy,$(ramfs_file),$(BINARY_DIR)/libc.so,/lib/)
+
+.PHONY: clean
+clean:
+	$(if $(Q), @echo " (RM) 	   $(subst $(TOP_DIR)/,,$(LIBC_BUILD))")
+	$(Q)rm -rf $(LIBC_BUILD)
+	$(Q)rm -f $(BINARY_DIR)/libc.so
+
+$(LIBC_BUILD)/%.o: $(TOP_DIR)/%.S
+	$(Q)mkdir -p `dirname $@`
+	$(if $(Q), @echo " (AS) 	   $(subst $(LIBC_BUILD)/,,$@)")
+	$(Q)$(cc) $(libc_asflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(shell dirname $<)))-cflags-y) -c $< -o $@
+
+$(LIBC_BUILD)/%.o: $(TOP_DIR)/%.c
+	$(Q)mkdir -p `dirname $@`
+	$(if $(Q), @echo " (CC) 	   $(subst $(LIBC_BUILD)/,,$@)")
+	$(Q)$(cc) $(libc_cflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(shell dirname $<)))-cflags-y) -c $< -o $@

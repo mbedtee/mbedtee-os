@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+#
+# ===============================================
+# Architecture Selection
+# ===============================================
+
+-include $(CONFIG_FILE)
+
+ifeq ($(CONFIG_ARM),y)
+ARCH = arm
+ifeq ($(CONFIG_AARCH32),y)
+SUB_ARCH = aarch32
+else ifeq ($(CONFIG_AARCH64),y)
+SUB_ARCH = aarch64
+endif
+endif
+
+ifeq ($(CONFIG_RISCV),y)
+ARCH = riscv
+ifeq ($(CONFIG_RISCV32),y)
+SUB_ARCH = riscv32
+else ifeq ($(CONFIG_RISCV64),y)
+SUB_ARCH = riscv64
+endif
+endif
+
+ifeq ($(CONFIG_MIPS),y)
+ARCH = mips
+ifeq ($(CONFIG_MIPS32),y)
+SUB_ARCH = mips32
+else ifeq ($(CONFIG_MIPS64),y)
+SUB_ARCH = mips64
+endif
+endif

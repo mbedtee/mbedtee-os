@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+menu "File Systems"
+
+config FS
+	bool
+	default y
+	help
+		Say Y here to enable support the file systems.
+		By default this option is essential.
+
+if FS
+
+config DEVFS
+	bool "Support the devfs file system"
+	default y
+	help
+		Say Y here to enable support the devfs
+		/dev for the devices drivers.
+		By default this option is essential.
+
+config FATFS
+	bool "Support the fatfs (fat12/16/32)"
+	default y
+	help
+		Say Y here to enable support the FATFS.
+		By default this option is essential.
+
+config RAMFS
+	bool "Support the ramfs (based on fatfs)"
+	depends on FATFS
+	default y
+	help
+		Say Y here to enable support the RAMFS.
+		By default this option is essential.
+
+config REEFS
+	bool "Support the REE file system"
+	depends on RPC && REE
+	default y
+	help
+		Say Y here to enable support the REEFS
+		for the TA Trusted Storage.
+
+config TMPFS
+	bool "Support the tmpfs"
+	default y
+	help
+		Say Y here to enable support the tmpfs,
+		POSIX Shared Memory, message queue and debugfs etc. depend on it.
+		By default this option is essential.
+
+config DEBUGFS
+	bool "Support the debugfs (based on TMPFS)"
+	default y
+	depends on TMPFS
+	help
+		Say Y here to support the debugfs for OS or OS driver modules.
+
+endif
+
+endmenu

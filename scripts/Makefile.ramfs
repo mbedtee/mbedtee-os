@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+include $(SCRIPTS_DIR)/Makefile.include
+
+SKELETON_DIR = $(BINARY_DIR)/skeleton
+
+.PHONY: all
+all: ramfs_asm
+ifeq ($(CONFIG_USER),y)
+	$(Q)dd if=/dev/zero of=$(ramfs_file) bs=1K count=2048 2> /dev/null
+else
+	$(Q)dd if=/dev/zero of=$(ramfs_file) bs=64K count=1 2> /dev/null
+endif
+
+	$(Q)$(MKFS_VFAT) -F 12 -S 512 -s 1 $(ramfs_file)
+	$(Q)$(call fatcopy, $(ramfs_file),$(SKELETON_DIR)/*,/)
+	$(Q)$(call fatcopy, $(ramfs_file),$(PLATFORM_DIR)/mbedtee-root.*,/apps/)
+
+.PHONY: ramfs_asm
+ramfs_asm:
+	$(Q)echo .section .ramfs, \"wa\" > $(CORE_DIR)/ramfs.S
+	$(Q)echo .incbin \"$(ramfs_file)\" >> $(CORE_DIR)/ramfs.S
+
+.PHONY: clean
+clean:
+	$(Q)rm -f $(ramfs_file)
+	$(Q)rm -f $(CORE_DIR)/ramfs.S

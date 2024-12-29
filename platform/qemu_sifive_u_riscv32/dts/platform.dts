@@ -1,0 +1,110 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ */
+
+/dts-v1/;
+
+#include "memory.dtsi"
+#include <generated/autoconf.h>
+
+/ {
+	cpu {
+		compatible = "riscv,cpu";
+		/* hartid of each CPU */
+		cpus = <0 1 2 3 4>;
+	};
+
+	platform {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		pinctrls@0 {
+			reg = <0 0>;
+
+			/*
+			 * cells information
+			 * 0: reg offset,
+			 * 1: first bit position,
+			 * 2: number of bits,
+			 * 3: value
+			 */
+			/* unnecessary for QEMU */
+			pinctrls = <0 0 0 0>, <0 0 0 0>;
+		};
+
+		cpu-power@1 {
+			compatible = "module,cpu-power";
+			/* unnecessary for QEMU */
+			reg = <0 0>;
+		};
+	};
+
+	/* interrupt-controller: CPU side - local private interrupt */
+	intc: interrupt-controller@2000000 {
+		compatible = "riscv,aclint";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+		#address-cells = <1>;
+
+		reg = <0x2000000 0x4000>, /* for mswi */
+			<0x2F00000 0x4000>; /* for sswi */
+			/* sifive-u does not have sswi ? OS will auto-check this */
+	};
+
+	/* interrupt-controller: SoC side - external platform interrupt */
+	plic: plic@c000000 {
+		compatible = "riscv,plic";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+		#address-cells = <1>;
+
+		interrupts = <9 11>; /* connects to CPU 9 (S-Mode), 11 (M-Mode) */
+		interrupt-parent = <&intc>;
+
+		hart0-machine-user-only = <1>;
+
+		max-irqs = <95>; /* unprecise number */
+
+		reg = <0xc000000 0x600000>;
+	};
+
+	uart {
+		compatible = "module,uart";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		sifive@10010000 {
+			compatible = "sifive";
+			reg = <0x10010000 0x0C>;
+			interrupts = <4>;
+			interrupt-parent = <&plic>;
+			clock-frequency = <3686400>;
+			current-speed = <115200>;
+			clock-divisor = <16>;
+			reg-shift = <2>;
+			reg-io-width = <4>;
+		};
+	};
+
+	/* for S-Mode */
+	timer {
+		compatible = "riscv,timer";
+		interrupts = <5>;
+		interrupt-parent = <&intc>;
+		clock-frequency = <1000000>;
+	};
+
+	/* for M-Mode */
+	timer@2004000 {
+		compatible = "riscv,clint-timer";
+		interrupts = <7>;
+		interrupt-parent = <&intc>;
+		clock-frequency = <1000000>;
+		reg = <0x2004000 0x8000>;
+	};
+};

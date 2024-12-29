@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+if MIPS32
+
+config CFLAGS
+	string "MIPS32_CFLAGS"
+	default "-EL -mips32r2 -G0 -msoft-float -minterlink-mips16 -mcode-readable=pcrel -mno-gpopt"
+	help
+		Define the default compile FLAGS.
+
+config PIC_CFLAGS
+	string "MIPS32_PIC_CFLAGS"
+	default "-fPIC -mabicalls"
+	help
+		Define the default compile PIC FLAGS.
+
+endif

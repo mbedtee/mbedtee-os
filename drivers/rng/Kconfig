@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+config RNG
+	bool "RNG module"
+	default Y
+	help
+		Say Y here to enable the RNG framework.
+
+if RNG
+config PRNG
+	bool "pseudo RNG"
+	default Y
+	help
+		Say Y here to enable the PRNG by software.
+endif

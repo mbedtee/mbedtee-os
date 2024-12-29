@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+if RISCV32
+
+config MMU_SV32
+	bool
+	depends on MMU
+	default y
+	help
+		Enables the SV32 MMU
+
+config CFLAGS
+	string "RISCV32_CFLAGS"
+	default "-mabi=ilp32d -march=rv32imafd_zicsr_zifencei -mstrict-align -mcmodel=medany -mno-riscv-attribute"
+	help
+		Define the default compile FLAGS.
+
+config PIC_CFLAGS
+	string "RISCV32_PIC_CFLAGS"
+	default "-fPIC"
+	help
+		Define the default compile PIC FLAGS.
+
+endif

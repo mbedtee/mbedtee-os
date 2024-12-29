@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+menu "Libraries"
+
+config KERN_NEWLIB
+	bool "Enable Newlib as kernel libc"
+	default y
+	help
+		Say Y to use the newlib as kernel libc,
+	  	snprintf, vsnprintf etc. come from Newlib.
+		othewise, these functions come from string.c @ kernel
+
+source "lib/fdt/Kconfig"
+source "lib/mbedtls/Kconfig"
+
+endmenu

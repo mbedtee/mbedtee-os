@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+if ARM
+
+choice
+	prompt "ARM GIC Selection"
+	default ARM_GICV2
+	help
+		choose the GIC version
+		By default this option is essential.
+config ARM_GICV1
+	bool "gic-v1"
+	help
+		Say Y here to enable gic v1.
+config ARM_GICV2
+	bool "gic-v2"
+	help
+		Say Y here to enable gic v2.
+config ARM_GICV3
+	bool "gic-v3"
+	help
+		Say Y here to enable gic v3.
+endchoice
+
+config ARM_BIGLITTLE
+	bool "big.LITTLE"
+	default n
+	help
+		Say Y here to support big.LITTLE.
+
+if ARM_BIGLITTLE
+config ARM_CCI
+	bool "cci-400/500"
+	default n
+	help
+		Say Y here to enable CCI400/500.
+endif
+
+config REE
+	bool "REE support"
+	default y
+	help
+		Say Y here to support to trigger the REE(e.g. linux) bootup
+		or to resume the REE context in NS mode; CPU only runs
+		TEE mode without this support.
+
+config 64BIT
+	def_bool n
+
+config MMU
+	bool "Enable MMU"
+	default USER
+	help
+		Say Y here to enable the paged virtual memory management.
+
+endif

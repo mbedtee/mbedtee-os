@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+config USER_MBEDTLS
+	bool "Support the user mbedtls library"
+	depends on USER
+	default y
+	help
+		Say Y here to enable user mbedtls library.
+
+config USER_MBEDTLS_PSA
+	bool "Support the user mbedtls PSA"
+	depends on USER_MBEDTLS
+	default n
+	help
+		Say Y here to enable user mbedtls PSA.
+
+config USER_MBEDTLS_X509
+	bool "Support the user mbedtls X509"
+	depends on USER_MBEDTLS
+	default n
+	help
+		Say Y here to enable user mbedtls X509.
+
+config USER_MBEDTLS_SSL
+	bool "Support the user mbedtls SSL"
+	depends on USER_MBEDTLS
+	default n
+	help
+		Say Y here to enable user mbedtls SSL.
+
+config KERNEL_MBEDTLS
+	bool "Support the kernel mbedtls library"
+	default y
+	help
+		Say Y here to enable kernel mbedtls library.

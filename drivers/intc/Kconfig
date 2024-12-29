@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+config INTC
+	bool "Interrupt-Controller @ SoC"
+	default y
+	help
+		Say Y here to enable the SoC (or Platform) Side interrupt-controller.
+		these interrupt-controller connects to the CPU IRQ pin
+
+if INTC
+
+choice
+	prompt "SoC INTC Selection"
+	default INTEL_I8259 if MIPS
+	default RISCV_PLIC if RISCV
+config INTEL_I8259
+	bool "intel i8259"
+	help
+		Enable Intel i8259 interrupt-controller
+config RISCV_PLIC
+	bool "riscv plic"
+	depends on RISCV
+	help
+		Enable riscv plic interrupt-controller
+config SALIX_MIPS_INTC
+	bool "salix intc of mips"
+	depends on MIPS
+	help
+		Enable salix MIPS SoC interrupt-controller.
+config SALIX_ARM_INTC
+	bool "salix intc of arm"
+	depends on ARM
+	help
+		Enable salix ARM SoC interrupt-controller.
+		usually connects to the ARM GIC
+endchoice
+
+endif

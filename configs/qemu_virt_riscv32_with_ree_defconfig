@@ -1,0 +1,103 @@
+# CONFIG_ARM is not set
+# CONFIG_MIPS is not set
+CONFIG_RISCV=y
+
+#
+# RISCV Architecture
+#
+CONFIG_RISCV32=y
+# CONFIG_RISCV64 is not set
+CONFIG_RISCV_S_MODE=y
+CONFIG_RISCV_TIMER=y
+CONFIG_REE=y
+CONFIG_MMU=y
+CONFIG_MMU_SV32=y
+CONFIG_CFLAGS="-mabi=ilp32d -march=rv32imafdc_zicsr_zifencei_zicbom -mstrict-align -mcmodel=medany -mno-riscv-attribute"
+CONFIG_PIC_CFLAGS="-fPIC"
+# end of RISCV Architecture
+
+#
+# Platform Configure
+#
+CONFIG_QEMU_VIRT_RISCV32=y
+# CONFIG_QEMU_SIFIVE_U_RISCV32 is not set
+# end of Platform Configure
+
+#
+# General Setup
+#
+CONFIG_NR_CPUS=4
+CONFIG_PRINTK=y
+CONFIG_VMALLOC=y
+CONFIG_STACK_PROTECTOR=y
+CONFIG_BACKTRACE=y
+CONFIG_EMBEDDED_DTB=y
+CONFIG_ELF_LOADER=y
+CONFIG_OS_ADDR=0xC0000000
+# end of General Setup
+
+#
+# Device Drivers
+#
+CONFIG_DRIVER_BASE=y
+CONFIG_RNG=y
+CONFIG_PRNG=y
+CONFIG_INTC=y
+# CONFIG_INTEL_I8259 is not set
+CONFIG_RISCV_PLIC=y
+CONFIG_UART=y
+CONFIG_UART_16550=y
+# CONFIG_UART_PL011 is not set
+# CONFIG_UART_SIFIVE is not set
+CONFIG_RPC=y
+CONFIG_RPC_YIELD=y
+CONFIG_GLOBALPLATFORM=y
+# end of Device Drivers
+
+#
+# File Systems
+#
+CONFIG_FS=y
+CONFIG_DEVFS=y
+CONFIG_FATFS=y
+CONFIG_RAMFS=y
+CONFIG_REEFS=y
+CONFIG_TMPFS=y
+CONFIG_DEBUGFS=y
+# end of File Systems
+
+#
+# Libraries
+#
+CONFIG_KERN_NEWLIB=y
+CONFIG_FDT_LIB=y
+CONFIG_USER_MBEDTLS=y
+# CONFIG_USER_MBEDTLS_PSA is not set
+# CONFIG_USER_MBEDTLS_X509 is not set
+# CONFIG_USER_MBEDTLS_SSL is not set
+CONFIG_KERNEL_MBEDTLS=y
+# end of Libraries
+
+#
+# UserSpace
+#
+CONFIG_USER=y
+CONFIG_SYSCALL=y
+CONFIG_USER_PTHREAD=y
+CONFIG_SIGNAL=y
+CONFIG_IPC_SHM=y
+CONFIG_IPC_MSGQ=y
+CONFIG_USER_BACKTRACE=y
+CONFIG_EPOLL=y
+CONFIG_ASLR=y
+CONFIG_TEE_API=y
+# end of UserSpace
+
+#
+# Applications
+#
+CONFIG_AUTH_TA=y
+CONFIG_SIMPLE_SHELL=y
+CONFIG_USER_SHELL=y
+# CONFIG_KERN_SHELL is not set
+# end of Applications

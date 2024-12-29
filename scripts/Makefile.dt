@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+#
+# ===============================================
+# rules for DTS
+# ===============================================
+
+include $(SCRIPTS_DIR)/Makefile.include
+
+DTS_DIR = $(PLATFORM_DIR)/dts
+DTS_BUILD = $(OUTPUT_DIR)/dtb
+
+.PHONY: all
+all:
+ifeq ($(CONFIG_EMBEDDED_DTB),y)
+	$(Q)if [ -d $(DTS_DIR) ]; then \
+		$(MAKE) -f $(DTS_DIR)/Makefile dtb; fi
+	$(Q)if [ ! -e $(DTS_BUILD)/builtin.dtb ] || \
+		! cmp -s $(DTS_BUILD)/platform.dtb $(DTS_BUILD)/builtin.dtb; then \
+		cp -f $(DTS_BUILD)/platform.dtb $(DTS_BUILD)/builtin.dtb; \
+		echo '.section .builtin_dtb, "wa"' > $(CORE_DIR)/dtb.S; \
+		echo '.incbin "$(DTS_BUILD)/builtin.dtb"' >> $(CORE_DIR)/dtb.S; \
+	fi
+endif
+
+.PHONY: clean
+clean:
+	$(if $(Q), @echo " (RM) 	   $(subst $(TOP_DIR)/,,$(DTS_BUILD))")
+	$(Q)rm -rf $(DTS_BUILD)
+	$(Q)rm -f $(CORE_DIR)/dtb.S
+
+$(DTS_BUILD)/%.dtb: $(DTS_BUILD)/%.o
+	$(Q)$(DTC) -I dts -O dtb -o $@ $<
+
+$(DTS_BUILD)/%.o: $(DTS_DIR)/%.dts
+	$(Q)mkdir -p `dirname $@`
+	$(if $(Q), @echo " (DTC) 	   $(subst $(DTS_BUILD)/,,$@)")
+	$(Q)$(cpp) -MD -MP -MF $(@:.o=.d) -I`dirname $<` \
+		-I$(TOP_DIR)/include -x assembler-with-cpp $< -o $@
+	$(Q)sed -i '1c $@: \\' $(@:.o=.d)
+
+-include $(wildcard $(DTS_BUILD)/*.d)

@@ -1,0 +1,21 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ */
+
+/{
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	memory@80000000 {
+		compatible = "memory";
+		device_type = "memory";
+
+		/* dedicated memory region for current OS */
+		reg = <0x80100000 0x5700000>,
+			<0x88000000 0x08000000>;
+
+		/* TAs loaded from REE will be placed in this area */
+		ta-ramfs = <0x85A00000 0x200000>;
+	};
+};

@@ -1,0 +1,99 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ */
+
+/dts-v1/;
+
+#include "memory.dtsi"
+
+#define GIC_SPI(x) ((x) + 32)
+#define GIC_PPI(x) ((x))
+
+/ {
+	cpu {
+		compatible = "arm,cpu";
+		/* mpid of each CPU */
+		cpus = <0 1 2 3>;
+	};
+
+	platform {
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/*
+		 * pinctrls cells information
+		 * 0: reg offset,
+		 * 1: first bit position,
+		 * 2: number of bits,
+		 * 3: value
+		 */
+		pinctrl@0 {
+			/* unnecessary for FVP */
+			compatible = "module,pinctrl";
+			reg = <0 0>;
+			pinctrls = <0 0 0 0>;
+		};
+
+		cpu-power@1 {
+			compatible = "module,cpu-power";
+			/* base power controller */
+			reg = <0x1c100000 0x1000>;
+		};
+	};
+
+	uart {
+		compatible = "module,uart";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		pl011@1c0a0000 {
+			compatible = "arm,pl011";
+			reg = <0x1c0a0000 0x1000>;
+			interrupts = <GIC_SPI(6)>;
+			interrupt-parent = <&gic>;
+			clock-frequency = <24000000>;
+			current-speed = <115200>;
+			clock-divisor = <16>;
+		};
+
+		pl011@1c0b0000 {
+			compatible = "arm,pl011";
+			reg = <0x1c0b0000 0x1000>;
+			interrupts = <GIC_SPI(7)>;
+			interrupt-parent = <&gic>;
+			clock-frequency = <24000000>;
+			current-speed = <115200>;
+			clock-divisor = <16>;
+		};
+	};
+
+	/* interrupt-controller: CPU side */
+	gic: interrupt-controller@2c000100 {
+		compatible = "arm,gic-v1";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+		#address-cells = <1>;
+
+		reg = <0x2c001000 0x1000>, /* GICD */
+			<0x2c000100 0x100>; /* GICC */
+	};
+
+	timer@2c000600 {
+		compatible = "arm,armv7-private-timer";
+		interrupts = <GIC_PPI(29)>; /* PPI 29 for Private-Timer, 27 for Global-Timer, 30 for REE */
+		interrupt-parent = <&gic>;
+		clock-frequency = <50000000>;
+		reg = <0x2c000000 0x1000>;
+	};
+
+	timer@2c000200 {
+		compatible = "arm,armv7-global-timer";
+		interrupts = <GIC_PPI(27)>; /* PPI 29 for Private-Timer, 27 for Global-Timer, 30 for REE */
+		interrupt-parent = <&gic>;
+		clock-frequency = <50000000>;
+		reg = <0x2c000000 0x1000>;
+	};
+};

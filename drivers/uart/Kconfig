@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+config UART
+	bool "UART module"
+	default y
+	help
+		Say Y here to enable the UART module.
+
+if UART
+
+choice
+	prompt "UART Selection"
+	default UART_PL011 if ARM
+config UART_16550
+	bool "UART 16550"
+	help
+		Enable UART 16550.
+config UART_PL011
+	bool "UART PL011"
+	help
+		Enable ARM PL011 UART.
+config UART_SIFIVE
+	bool "UART SiFive"
+	help
+		Enable SiFive UART.
+endchoice
+
+endif

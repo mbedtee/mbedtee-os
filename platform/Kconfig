@@ -1,0 +1,144 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+menu "Platform Configure"
+
+choice
+	prompt "Platform Selection"
+
+config VEXPRESS_CA5
+	bool "FVP CA5x4"
+	depends on AARCH32
+	help
+		support below FVP platforms:
+		FVP_VE_Cortex_A5x4, FVP_VE_Cortex_A9x4
+
+config VEXPRESS_CA15
+	bool "FVP CA15x4"
+	depends on AARCH32
+	help
+		support below FVP platforms:
+		FVP_VE_Cortex_A15x4, FVP_VE_Cortex_A7x4
+		FVP_VE_Cortex_A17x4
+
+config VEXPRESS_CA17_CA7
+	bool "FVP big.LITTLE A17x4-A7x4"
+	depends on AARCH32
+	help
+		select the FVP platforms:
+		FVP_VE_Cortex_A17x4_A7x4
+		FVP_VE_Cortex_A15x4_A7x4
+
+config VEXPRESS_CA53
+	bool "FVP A53x4"
+	depends on AARCH64
+	help
+		support below FVP platforms:
+	 	FVP_Base_Cortex_A53x4, FVP_Base_Cortex_A35x4
+	 	FVP_Base_Cortex_A57x4, FVP_Base_Cortex_A72x4
+	 	FVP_Base_Cortex_A73x4
+
+config VEXPRESS_CA78
+	bool "FVP A78x4"
+	depends on AARCH64
+	help
+		support below FVP platforms:
+		FVP_Base_Cortex_A55x4, FVP_Base_Cortex_A75x4
+		FVP_Base_Cortex_A76x4, FVP_Base_Cortex_A77x4
+		FVP_Base_Cortex_A78x4, FVP_Base_Cortex_X1x4
+		FVP_Base_Cortex_A510x4, FVP_Base_Cortex_A710x4
+		FVP_Base_Cortex_X2x4, FVP_Base_Neoverse_N1x4
+		FVP_Base_Neoverse_V1x4, FVP_Base_Neoverse_N2x4
+
+config VEXPRESS_CA65
+	bool "FVP A65x8 MultiThreading"
+	depends on AARCH64
+	help
+		support below FVP platforms:
+		FVP_Base_Cortex_A65, FVP_Base_Cortex_A65AE
+		FVP_Base_Neoverse_E1
+		(Each core has 2 threads, total 8x2=16 threads)
+
+config VEXPRESS_CA73_CA53
+	bool "FVP A73x4-A53x4 big.LITTLE"
+	depends on AARCH64
+	help
+		select the FVP platform:
+		FVP_Base_Cortex_A73x4_A53x4
+		FVP_Base_Cortex_A72x4_A53x4
+		FVP_Base_Cortex_A57x4_A53x4
+		FVP_Base_Cortex_A72x4_A35x4
+		FVP_Base_Cortex_A57x4_A35x4
+
+config VEXPRESS_CA510_CA710
+	bool "FVP A510x4-A710x4 big.LITTLE"
+	depends on AARCH64
+	help
+		select the FVP platforms:
+		FVP_Base_Cortex_A510x4_A710x4
+		FVP_Base_Cortex_A55x4_A75x4
+		FVP_Base_Cortex_A55x4_A78x4
+
+config QEMU_VIRT_ARM
+	bool "QEMU Virt AArch32@ARMV7-A"
+	depends on AARCH32
+	help
+		select the QEMU -M virt platforms:
+		Cortex-A15x4 or Cortex-A7x4
+
+config QEMU_VIRT_AARCH64
+	bool "QEMU Virt @ AArch64"
+	depends on AARCH64
+	help
+		select the QEMU -M virt aarch64 platforms:
+		Cortex-A35x4, Cortex-A53x4, Cortex-A55x4
+		Cortex-A57x4, Cortex-A72x4, Cortex-A76x4
+		Cortex-A710x4, Neoverse-N1x4, Neoverse-V1x4
+		Neoverse-N2x4
+
+config QEMU_MALTA_MIPS32R2
+	bool "QEMU Malta MIPS32R2"
+	depends on MIPS32
+	help
+		select the QEMU Malta MIPS32R2 platforms
+		e.g. 24Kf 24Kc 34Kf 74Kf M14Kc P5600
+
+config QEMU_VIRT_RISCV32
+	bool "QEMU Virt RISCV32"
+	depends on RISCV32
+	help
+		select the QEMU Virt RISCV32 platform
+
+config QEMU_VIRT_RISCV64
+	bool "QEMU Virt RISCV64"
+	depends on RISCV64
+	help
+		select the QEMU Virt RISCV64 platform
+
+config QEMU_SIFIVE_U_RISCV32
+	bool "QEMU SiFive_U RISCV32"
+	depends on RISCV32
+	help
+		select the QEMU sifive_u RISCV32 platform
+
+config QEMU_SIFIVE_U_RISCV64
+	bool "QEMU SiFive_U RISCV64"
+	depends on RISCV64
+	help
+		select the QEMU sifive_u RISCV64 platform
+
+config SALIX_CA7
+	bool "SALIX_CA7x4"
+	depends on AARCH32
+	help
+		select the salix Cortex-A7x4(aarch32) platform
+
+config SALIX_MIPS74K
+	bool "SALIX_MIPS74K"
+	depends on MIPS32
+	help
+		select the salix MIPS74K(mips32r2) platform
+
+endchoice
+
+endmenu

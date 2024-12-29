@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+menu "ARM Architecture"
+	depends on ARM
+
+choice
+	prompt "ARM Selection"
+	default AARCH32
+config AARCH32
+	bool "aarch32"
+config AARCH64
+	bool "aarch64"
+	select 64BIT
+endchoice
+
+source "arch/arm/common/Kconfig"
+
+source "arch/arm/aarch32/Kconfig"
+
+source "arch/arm/aarch64/Kconfig"
+
+endmenu

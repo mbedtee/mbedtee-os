@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+config SIMPLE_SHELL
+	bool "Simple Shell"
+	default y
+	help
+		Say Y here to enable the simple shell
+
+if SIMPLE_SHELL
+choice
+	prompt "Shell Selection"
+	default USER_SHELL
+
+config USER_SHELL
+	bool "Shell commands @ user-space"
+	depends on USER
+	help
+		Enable support the shell commands @ user-space.
+
+config KERN_SHELL
+	bool "Shell commands @ kernel-space"
+	depends on UART
+	help
+		Enable support the shell commands @ kernel-space.
+endchoice
+
+endif
