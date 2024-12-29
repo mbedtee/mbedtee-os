@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+menu "UserSpace"
+
+config USER
+	bool "Enable the user space"
+	select MMU
+	select SYSCALL
+	select ELF_LOADER
+	select FS
+	default y
+	help
+		Say Y here to enable support the user space.
+
+if USER
+
+config SYSCALL
+	bool "Enable System call"
+	default y
+	help
+		Say Y here to enable the user2kernel syscalls.
+
+config USER_PTHREAD
+	bool "Enable POSIX thread"
+	default y
+	help
+		Say Y here to enable the userspace POSIX thread library.
+
+config SIGNAL
+	bool "Enable POSIX Signal"
+	default y
+	help
+		Say Y here to enable the userspace POSIX signals.
+
+config IPC_SHM
+	bool "Enable POSIX Shared Memory"
+	depends on TMPFS
+	default y
+	help
+		Say Y here to enable the POSIX Shared Memory
+
+config IPC_MSGQ
+	bool "Enable POSIX Message Queue"
+	depends on TMPFS
+	default y
+	help
+		Say Y here to enable the POSIX Message Queue
+
+config USER_BACKTRACE
+	bool "Enable userspace unwind backtrace"
+	depends on ELF_LOADER
+	default y
+	help
+		Say Y here to enable the userspace unwind backtrace.
+
+config EPOLL
+	bool "Enable userspace epoll"
+	default y
+	help
+		Say Y here to enable the epoll.
+
+config ASLR
+	bool "Enable userspace ASLR"
+	default y
+	help
+		Say Y here to enable the userspace ASLR
+		(Address Space Layout Random).
+
+config TEE_API
+	bool "Enable userspace GlobalPlatform APIs"
+	default y
+	help
+		Say Y here to enable GlobalPlatform Internal Core APIs.
+
+endif
+
+endmenu

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+mainmenu "$(PRODUCT) $(PRODUCT_VERSION)"
+
+source "arch/Kconfig"
+
+source "platform/Kconfig"
+
+source "core/Kconfig"
+
+source "drivers/Kconfig"
+
+source "fs/Kconfig"
+
+source "lib/Kconfig"
+
+source "user/Kconfig"
+
+source "apps/Kconfig"

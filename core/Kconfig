@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+menu "General Setup"
+
+config NR_CPUS
+	int "CPU Cores Num"
+	default 4
+	help
+		Configure the number of the CPU cores.
+
+config PRINTK
+	bool "Enable printk"
+	default y
+	help
+		Say Y here to enable the kernel print.
+
+config TRACE_LEVEL
+	int "xMSG level"
+	default 3
+	depends on PRINTK
+	help
+		Configure the kernel trace xMSG level.
+		TRACE_LEVEL_IGNORE 0
+		TRACE_LEVEL_ERROR  1
+		TRACE_LEVEL_WARN   2
+		TRACE_LEVEL_INFO   3
+		TRACE_LEVEL_DEBUG  4
+		TRACE_LEVEL_LOG    5
+		TRACE_LEVEL_FS     6
+
+config VMALLOC
+	bool "Enable vmalloc"
+	default y
+	depends on MMU
+	help
+		Say Y to enable usage the on the contiguous
+		virtual address space mmaped with scattered pages
+
+config STACK_PROTECTOR
+	bool "Enable stack protector"
+	default y
+	help
+		Say Y here to enable the stack protector.
+
+config BACKTRACE
+	bool "Enable kernel unwind backtrace"
+	default y
+	help
+		Say Y here to enable the kernel unwind backtrace.
+
+config EMBEDDED_DTB
+	bool "Enable the embedded DTB"
+	default y
+	help
+		Say Y to use the embedded DTB,
+	  	DTB will be linked into kernel
+
+config DTB_ADDR
+	hex "DTB load address"
+	default 0x82000000
+	depends on !EMBEDDED_DTB
+	help
+		Configure the external DTB address
+		in case of EMBEDDED_DTB is not enabled.
+
+source "core/elf/Kconfig"
+
+config OS_ADDR
+	hex "OS link address"
+	default 0x80100000 if MIPS32
+	default 0xC0000000 if AARCH32 && USER
+	default 0x80100000 if AARCH32 && !USER
+	default 0xC0000000 if RISCV32 && USER
+	default 0x80000000 if RISCV32 && !USER
+	default 0xFFFFFFC000000000 if AARCH64
+	default 0xFFFFFFE000000000 if RISCV64
+	help
+		Configure the OS destination link address.
+
+endmenu

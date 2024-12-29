@@ -1,0 +1,112 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+#
+# ===============================================
+# rules for mbedtee-os
+# ===============================================
+
+include $(SCRIPTS_DIR)/Makefile.include
+
+kern_cflags  = $(cflags) -D__KERNEL__ $(kern-inc-y)
+kern_asflags = $(asflags) -D__KERNEL__ $(kern-inc-y)
+kern_ldflags = -EL -nostdlib --no-warn-rwx-segments
+
+objs-y = $(foreach dir,$(obj-dirs),$(foreach obj,\
+	$($(subst /,-,$(subst $(TOP_DIR)/,,$(dir)))-y),\
+	$(OUTPUT_DIR)/$(subst $(TOP_DIR)/,,$(dir))/$(obj)))
+
+-include $(objs-y:.o=.d)
+
+targets-y = $(OUTPUT_DIR)/$(PRODUCT).elf
+targets-y += $(OUTPUT_DIR)/$(PRODUCT).bin
+
+kern_newlibdir = $(OUTPUT_DIR)/libckern
+kern_newlib = $(kern_newlibdir)/libckern.a
+
+asm-offset = $(INC_DIR)/generated/asm-offsets.h
+
+kldscript_src = $(PLATFORM_DIR)/linker.ld.S
+kldscript = $(OUTPUT_DIR)/linker.ld
+ksymbols = $(OUTPUT_DIR)/symbols
+ksymtrace = $(SCRIPTS_DIR)/ksymtrace
+
+.PHONY: all
+all: $(targets-y)
+
+.PHONY: $(kern_newlib)
+$(kern_newlib): $(libc)
+	$(Q)rm -rf $@ $(kern_newlibdir)
+ifeq ($(CONFIG_KERN_NEWLIB),y)
+	$(Q)mkdir -p $(kern_newlibdir)
+	$(Q)cp $(libc) $(kern_newlibdir)
+	$(Q)cd $(kern_newlibdir) && $(ar) -x libc.a
+	$(Q)rm -f $(kern_newlibdir)/lib*_a-*alloc*.o
+	$(Q)rm -f $(kern_newlibdir)/lib*_a-*free*.o
+	$(Q)$(ar) -r $@ $(kern_newlibdir)/*.o 2>/dev/null
+endif
+
+define link_elf
+	$(Q)mkdir -p `dirname $@`
+	$(if $(Q), @echo " (LD) 	   $(notdir $@)")
+	$(Q)touch $(ksymbols).c
+	$(Q)$(cc) $(kern_cflags) -c $(ksymbols).c -o $(ksymbols).o
+	$(Q)$(ld) $(kern_ldflags) -T $(kldscript) --gc-sections \
+		-o $@ $(OUTPUT_DIR)/$(PRODUCT).o $(ksymbols).o
+	$(Q)$(nm) -n $@ > $@.map
+	$(if $(CONFIG_BACKTRACE:n=),$(Q)$(ksymtrace) -m $@.map -o $(ksymbols).c)
+endef
+
+$(OUTPUT_DIR)/$(PRODUCT).o: $(objs-y) $(kern_newlib)
+	$(Q)rm -f $(ksymbols).o
+	$(Q)$(ld) $(kern_ldflags) -r -o $@ $(objs-y) \
+		$(if $(CONFIG_KERN_NEWLIB:n=),$(kern_newlib)) $(libgcc)
+
+$(OUTPUT_DIR)/$(PRODUCT).elf.pre1: $(OUTPUT_DIR)/$(PRODUCT).o
+	$(link_elf)
+
+$(OUTPUT_DIR)/$(PRODUCT).elf.pre2: $(OUTPUT_DIR)/$(PRODUCT).elf.pre1
+	$(link_elf)
+
+$(OUTPUT_DIR)/$(PRODUCT).elf: $(OUTPUT_DIR)/$(PRODUCT).elf.pre2
+	$(link_elf)
+
+$(OUTPUT_DIR)/$(PRODUCT).bin: $(OUTPUT_DIR)/$(PRODUCT).elf
+	$(if $(Q), @echo " (OBJCOPY) $(notdir $@)")
+	$(Q)$(strip) --strip-unneeded $< -o $(BINARY_DIR)/$(PRODUCT).elf
+	$(Q)$(objcopy) -O binary $(BINARY_DIR)/$(PRODUCT).elf $@
+	$(Q)cp -f $@ $(BINARY_DIR)
+	$(Q)$(objdump) -D $< > $<.dis
+
+.PHONY: clean
+clean:
+	$(Q)rm -f $(targets-y) $(objs-y)
+	$(Q)rm -f $(asm-offset) $(kldscript)
+	$(Q)rm -f $(ksymtrace)
+
+.PHONY: scripts
+scripts: $(asm-offset) $(ksymtrace).c $(kldscript_src)
+	$(Q)$(cc) $(kern_asflags) -P -E $(kldscript_src) -o $(kldscript)
+	$(if $(CONFIG_BACKTRACE:n=),$(Q)gcc -O2 -o $(ksymtrace) $(ksymtrace).c)
+
+.PHONY: $(OUTPUT_DIR)/asm-offsets.s
+$(OUTPUT_DIR)/asm-offsets.s:
+	$(Q)if [ -e $(SUBARCH_DIR)/asm-offsets.c ]; then \
+		$(cc) $(kern_cflags) -S -c $(SUBARCH_DIR)/asm-offsets.c -o $@; \
+	else \
+		$(cc) $(kern_cflags) -S -c $(ARCHCOMM_DIR)/asm-offsets.c -o $@; \
+	fi
+
+$(asm-offset): $(OUTPUT_DIR)/asm-offsets.s
+	$(Q)sed -ne "/^->/{s:->#\(.*\):/* \1 */:; s:^->\([^ ]*\) \
+	[\$$#]*\([^ ]*\) \(.*\):#define \1 \2 /* \3 */:; s:->::; p;}" $< > $@.tmp
+	$(Q)if [ -r $@ ] && cmp -s $@ $@.tmp; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
+
+$(OUTPUT_DIR)/%.o: $(TOP_DIR)/%.S
+	$(Q)mkdir -p `dirname $@`
+	$(if $(Q), @echo " (AS) 	   $(subst $(OUTPUT_DIR)/,,$@)")
+	$(Q)$(cc) $(kern_asflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(shell dirname $<)))-cflags-y) -c $< -o $@
+
+$(OUTPUT_DIR)/%.o: $(TOP_DIR)/%.c
+	$(Q)mkdir -p `dirname $@`
+	$(if $(Q), @echo " (CC) 	   $(subst $(OUTPUT_DIR)/,,$@)")
+	$(Q)$(cc) $(kern_cflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(shell dirname $<)))-cflags-y) -c $< -o $@

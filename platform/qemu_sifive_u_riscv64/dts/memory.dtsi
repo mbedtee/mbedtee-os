@@ -1,0 +1,36 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ */
+
+/{
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	memory@80000000 {
+		compatible = "memory";
+		device_type = "memory";
+
+		/*
+		 * SoC installed memory mapping, this is a guideline for OS
+		 * to setup the early mmu-memory-section-mapping
+		 *
+		 * Mandatory node for ARM/RISCV, MIPS SoC does not require it,
+		 * since MIPS already has the fix-mapping-table in MMU.
+		 *
+		 * e.g. RISCV64 QEMU Sifive-U platform with 8G Bytes memory installed:
+		 */
+		mapping = <0 0x80000000 2 0x00000000>;
+
+		/* dedicated memory region for current OS */
+		reg = <0 0x80000000 0 0x5800000>,
+			<1 0x00000000 0 0x10000000>;
+
+		/* TAs loaded from REE will be placed in this area */
+		ta-ramfs = <0 0x85A00000 0 0x200000>;
+
+		rpc-t2r-ring = <0 0x85F10000 0 0x20000>;
+		rpc-t2r-shm = <0 0x85F30000 0 0x40000>;
+		rpc-r2t-ring = <0 0x85F70000 0 0x20000>;
+	};
+};

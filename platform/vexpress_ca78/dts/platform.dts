@@ -1,0 +1,94 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ */
+
+/dts-v1/;
+
+#include "memory.dtsi"
+
+#define GIC_SPI(x) ((x) + 32)
+#define GIC_PPI(x) ((x))
+
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	cpu {
+		compatible = "arm,cpu";
+		/* mpid of each CPU */
+		cpus = <0x000 0x100 0x200 0x300>;
+	};
+
+	platform {
+		#address-cells = <2>;
+		#size-cells = <1>;
+
+		/*
+		 * pinctrls cells information
+		 * 0: reg offset,
+		 * 1: first bit position,
+		 * 2: number of bits,
+		 * 3: value
+		 */
+		pinctrl@0 {
+			/* unnecessary for FVP */
+			compatible = "module,pinctrl";
+			reg = <0 0 0>;
+			pinctrls = <0 0 0>;
+		};
+
+		cpu-power@1 {
+			compatible = "module,cpu-power";
+			/* base power controller */
+			reg = <0 0x1c100000 0x1000>;
+		};
+	};
+
+	uart {
+		compatible = "module,uart";
+		#address-cells = <2>;
+		#size-cells = <1>;
+
+		pl011@1c0a0000 {
+			compatible = "arm,pl011";
+			reg = <0 0x1c0a0000 0x1000>;
+			interrupts = <GIC_SPI(6)>;
+			interrupt-parent = <&gic>;
+			clock-frequency = <24000000>;
+			current-speed = <115200>;
+			clock-divisor = <16>;
+		};
+
+		pl011@1c0b0000 {
+			compatible = "arm,pl011";
+			reg = <0 0x1c0b0000 0x1000>;
+			interrupts = <GIC_SPI(7)>;
+			interrupt-parent = <&gic>;
+			clock-frequency = <24000000>;
+			current-speed = <115200>;
+			clock-divisor = <16>;
+		};
+	};
+
+	/* interrupt-controller: CPU side */
+	gic: interrupt-controller@2f000000 {
+		compatible = "arm,gic-v3";
+
+		interrupt-controller;
+
+		#address-cells = <2>;
+		#interrupt-cells = <1>;
+
+		reg = <0 0x2f000000 0 0x10000>, /* GICD */
+			<0 0x2f100000 0 0x200000>; /* GICR RD_Base / SGI_Base */
+	};
+
+	timer@2a430000 {
+		compatible = "arm,armv8-timer";
+		interrupts = <GIC_PPI(29)>; /* PPI 29 for SecureWorld tick_timer, 30 for REE */
+		interrupt-parent = <&gic>;
+		clock-frequency = <1000000000>;
+		reg = <0 0x2a430000 0 0x1000>; /* system counter */
+	};
+};

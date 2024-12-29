@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+config DRIVER_BASE
+	bool
+	select DEVFS
+	default y
+	help
+		Say Y here to enable basic device/driver methods

@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+#
+# ===============================================
+# basic rules/path/flags for mbedtee
+# ===============================================
+
+VERBOSE := 0
+ifeq ($(VERBOSE), 1)
+	Q :=
+else
+	Q := @
+endif
+
+-include $(CONFIG_FILE)
+
+cc = $(CROSS_COMPILE)gcc
+cpp = $(CROSS_COMPILE)cpp
+ar = $(CROSS_COMPILE)ar
+ld = $(CROSS_COMPILE)ld
+nm = $(CROSS_COMPILE)nm
+strip = $(CROSS_COMPILE)strip
+objdump = $(CROSS_COMPILE)objdump
+objcopy = $(CROSS_COMPILE)objcopy
+
+include $(SCRIPTS_DIR)/Makefile.arch
+include $(SCRIPTS_DIR)/Makefile.platform
+
+TARGET_PICFLAGS = $(subst ",,$(CONFIG_PIC_CFLAGS))
+TARGET_CCFLAGS = $(subst ",,$(CONFIG_CFLAGS))
+TARGET_ASMFLAGS = $(TARGET_CCFLAGS)
+
+CORE_DIR = $(TOP_DIR)/core
+INC_DIR = $(TOP_DIR)/include
+BINARY_DIR = $(TOP_DIR)/bin
+OUTPUT_DIR = $(TOP_DIR)/output
+SUBARCH_DIR = $(TOP_DIR)/arch/$(ARCH)/$(SUB_ARCH)
+ARCHCOMM_DIR = $(TOP_DIR)/arch/$(ARCH)/common
+PLATFORM_DIR = $(TOP_DIR)/platform/$(PLATFORM)
+
+LIBC_BUILD = $(OUTPUT_DIR)/libc
+
+obj-mks = $(shell find $(TOP_DIR) -iname "objects.mk")
+obj-dirs = $(foreach mk,$(obj-mks),$(shell dirname $(mk)))
+
+include $(obj-mks)
+
+TARGET_CCFLAGS += -I$(MBEDTEE_INC) -I$(INC_DIR)
+TARGET_ASMFLAGS += -I$(MBEDTEE_INC) -I$(INC_DIR)
+
+ramfs_file=$(OUTPUT_DIR)/ramfs.img
+libgcc=$(shell $(cc) $(TARGET_CCFLAGS) -print-libgcc-file-name)
+libc=$(shell $(cc) $(TARGET_CCFLAGS) -print-file-name=libc.a)
+
+incsub_of = $(shell if [ "$(2)" != " " ]; then echo -I$(1); fi; \
+	if [ "$(2)" != " " ] && [ -d "$(1)/include" ]; then echo -I$(1)/include; fi)
+
+ifeq ($(CONFIG_FATFS),y)
+fatcopy = $(MCOPY) -mQ -i $(1) -os $(2) ::$(3);
+endif
+user-inc-y = $(foreach dir,$(obj-dirs),$(call incsub_of,$(dir),\
+	$($(subst /,-,$(subst $(TOP_DIR)/,,$(dir)))-uobjs-y)))
+
+kern-inc-y = $(foreach dir,$(obj-dirs),$(call incsub_of,$(dir),\
+	$($(subst /,-,$(subst $(TOP_DIR)/,,$(dir)))-y))) $(user-inc-y)
+
+cflags = -g -Wall -Werror -Wno-nonnull-compare -Os -std=gnu99 -fno-common \
+		 -funwind-tables -Wstack-usage=2588 -MD -MP $(TARGET_CCFLAGS)
+
+asflags = -g -Wall -Werror -Os -std=gnu99 -D__ASSEMBLY__ -fno-common \
+		-funwind-tables -MD -MP $(TARGET_ASMFLAGS)
+
+ifeq ($(CONFIG_STACK_PROTECTOR),y)
+cflags += -fstack-protector-strong -Wstack-protector
+asflags += -fstack-protector-strong -Wstack-protector
+endif

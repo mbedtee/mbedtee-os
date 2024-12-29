@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+menu "RISCV Architecture"
+	depends on RISCV
+
+choice
+	prompt "RISCV Selection"
+	default RISCV32
+config RISCV32
+	bool "RISCV32"
+config RISCV64
+	bool "RISCV64"
+	select 64BIT
+endchoice
+
+source "arch/riscv/common/Kconfig"
+
+source "arch/riscv/riscv32/Kconfig"
+
+source "arch/riscv/riscv64/Kconfig"
+
+endmenu

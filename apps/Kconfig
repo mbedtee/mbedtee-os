@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+#
+# Default Apps embedded in OS
+#
+
+menu "Applications"
+
+source "apps/auth_ta/Kconfig"
+source "apps/shell/Kconfig"
+source "apps/mbedtest/Kconfig"
+
+endmenu

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+config GLOBALPLATFORM
+	bool "GlobalPlatform"
+	depends on SYSCALL
+	default n
+	help
+		Say Y here to enable the GlobalPlatform functions.
+		e.g. the IPC open/invoke/close another TA session, TEE_GetREETime etc.

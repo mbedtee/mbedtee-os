@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+#
+# ===============================================
+# Platform Selection
+# ===============================================
+
+-include $(CONFIG_FILE)
+
+# Platform Selection #
+ifeq ($(CONFIG_VEXPRESS_CA15),y)
+PLATFORM = vexpress_ca15
+else ifeq ($(CONFIG_VEXPRESS_CA5),y)
+PLATFORM = vexpress_ca5
+else ifeq ($(CONFIG_VEXPRESS_CA17_CA7),y)
+PLATFORM = vexpress_ca17x4_ca7x4
+else ifeq ($(CONFIG_VEXPRESS_CA53),y)
+PLATFORM = vexpress_ca53
+else ifeq ($(CONFIG_VEXPRESS_CA78),y)
+PLATFORM = vexpress_ca78
+else ifeq ($(CONFIG_VEXPRESS_CA65),y)
+PLATFORM = vexpress_ca65
+else ifeq ($(CONFIG_VEXPRESS_CA73_CA53),y)
+PLATFORM = vexpress_ca73x4_ca53x4
+else ifeq ($(CONFIG_VEXPRESS_CA510_CA710),y)
+PLATFORM = vexpress_ca510x4_ca710x4
+else ifeq ($(CONFIG_QEMU_VIRT_ARM),y)
+PLATFORM = qemu_virt_arm
+else ifeq ($(CONFIG_QEMU_VIRT_AARCH64),y)
+PLATFORM = qemu_virt_aarch64
+else ifeq ($(CONFIG_QEMU_MALTA_MIPS32R2),y)
+PLATFORM = qemu_malta_mips32r2
+else ifeq ($(CONFIG_QEMU_VIRT_RISCV32),y)
+PLATFORM = qemu_virt_riscv32
+else ifeq ($(CONFIG_QEMU_VIRT_RISCV64),y)
+PLATFORM = qemu_virt_riscv64
+else ifeq ($(CONFIG_QEMU_SIFIVE_U_RISCV32),y)
+PLATFORM = qemu_sifive_u_riscv32
+else ifeq ($(CONFIG_QEMU_SIFIVE_U_RISCV64),y)
+PLATFORM = qemu_sifive_u_riscv64
+else ifeq ($(CONFIG_SALIX_MIPS74K),y)
+PLATFORM = salix_mips74k
+else ifeq ($(CONFIG_SALIX_CA7),y)
+PLATFORM = salix_ca7
+endif

@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+config ELF_LOADER
+	bool "Enable support the ELF loader"
+	depends on USER
+	select VMALLOC
+	default y
+	help
+		Say Y here to enable support the ELF loader.

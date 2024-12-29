@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+menu "MIPS Architecture"
+	depends on MIPS
+
+choice
+	prompt "MIPS Selection"
+	default MIPS32
+config MIPS32
+	bool "MIPS32"
+config MIPS64
+	bool "MIPS64"
+endchoice
+
+source "arch/mips/common/Kconfig"
+
+source "arch/mips/mips32/Kconfig"
+
+endmenu

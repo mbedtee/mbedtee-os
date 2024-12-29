@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+if RISCV
+
+config RISCV_S_MODE
+	bool "S-Mode"
+	default USER
+	help
+		Enables the RISCV S-Mode
+
+config MMU
+	bool "Enable MMU"
+	default USER
+	select RISCV_S_MODE
+	help
+		Say Y here to enable the paged virtual memory management.
+
+config RISCV_TIMER
+	bool
+	depends on RISCV_S_MODE
+	default y
+	help
+		Enables the per-hart RISCV timer
+
+config CLINT_TIMER
+	bool
+	depends on !RISCV_S_MODE
+	default y
+	help
+		Enables the CLINT timer. CLINT timer
+		usually used on	M-Mode RISCV systems.
+
+config REE
+	bool "REE present"
+	default n
+	help
+		Say Y here to cowork with REE.
+
+config 64BIT
+	def_bool n
+
+endif

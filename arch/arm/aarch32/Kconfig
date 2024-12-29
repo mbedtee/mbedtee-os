@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+
+if AARCH32
+
+config REE_THREAD
+	bool "REE Thread"
+	depends on REE
+	default n
+	help
+		Say Y here to create a virtual thread under TEE control,
+		thus TEE scheduler can easily balance the CPU time slice.
+
+config IRQ_FORWARD
+	bool "Forward IRQ to REE"
+	depends on REE
+	default y
+	help
+		Say Y here to support forward ARM IRQ from TEE to REE.
+		Means that the REE-IRQ will not be disabled when TEE is
+		running, this cloud improve the REE-IRQ response latency.
+
+choice
+	prompt "Timer Selection"
+	default ARMV7_GENERIC_TIMER
+config ARMV7_GENERIC_TIMER
+	bool "armv7 generic timer"
+	help
+		Say Y here to enable support AArch32@ARMV7-A generic timer.
+		usually for Cortex-A7/A15/A17
+config ARMV7_GLOBAL_TIMER
+	bool "armv7 global timer"
+	help
+		Say Y here to enable support AArch32@ARMV7-A global timer.
+		usually for Cortex-A5/A9
+config ARMV7_PRIVATE_TIMER
+	bool "armv7 private timer"
+	help
+		Say Y here to enable support AAarch32@ARMV7-A private timer.
+		usually for Cortex-A5/A9
+endchoice
+
+config CFLAGS
+	string "AARCH32_CFLAGS"
+	default "-mno-thumb-interwork -marm -march=armv7-a -mfloat-abi=soft -mno-unaligned-access"
+	help
+		Define the default compile FLAGS.
+
+config PIC_CFLAGS
+	string "AARCH32_PIC_CFLAGS"
+	default "-fPIC"
+	help
+		Define the default compile PIC FLAGS.
+
+endif

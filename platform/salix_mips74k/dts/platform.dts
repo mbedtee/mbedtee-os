@@ -1,0 +1,83 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ */
+
+/dts-v1/;
+
+#include "memory.dtsi"
+
+/ {
+	platform {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		pinctrls@0 {
+			reg = <0x1808b000 0x1000>;
+
+			/*
+			 * cells information
+			 * 0: reg offset,
+			 * 1: first bit position,
+			 * 2: number of bits,
+			 * 3: value
+			 */
+			pinctrls =
+				<0x440 0 4 1>, /* uart - RX */
+				<0x444 0 4 1>; /* uart - TX */
+		};
+	};
+
+	/* interrupt-controller: CPU side */
+	intc: interrupt-controller {
+		compatible = "mips32,intc";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+		#address-cells = <1>;
+	};
+
+	/* interrupt-controller: SoC side */
+	intcsoc: intcsoc@18081040 {
+		compatible = "salix,intc";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+		#address-cells = <1>;
+
+		interrupts = <3>; /* connect to CPU IP3 */
+		interrupt-parent = <&intc>;
+
+		max-irqs = <192>;
+
+		reg = <0x18081040 0x18>,
+			<0x18081080 0x18>;
+	};
+
+	uart {
+		compatible = "module,uart";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		serial16550@18018300 {
+			compatible = "ns16550";
+			reg = <0x18018300 0x0C>;
+			interrupts = <16>;
+			interrupt-parent = <&intcsoc>;
+			clock-frequency = <27000000>;
+			current-speed = <115200>;
+			clock-divisor = <234>;
+			reg-shift = <0>;
+			reg-io-width = <1>;
+		};
+	};
+
+	timer {
+		compatible = "mips32,cp0-timer";
+		interrupts = <7>;
+		interrupt-parent = <&intc>;
+		clock-frequency = <450000000>;
+	};
+};
