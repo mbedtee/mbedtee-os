@@ -12,7 +12,6 @@ ifeq ($(CONFIG_USER),y)
 	$(Q)$(MAKE) -f Makefile.libc all
 	$(Q)$(MAKE) -f Makefile.app all
 endif
-
 	$(Q)$(MAKE) -f Makefile.kern scripts
 	$(Q)$(MAKE) -f Makefile.dt all
 	$(Q)$(MAKE) -f Makefile.kern all

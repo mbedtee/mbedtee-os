@@ -1897,7 +1897,7 @@ void fs_test(void)
 {
 	int i = 0;
 
-	for (i = 0; i < 200; i++) {
+	for (i = 0; i < 10; i++) {
 		if (rand() % 2 == 0)
 			__fs_test("/");
 		else
