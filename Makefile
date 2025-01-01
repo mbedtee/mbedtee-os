@@ -22,7 +22,6 @@ export CONFIG_FILE = $(TOP_DIR)/.config
 export SCRIPTS_DIR = $(TOP_DIR)/scripts
 
 include $(SCRIPTS_DIR)/Makefile.include
-include $(SCRIPTS_DIR)/menuconfig/Kbuild.include
 
 export PRODUCT_VERSION = $(MAJOR_VER).$(MEDIUM_VER).$(MINOR_VER)
 
@@ -64,14 +63,15 @@ $(VERSION_FILE):
 	@( printf '#endif\n' ) >> $@.tmp
 	@cmp -s $@ $@.tmp && rm -f $@.tmp || mv -f $@.tmp $@
 
-.PHONY: $(scripts_basic)
-scripts_basic:
-	$(Q)$(MAKE) $(build)=scripts/menuconfig/basic
+%defconfig:
+	$(Q)$(SCRIPTS_DIR)/kconfig/defconfig.py configs/$@ 2>&1 > /dev/null
 
-%config: scripts_basic
-	$(Q)$(MAKE) $(build)=scripts/menuconfig/kconfig $@ 2> /dev/null
+menuconfig:
+	$(Q)$(SCRIPTS_DIR)/kconfig/menuconfig.py
 
 # Detect if the .config is newer than auto.conf, update autoconf.h accordingly
--include include/config/auto.conf.cmd
-%/config/auto.conf %/config/auto.conf.cmd %/generated/autoconf.h: $(CONFIG_FILE)
-	$(Q)$(MAKE) $(build)=scripts/menuconfig/kconfig syncconfig
+-include $(INC_DIR)/config/auto.conf
+$(INC_DIR)/config/auto.conf: $(CONFIG_FILE)
+	$(Q)mkdir -p $(INC_DIR)/generated $(INC_DIR)/config
+	$(Q)$(SCRIPTS_DIR)/kconfig/genconfig.py \
+		--sync-deps=$(INC_DIR)/config --header-path=$(INC_DIR)/generated/autoconf.h
