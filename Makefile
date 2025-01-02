@@ -9,24 +9,14 @@ export PRODUCT = mbedtee
 
 export TOP_DIR = $(CURDIR)
 
-export HOSTCC  = gcc
-export HOSTCXX = g++
-export HOSTLD  = ld
-export YACC = bison
-export LEX = flex
-export srctree = $(TOP_DIR)
-export objtree = $(TOP_DIR)
-export quiet = quiet_
-
 export CONFIG_FILE = $(TOP_DIR)/.config
 export SCRIPTS_DIR = $(TOP_DIR)/scripts
-
-include $(SCRIPTS_DIR)/Makefile.include
-
 export PRODUCT_VERSION = $(MAJOR_VER).$(MEDIUM_VER).$(MINOR_VER)
 
 VERSION_FILE=$(TOP_DIR)/include/version.h
 BUILD_FILE=$(TOP_DIR)/include/build.h
+
+include $(SCRIPTS_DIR)/Makefile.include
 
 .PHONY: all
 all: $(VERSION_FILE) $(BUILD_FILE)
