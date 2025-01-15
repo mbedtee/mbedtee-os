@@ -26,6 +26,8 @@ objcopy = $(CROSS_COMPILE)objcopy
 include $(SCRIPTS_DIR)/Makefile.arch
 include $(SCRIPTS_DIR)/Makefile.platform
 
+MAKEFLAGS += --no-print-directory
+
 TARGET_PICFLAGS = $(subst ",,$(CONFIG_PIC_CFLAGS))
 TARGET_CCFLAGS = $(subst ",,$(CONFIG_CFLAGS))
 TARGET_ASMFLAGS = $(TARGET_CCFLAGS)
