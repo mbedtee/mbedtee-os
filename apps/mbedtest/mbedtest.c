@@ -152,7 +152,7 @@ static __noinline void float_f_test(void)
 	int i = 0;
 	int loops;
 	void *refpp, *tmpp;
-	double tmp, diff;
+	float tmp, diff;
 
 	for (loops = 0; loops < (rand()%500); loops++) {
 		for (i = 0; i < ARRAY_SIZE(in_f1); i++) {
@@ -928,7 +928,7 @@ retry_open_name2_rdonly:
 	DMSG("unlink %s ret=%d errno=%d\n", name, ret, errno);
 
 	ret = rmdir(dir);
-	DMSG("rmdir %s ret=%d errno=%d\n", dir, ret);
+	DMSG("rmdir %s ret=%d errno=%d\n", dir, ret, errno);
 	if (ret)
 		goto out;
 

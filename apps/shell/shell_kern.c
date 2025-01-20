@@ -162,12 +162,11 @@ static void cmd_ls(struct shell *sh)
 	sys_close(dfd);
 }
 
-
 static void rmdir_recursive(struct shell *sh,
 	const char *dirpath, const char *expected, bool recursion)
 {
 	char fpath[FS_PATH_MAX];
-	int dfd = -1, ret = -1;
+	int dfd = -1, ret = -1, fd = -1;
 	struct dirent _d, *d = &_d;
 	struct stat st;
 	char *extstart = NULL;
@@ -202,8 +201,18 @@ static void rmdir_recursive(struct shell *sh,
 			snprintf(fpath, sizeof(fpath), "%s/%s",
 				strcmp(dirpath, "/") ? dirpath : "", d->d_name);
 
-			stat(fpath, &st);
+			fd = sys_open(fpath, O_RDONLY);
+			if (fd == -1) {
+				shmsg(sh, "open %s errno = %d\n", fpath, errno);
+				continue;
+			}
+			if (sys_fstat(fd, &st) < 0) {
+				sys_close(fd);
+				continue;
+			}
+
 			if (st.st_mode == S_IFDIR) {
+				sys_close(fd);
 				if (recursion)
 					rmdir_recursive(sh, fpath, "*", recursion);
 				else {
@@ -213,6 +222,7 @@ static void rmdir_recursive(struct shell *sh,
 			} else {
 				ret = sys_unlink(fpath);
 				shmsg(sh, "unlink %s ret = %d\n", fpath, ret);
+				sys_close(fd);
 			}
 			st.st_mode = 0;
 			if (ret == 0)
