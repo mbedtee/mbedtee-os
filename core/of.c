@@ -162,7 +162,7 @@ int of_read_property_addr_size_by_offset(int offset,
 	if (range == NULL)
 		return -ENODATA;
 
-	if (plen/sizeof(int) <= (naddr + nsize) * idx)
+	if (plen/sizeof(int) <= (size_t)(naddr + nsize) * idx)
 		return -ENODATA;
 
 	if (addr)
@@ -385,7 +385,7 @@ int of_read_property_addr_size(struct device_node *dn, const char *name,
 	if (range == NULL)
 		return -ENODATA;
 
-	if (plen/sizeof(int) <= (naddr + nsize) * idx)
+	if (plen/sizeof(int) <= (size_t)(naddr + nsize) * idx)
 		return -ENODATA;
 
 	if (addr)

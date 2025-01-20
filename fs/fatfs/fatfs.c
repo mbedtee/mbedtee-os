@@ -989,7 +989,8 @@ static void dirent_fill(struct d_info *di)
 	if (ldir && (num == 0)) {
 		dir = (struct direnty *)ldir;
 		memset(dir, 0, sizeof(struct direnty));
-		memcpy(dir->name, di->sfn, FAT_MAX_SFN);
+		memcpy(dir->name, di->sfn, sizeof(dir->name));
+		memcpy(dir->ext, &di->sfn[sizeof(dir->name)], sizeof(dir->ext));
 		fatfs_update_time(&dir->cdate, &dir->ctime);
 		dir->time = dir->ctime;
 		dir->date = dir->cdate;
@@ -1944,7 +1945,7 @@ static size_t fat_getfree(struct file_system *pfs)
 {
 	struct fatfs *fs = pfs->priv;
 
-	return fs->free_clst * fs->cbytes;
+	return (size_t)fs->free_clst * fs->cbytes;
 }
 
 int fat_umount(struct file_system *pfs)
@@ -2024,7 +2025,7 @@ int fat_mount(struct file_system *pfs)
 	if (total_sec == 0)
 		total_sec = load32h(img + BPB_TOTSEC32);
 
-	if (total_sec * fs->ssize != img_size)
+	if ((size_t)total_sec * fs->ssize != img_size)
 		return -EINVAL;
 
 	/*

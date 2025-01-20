@@ -202,7 +202,7 @@ static void rmdir_recursive(struct shell *sh,
 	struct stat st;
 	char *extstart = NULL;
 	char *isext = NULL;
-	int rewind = 0, err = 0;
+	int rewind = 0, err = 0, fd = -1;
 
 	dir = opendir(dirpath);
 	if (dir == NULL)
@@ -230,8 +230,19 @@ static void rmdir_recursive(struct shell *sh,
 			snprintf(fpath, sizeof(fpath), "%s/%s",
 				strcmp(dirpath, "/") ? dirpath : "", d->d_name);
 
-			stat(fpath, &st);
+			fd = open(fpath, O_RDONLY);
+			if (fd == -1) {
+				shmsg(sh, "open %s errno = %d\n", fpath, errno);
+				continue;
+			}
+			if (fstat(fd, &st) == -1) {
+				shmsg(sh, "fstat %s errno = %d\n", fpath, errno);
+				close(fd);
+				continue;
+			}
+
 			if (st.st_mode == S_IFDIR) {
+				close(fd);
 				if (recursion)
 					rmdir_recursive(sh, fpath, "*", recursion);
 				else {
@@ -241,6 +252,7 @@ static void rmdir_recursive(struct shell *sh,
 			} else {
 				err = unlink(fpath);
 				shmsg(sh, "unlink %s errno = %d\n", fpath, errno);
+				close(fd);
 			}
 			st.st_mode = 0;
 			if (err == 0)

@@ -21,8 +21,9 @@
 /*
  * shall within the pre-defined user range
  */
-#define user_range_ok(addr, size) (address_ok(addr) && \
-		 address_ok(addr + size) && size_ok(addr, size))
+#define user_range_ok(addr, size) (address_ok((unsigned long)(addr)) && \
+	address_ok((unsigned long)(addr) + (unsigned long)(size)) && \
+	size_ok(addr, size))
 
 #define access_ok(addr, size) user_range_ok(addr, size)
 

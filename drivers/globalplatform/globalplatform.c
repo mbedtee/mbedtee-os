@@ -79,7 +79,7 @@ static int do_getreetime(struct timespec *dst)
 {
 	struct timespec ts = {0};
 
-	if (!access_ok(dst, sizeof(ts)))
+	if (!access_ok(dst, sizeof(struct timespec)))
 		return -EFAULT;
 
 #if defined(CONFIG_RPC)
