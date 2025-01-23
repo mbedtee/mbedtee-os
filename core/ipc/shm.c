@@ -575,15 +575,16 @@ static int shm_fstat(struct file *f, struct stat *st)
 
 	tfs_lock_node(n);
 
-	st->st_size = fn->filesize;
 	st->st_blksize = PAGE_SIZE;
 
 	if (n->attr & TFS_ATTR_DIR) {
 		st->st_mode = S_IFDIR;
 		st->st_blocks = 0;
+		st->st_size = 0;
 	} else {
 		st->st_mode = S_IFREG;
 		st->st_blocks = fn->nr_pages;
+		st->st_size = fn->filesize;
 	}
 
 	st->st_atime = n->atime;
@@ -680,7 +681,6 @@ static int shm_rename(struct file_system *pfs,
 	oldn->parent = dir;
 	dir->refc++;
 	dir->sub_nodes++;
-	list_move_tail(&oldn->node, &dir->nodes);
 
 	tfs_update_time(NULL, NULL, &oldn->ctime);
 

@@ -2485,20 +2485,19 @@ static void *epdel_routine(void *arg)
 
 static inline void epoll_test(void)
 {
-	int ret = -1, i = 0, n = -1, nrevts = 0;
+	int ret = -1, i = 0, n = -1, nrevts = 0, _fd = -1;
 	int nr = rand() % ARRAY_SIZE(epollfds) + 1;
-#ifdef __mips__
-	int _fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
-#else
-	int _fd = open("/dev/uart1", O_RDWR | O_NONBLOCK);
-
-	if (_fd < 0)
-		_fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
-#endif
 	char str[256] = {0};
 	struct epoll_event *evts = NULL, evt = {0};
 	int randx = rand(), del_routine = 0;
 	pthread_t epdel;
+
+	if (rand() % 2)
+		_fd = open("/dev/null", O_RDWR | O_NONBLOCK);
+	else if (rand() % 2)
+		_fd = open("/dev/uart1", O_RDWR | O_NONBLOCK);
+	else
+		_fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
 
 	if (_fd < 0)
 		return;
@@ -2508,7 +2507,7 @@ static inline void epoll_test(void)
 		goto out;
 
 	evt.events = EPOLLIN;
-	evt.data = 0xa55a12341177ff33;
+	evt.data.u64 = 0xa55a12341177ff33;
 
 	evts = malloc(nr * sizeof(struct epoll_event));
 	if (evts) {
@@ -2528,16 +2527,16 @@ static inline void epoll_test(void)
 		ret = epoll_wait(epfd, evts, nr, rand() % 5000);
 		IMSG("epoll_wait nrevts = %d errno %d\n", ret, errno);
 		IMSG("epoll_wait 0xa55a12341177ff33 REVENTS %d DATA:0x%llx\n",
-			evts[0].events, (long long)evts[0].data);
+			evts[0].events, (long long)evts[0].data.u64);
 
 		for (i = 0; i < nr; i++) {
-#ifdef __mips__
-			epollfds[i] = open("/dev/uart0", O_RDWR | O_NONBLOCK);
-#else
-			epollfds[i] = open("/dev/uart1", O_RDWR | O_NONBLOCK);
-			if (epollfds[i] < 0)
+			if (rand() % 2)
+				epollfds[i] = open("/dev/null", O_RDWR | O_NONBLOCK);
+			else if (rand() % 2)
+				epollfds[i] = open("/dev/uart1", O_RDWR | O_NONBLOCK);
+			else
 				epollfds[i] = open("/dev/uart0", O_RDWR | O_NONBLOCK);
-#endif
+
 			if (epollfds[i] < 0)
 				break;
 
@@ -2546,7 +2545,7 @@ static inline void epoll_test(void)
 			evt.events = EPOLLIN | ((randx % 2) ? EPOLLET : 0) |
 						(((rand() % 5) == 0) ? EPOLLONESHOT : 0);
 
-			evt.data = epollfds[i];
+			evt.data.fd = epollfds[i];
 			ret = epoll_ctl(epfd, EPOLL_CTL_ADD, epollfds[i], &evt);
 			if (ret != 0)
 				break;
@@ -2562,11 +2561,11 @@ static inline void epoll_test(void)
 		IMSG("epoll_wait nrevts = %d errno %d\n", nrevts, errno);
 
 		for (n = 0; n < nrevts; n++) {
-			ret = read(evts[n].data, str, sizeof(str) - 1);
+			ret = read(evts[n].data.fd, str, sizeof(str) - 1);
 			if (strlen(str))
 				IMSG("fd %d revent %d readret = %d errno %d str %s\n",
-					(int)evts[n].data, (int)evts[n].events, ret, errno, str);
-			epoll_ctl(epfd, EPOLL_CTL_DEL, evts[n].data, NULL);
+					(int)evts[n].data.fd, (int)evts[n].events, ret, errno, str);
+			epoll_ctl(epfd, EPOLL_CTL_DEL, evts[n].data.fd, NULL);
 		}
 
 		for (i = 0; i < nr; i++) {

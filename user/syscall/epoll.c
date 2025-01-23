@@ -22,6 +22,16 @@ int epoll_create(int size)
 	return syscall_retval(ret);
 }
 
+int epoll_create1(int flags)
+{
+	int ret = 0;
+
+	ret = syscall1(SYSCALL_EPOLL_CREATE, 0);
+
+	errno = syscall_errno(ret);
+	return syscall_retval(ret);
+}
+
 int epoll_ctl(int epfd, int op, int fd,
 		      struct epoll_event *event)
 {

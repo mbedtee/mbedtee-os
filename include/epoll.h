@@ -34,11 +34,19 @@
 
 struct epoll_event {
 	uint32_t events;
-	uint64_t data;
+	union epoll_data {
+	  void *ptr;
+	  int fd;
+	  uint32_t u32;
+	  uint64_t u64;
+	} data;
 };
+
 #define EPOLL_MAXEVENTS (INT_MAX >> 4)
 
 int epoll_create(int size);
+
+int epoll_create1(int flags);
 
 int epoll_ctl(int epfd, int op, int fd,
 		      struct epoll_event *event);
