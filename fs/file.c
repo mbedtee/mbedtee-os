@@ -1015,6 +1015,7 @@ ssize_t sys_readdir(int fd, struct dirent *e)
 		goto out;
 	}
 
+	e->d_reclen = 0;
 	ret = d->file->fops->readdir(d->file, e, sizeof(struct dirent));
 	if (ret <= 0)
 		goto out;

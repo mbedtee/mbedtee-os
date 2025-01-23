@@ -103,7 +103,7 @@ static void cmd_ps(struct shell *sh)
 }
 
 static void ls_fstat(struct shell *sh,
-	const char *path)
+	const char *path, bool firstfile)
 {
 	struct stat st = {0};
 	struct tm tm = {0};
@@ -124,7 +124,10 @@ static void ls_fstat(struct shell *sh,
 
 	time2date(st.st_mtime, &tm);
 
-	shmsg(sh, "%s\t%ld\t%ld\t%ld\t%04d-%02d-%02d %02d:%02d:%02d %s\n",
+	if (firstfile)
+		shmsg(sh, "Type\tSize\tBlksize\tBlocks\tMTime\t\t\tName\n");
+
+	shmsg(sh, "%s\t%ld\t%ld\t%ld\t%04d-%02d-%02d %02d:%02d:%02d\t%s\n",
 		st.st_mode == S_IFDIR ? "DIR" : "File",
 		(long)st.st_size, (long)st.st_blksize, (long)st.st_blocks,
 		tm.tm_year+1900, tm.tm_mon+1, tm.tm_mday,
@@ -140,10 +143,11 @@ static void cmd_ls(struct shell *sh)
 	struct dirent d = {0};
 	char filepath[FS_PATH_MAX];
 	const char *path = sh->argv[1] ? sh->argv[1] : "/";
+	bool firstfile = true;
 
 	dfd = sys_open(path, O_RDONLY | O_DIRECTORY);
 	if (dfd < 0) {
-		ls_fstat(sh, path);
+		ls_fstat(sh, path, firstfile);
 		return;
 	}
 
@@ -156,7 +160,9 @@ static void cmd_ls(struct shell *sh)
 
 		snprintf(filepath, sizeof(filepath), "%s/%s", path, d.d_name);
 
-		ls_fstat(sh, filepath);
+		ls_fstat(sh, filepath, firstfile);
+
+		firstfile = false;
 	}
 
 	sys_close(dfd);
@@ -212,7 +218,6 @@ static void rmdir_recursive(struct shell *sh,
 			}
 
 			if (st.st_mode == S_IFDIR) {
-				sys_close(fd);
 				if (recursion)
 					rmdir_recursive(sh, fpath, "*", recursion);
 				else {
@@ -222,8 +227,8 @@ static void rmdir_recursive(struct shell *sh,
 			} else {
 				ret = sys_unlink(fpath);
 				shmsg(sh, "unlink %s ret = %d\n", fpath, ret);
-				sys_close(fd);
 			}
+			sys_close(fd);
 			st.st_mode = 0;
 			if (ret == 0)
 				rewind++;
@@ -247,7 +252,6 @@ static void cmd_rmpath(struct shell *sh, char *path, bool recursion)
 
 	if (fd > 0) {
 		sys_fstat(fd, &st);
-		sys_close(fd);
 		if (st.st_mode == S_IFDIR) {
 			if (recursion)
 				rmdir_recursive(sh, path, "*", recursion);
@@ -259,6 +263,7 @@ static void cmd_rmpath(struct shell *sh, char *path, bool recursion)
 			ret = sys_unlink(path);
 			shmsg(sh, "unlink %s ret = %d\n", path, ret);
 		}
+		sys_close(fd);
 	} else {
 		char *fname = basename(path);
 		char *dir = dirname(path);

@@ -112,7 +112,7 @@ static void cmd_ps(struct shell *sh)
 }
 
 static void ls_fstat(struct shell *sh,
-	const char *path)
+	const char *path, bool firstfile)
 {
 	struct stat st = {0};
 	struct tm *tinfo = NULL;
@@ -133,7 +133,10 @@ static void ls_fstat(struct shell *sh,
 
 	tinfo = localtime(&st.st_mtime);
 
-	shmsg(sh, "%s\t%ld\t%ld\t%ld\t%04d-%02d-%02d %02d:%02d:%02d %s\n",
+	if (firstfile)
+		shmsg(sh, "Type\tSize\tBlksize\tBlocks\tMTime\t\t\tName\n");
+
+	shmsg(sh, "%s\t%ld\t%ld\t%ld\t%04d-%02d-%02d %02d:%02d:%02d\t%s\n",
 		st.st_mode == S_IFDIR ? "DIR" : "File",
 		st.st_size, st.st_blksize, st.st_blocks,
 		tinfo->tm_year+1900, tinfo->tm_mon+1, tinfo->tm_mday,
@@ -148,10 +151,11 @@ static void cmd_ls(struct shell *sh)
 	struct dirent *d = NULL;
 	char filepath[PATH_MAX];
 	const char *path = sh->argv[1] ? sh->argv[1] : "/";
+	bool firstfile = true;
 
 	dir = opendir(path);
 	if (dir == NULL) {
-		ls_fstat(sh, path);
+		ls_fstat(sh, path, firstfile);
 		return;
 	}
 
@@ -162,7 +166,9 @@ static void cmd_ls(struct shell *sh)
 
 		snprintf(filepath, sizeof(filepath), "%s/%s", path, d->d_name);
 
-		ls_fstat(sh, filepath);
+		ls_fstat(sh, filepath, firstfile);
+
+		firstfile = false;
 	}
 
 	closedir(dir);
@@ -242,7 +248,6 @@ static void rmdir_recursive(struct shell *sh,
 			}
 
 			if (st.st_mode == S_IFDIR) {
-				close(fd);
 				if (recursion)
 					rmdir_recursive(sh, fpath, "*", recursion);
 				else {
@@ -252,8 +257,9 @@ static void rmdir_recursive(struct shell *sh,
 			} else {
 				err = unlink(fpath);
 				shmsg(sh, "unlink %s errno = %d\n", fpath, errno);
-				close(fd);
 			}
+
+			close(fd);
 			st.st_mode = 0;
 			if (err == 0)
 				rewind++;
@@ -277,7 +283,6 @@ static void cmd_rmpath(struct shell *sh, char *path, bool recursion)
 
 	if (fd > 0) {
 		fstat(fd, &st);
-		close(fd);
 		if (st.st_mode == S_IFDIR) {
 			if (recursion)
 				rmdir_recursive(sh, path, "*", recursion);
@@ -289,6 +294,7 @@ static void cmd_rmpath(struct shell *sh, char *path, bool recursion)
 			unlink(path);
 			shmsg(sh, "unlink %s errno = %d\n", path, errno);
 		}
+		close(fd);
 	} else {
 		char *fname = basename(path);
 		char *dir = dirname(path);
