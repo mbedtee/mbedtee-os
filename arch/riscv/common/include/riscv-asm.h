@@ -8,6 +8,7 @@
 #define _RISCV_ASM_MACROS_H
 
 #include <cpu.h>
+#include <map.h>
 
 #include <generated/autoconf.h>
 #include <generated/asm-offsets.h>
@@ -49,6 +50,57 @@
 .macro set_tp
 	csrr tp, CSR_SCRATCH
 	LDR tp, PERCPU_CURRENT_THREAD(tp)
+.endm
+
+/* Using PMP TOR: pmpaddr[i-1] <= y < pmpaddr[i] */
+.macro set_pmp
+	/* pmp0cfg: 0 ~ 0x7FFFFFFF is set to RW (major for IO) */
+	li t1, 0x80000000 >> 2
+	csrw pmpaddr0, t1
+	li t2, 1 << 3 | 1 << 7 | 3
+
+	/* pmp1cfg: .data between 0x80000000 ~ PA_OFFSET is set to RWX and Locked */
+	la t3, _start /* physical start */
+	srli t1, t3, 2
+	csrw pmpaddr1, t1
+	li t3, 1 << 3 | 1 << 7 | 7
+	slli t3, t3, 8
+	or t2, t2, t3
+
+	/* pmp2cfg: .text is set to RX and Locked */
+	la t1, __TEXT_END
+	srli t1, t1, 2
+	csrw pmpaddr2, t1
+	li t3, 1 << 3 | 1 << 7 | 5
+	slli t3, t3, 16
+	or t2, t2, t3
+
+	/* pmp3cfg: .rodata is set to R and Locked */
+	la t1, __RODATA_END
+	srli t1, t1, 2
+	csrw pmpaddr3, t1
+	li t3, 1 << 3 | 1 << 7 | 1
+	slli t3, t3, 24
+	or t2, t2, t3
+
+	/* pmp4cfg: others are set to RWX and Locked */
+	li t1, -1
+	csrw pmpaddr4, t1
+#if defined(CONFIG_64BIT)
+	li t3, 1 << 3 | 1 << 7 | 7
+	slli t3, t3, 32
+	or t2, t2, t3
+
+	/* pmp0cfg ~ pmp4cfg @ pmpcfg0 */
+	csrw pmpcfg0, t2
+#else
+	/* pmp0cfg ~ pmp3cfg @ pmpcfg0 */
+	csrw pmpcfg0, t2
+
+	/* pmp4cfg @ pmpcfg1 */
+	li t2, 1 << 3 | 1 << 7 | 7
+	csrw pmpcfg1, t2
+#endif
 .endm
 
 /*
