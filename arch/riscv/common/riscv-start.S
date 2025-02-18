@@ -135,8 +135,7 @@ check_set_s_mode_delege:
 	csrw mideleg, t1
 	csrw mcounteren, t1
 
-	csrw pmpaddr0, t1
-	csrw pmpcfg0, 15
+	set_pmp
 
 	sfence.vma
 	csrw satp, zero
