@@ -212,7 +212,10 @@ int tfs_make_node(struct tfs *fs,
 
 				ret = tfs_init_node(dir, n, name);
 				if (ret) {
-					fs->free(n);
+					if (isdir)
+						kfree(n);
+					else
+						fs->free(n);
 					goto out;
 				}
 
