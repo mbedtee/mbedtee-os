@@ -520,7 +520,7 @@ static long syscall_exit(struct thread_ctx *regs)
 			(union sigval)((void *)lastwords), false);
 		if (ret != -EAGAIN)
 			break;
-		msleep(20);
+		msleep(100);
 	} while (--retry);
 
 	/* exit current thread */

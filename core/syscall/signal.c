@@ -164,7 +164,7 @@ static inline int __sigenqueue(struct signal_proc *sigp,
 
 	q = kmalloc(sizeof(*q));
 	if (q == NULL) {
-		EMSG("allocate failed signo %d code %d\n", signo, info->si_code);
+		DMSG("allocate failed signo %d code %d\n", signo, info->si_code);
 		return -EAGAIN;
 	}
 

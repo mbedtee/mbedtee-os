@@ -377,12 +377,12 @@ void __sched_exec(struct sched_priv *sp,
 
 		sched_update_state(sp, curr, next);
 		sched_record_next(next);
+
+		if (sched_sigcheck(curr))
+			__sched_enqueue(curr);
 	}
 
 	sched_record_runtime(sp);
-
-	if (sched_sigcheck(curr))
-		__sched_enqueue(curr);
 
 	spin_unlock(&sp->lock);
 
