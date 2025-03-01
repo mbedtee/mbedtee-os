@@ -38,7 +38,7 @@ pid_t sched_sigcheck(struct sched *s)
 		 */
 
 		if (!list_empty(&s->gd_node) && list_empty(&s->ready_node) && t->tuser) {
-			if (thread_isnt_critical(t) && is_sigtpending(t)) {
+			if (SIGEXEC_CONDI(t, &s->regs) && is_sigtpending(t)) {
 				if (t->tuser->inited && !t->tuser->exiting) {
 					DMSG("%04d KC:%d UC:%d @ %s\n", s->id,
 						t->critical, t->tuser->critical, t->name);
