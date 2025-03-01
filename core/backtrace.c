@@ -91,11 +91,11 @@ void backtrace(void)
 
 #if defined(BACKTRACE_SERIAL_ONLY)
 	uart_early_puts(name, strnlen(name, THREAD_NAME_LEN));
-	uart_early_puts(" kbacktrace\n", 11);
+	uart_early_puts(" kbacktrace\n", 12);
 	_Unwind_Backtrace(&__tracer, &depth);
 #else
 	printk_raw(name, strnlen(name, THREAD_NAME_LEN));
-	printk_raw(" kbacktrace\n", 11);
+	printk_raw(" kbacktrace\n", 12);
 	_Unwind_Backtrace(&__tracer, &depth);
 #endif
 }
