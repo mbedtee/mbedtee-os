@@ -68,7 +68,7 @@ static int epollfds[10240] = {0}, epfd = -1;
 	{IMSG("=========force exiting=========\n\n"); exit(0); }}
 
 #define TRIGGER_EXCEPTION(err) do {	         \
-	EMSG("mbedtest-exception 0x%x:\n", err);	 \
+	EMSG("mbedtest-oops 0x%x:\n", err);	 \
 	*(__volatile int *)-1 = 0;               \
 } while (0)
 
@@ -360,15 +360,34 @@ static void float_test(void)
 	}
 }
 
+static void dup_cleanup(void *name)
+{
+	int ret = unlink(name);
+	int err = errno;
+
+	if (ret && err != ENOENT) {
+		EMSG("unlink %s failed %d\n", name, err);
+		while (err == ENOMEM) {
+			usleep(20000);
+			unlink(name);
+			err = errno;
+		}
+	}
+}
+
 static void dup_ok(int i)
 {
 	int fd = -1, fdcurrent = -1;
 	int ret = -1, fddup = -1, fddup_curr = -1, err = -1;
 	char buaff[128] = {0};
-	char name[128];
+	char name[128] = {0};
 
-	snprintf(name, 128, "%s/%04d_%04d.%d.dup.txt", "/test",
-			gettid(), getpid(), i);
+	snprintf(name, 128, "%s/%04d_%d.%d.dup.txt",
+		 "/test", gettid(), rand(), i);
+
+	unlink(name);
+
+	pthread_cleanup_push(dup_cleanup, name);
 
 	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	err = errno;
@@ -376,8 +395,8 @@ static void dup_ok(int i)
 		DMSG("create fd %d %s errno %d @ %s\n",
 			fd, name, err, strerror(err));
 	if (err == ENOMEM || err == ENOSPC || err == EMFILE)
-		return;
-	if (fd < 0)
+		goto out;
+	if (fd <= STDERR_FILENO)
 		TRIGGER_EXCEPTION(err);
 
 	ret = write(fd, "111", 3);
@@ -389,7 +408,7 @@ static void dup_ok(int i)
 	if (ret != 3)
 		TRIGGER_EXCEPTION(err);
 
-	fdcurrent = open("/dev/uart0", O_RDONLY);
+	fdcurrent = open("/dev/uart0", O_RDONLY | O_NONBLOCK);
 	if (fdcurrent < 0)
 		goto out;
 
@@ -403,20 +422,22 @@ static void dup_ok(int i)
 	ret = read(fddup_curr, buaff, sizeof(buaff));
 	err = errno;
 	close(fddup_curr);
+	fddup_curr = -1;
 	if (memcmp(buaff, "111", 4) != 0) {
 		EMSG("dupcurr read %d ret=%d errno=%d @ %s\n",
 			fddup_curr, ret, err, buaff);
-		TRIGGER_EXCEPTION(ret);
+		TRIGGER_EXCEPTION(err);
 	}
 
 	fddup = dup(fd);
 	err = errno;
-	DMSG("dup fd=%d fddup=%d errno=%d @ %s\n",
-		fd, fddup, err, strerror(err));
 	if (err == ENOMEM || err == EBUSY || err == EMFILE)
 		goto out;
-	if (fddup < 0)
+	if (fddup <= STDERR_FILENO) {
+		EMSG("dup fd=%d fddup=%d errno=%d @ %s\n",
+			fd, fddup, err, strerror(err));
 		TRIGGER_EXCEPTION(err);
+	}
 
 	ret = write(fddup, "222", 3);
 	err = errno;
@@ -430,8 +451,8 @@ static void dup_ok(int i)
 	DMSG("dup lseek ret=%d errno=%d\n", ret, err);
 
 	fddup = dup2(fddup, fddup);
-	if (fddup < 0)
-		TRIGGER_EXCEPTION(fddup);
+	if (fddup <= STDERR_FILENO)
+		TRIGGER_EXCEPTION(errno);
 
 	memset(buaff, 0, sizeof(buaff));
 	ret = read(fddup, buaff, sizeof(buaff));
@@ -445,13 +466,13 @@ static void dup_ok(int i)
 	}
 	memset(buaff, 0, sizeof(buaff));
 
-	fdcurrent = open("/dev/uart0", O_RDONLY);
+	fdcurrent = open("/dev/uart0", O_RDONLY | O_NONBLOCK);
 	if (fdcurrent < 0)
 		goto out;
 
 	fddup_curr = dup2(fddup, fdcurrent);
 	err = errno;
-	if (fddup_curr < 0) {
+	if (fddup_curr <= STDERR_FILENO) {
 		EMSG("dupcurr2 fd=%d dup=%d errno=%d\n",
 			fdcurrent, fddup_curr, err);
 		goto out;
@@ -480,22 +501,27 @@ out:
 	close(fd);
 	close(fddup);
 	close(fddup_curr);
-	unlink(name);
+	pthread_cleanup_pop(1);
 }
 
 static void dup_ng(int i)
 {
 	int fdcurrent = -1, fd = -1;
-	int ret = -1, fddup = -1, fddup_curr = -1, err = -1;
+	int ret = -1, fddup = -1, err = -1;
 	char buaff[128] = {0};
-	char name[128];
+	char name[128] = {0};
+	static int fddup_saved = -1;
 
-	snprintf(name, 128, "%s/04%d_%04d.%d.dupng.txt",
-		 "/test", gettid(), getpid(), i);
+	snprintf(name, 128, "%s/%04d_%d.%d.dupng.txt",
+		 "/test", gettid(), rand(), i);
+
+	unlink(name);
+
+	pthread_cleanup_push(dup_cleanup, name);
 
 	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	if (fd < 0)
-		return;
+		goto out;
 
 	ret = write(fd, "111", 3);
 	err = errno;
@@ -522,36 +548,30 @@ static void dup_ng(int i)
 
 	memset(buaff, 0, sizeof(buaff));
 
-	fdcurrent = open("/dev/uart0", O_RDONLY);
+	fdcurrent = open("/dev/uart0", O_RDONLY | O_NONBLOCK);
 	if (fdcurrent < 0)
 		goto out;
 
-	fddup_curr = dup2(fddup, fdcurrent);
-	err = errno;
-	if (fddup_curr < 0) {
-		close(fdcurrent);
-		goto out;
-	}
+	ret = dup2(fddup, fdcurrent);
 
-	ret = read(fddup_curr, buaff, sizeof(buaff));
+	if (fddup_saved < 0)
+		fddup_saved = fdcurrent;
 
-	ret = lseek(fddup_curr, 0, SEEK_SET);
-	ret = read(fddup_curr, buaff, sizeof(buaff));
+	ret = dup2(fddup, fddup_saved);
 
-	fddup_curr = dup2(fddup, gettid() + getpid() + (i % 131072));
-
-	ret = read(fddup_curr, buaff, sizeof(buaff));
+	ret = read(fddup_saved, buaff, sizeof(buaff));
+	ret = lseek(fddup_saved, -1, SEEK_CUR);
+	ret = read(fddup_saved, buaff, sizeof(buaff));
 
 out:
 	close(fd);
 	close(fddup);
-	close(fddup_curr);
-	unlink(name);
+	pthread_cleanup_pop(1);
 }
 
 static void dup_test(void)
 {
-	int i = 0, max = rand()%200;
+	int i = 0, max = rand()%300;
 
 	pthread_barrier_wait(&test_barrier_dup1);
 
@@ -574,43 +594,116 @@ static void key_destr(void *data)
 	IMSG("called in destr %p\n\n", data);
 }
 
-static inline void __fs_test(const char *rootdir)
+static void __fs_test_cleanup(void *arg)
+{
+	int ret = -1, err = 0;
+
+	char *name = arg + 128;
+	char *name2 = name + 128;
+	char *dir = name2 + 128;
+	char *dir2 = dir + 128;
+	char *nameatdir = dir2 + 128;
+
+	ret = unlink(nameatdir);
+	err = errno;
+	if (ret && err != ENOENT) {
+		EMSG("unlink %s failed %d\n", nameatdir, err);
+		while (err == ENOMEM) {
+			usleep(20000);
+			unlink(nameatdir);
+			err = errno;
+		}
+	}
+
+	ret = unlink(name);
+	err = errno;
+	if (ret && err != ENOENT) {
+		EMSG("unlink %s failed %d\n", name, err);
+		while (err == ENOMEM) {
+			usleep(20000);
+			unlink(name);
+			err = errno;
+		}
+	}
+
+	ret = unlink(name2);
+	err = errno;
+	if (ret && err != ENOENT) {
+		EMSG("unlink %s failed %d\n", name2, err);
+		while (err == ENOMEM) {
+			usleep(20000);
+			unlink(name2);
+			err = errno;
+		}
+	}
+
+	ret = rmdir(dir);
+	err = errno;
+	if (ret && err != ENOENT) {
+		EMSG("rmdir %s failed %d\n", dir, err);
+		while (err == ENOMEM) {
+			usleep(20000);
+			rmdir(dir);
+			err = errno;
+		}
+	}
+
+	ret = rmdir(dir2);
+	err = errno;
+	if (ret && err != ENOENT) {
+		EMSG("rmdir %s failed %d\n", dir2, err);
+		while (err == ENOMEM) {
+			usleep(20000);
+			rmdir(dir2);
+			err = errno;
+		}
+	}
+
+	free(arg);
+}
+
+static void __fs_test(const char *rootdir)
 {
 #define FS_BIGBUFF_SIZE 8192
 
 	int i = 0;
 	char *bigbuff = NULL;
-
+	int fd = -1;
 	int ret = -1, fd_rd = -1, fd_wr = -1, err = -1, retrycnt = 0;
-	char buaff[128] = {0};
-	char name[128], name2[128], nameatdir[256];
-	char dir[128], dir2[128];
 
-	snprintf(name, 128, "%s/%04d.txt", rootdir, gettid());
-	snprintf(name2, 128, "%s/%04d-rename-test.txt", rootdir, gettid());
+	char *namestr = calloc(1, 1024);
+	if (namestr == NULL)
+		return;
 
-	snprintf(dir, 128, "%s/dir_%04d", rootdir, gettid());
-	snprintf(dir2, 128, "%s/dir_2_%04d", rootdir, gettid());
-	snprintf(nameatdir, sizeof(nameatdir),
-			"%s/aa_%04d.txt", dir, gettid());
+	char *buaff = namestr;
+	char *name = buaff + 128;
+	char *name2 = name + 128;
+	char *dir = name2 + 128;
+	char *dir2 = dir + 128;
+	char *nameatdir = dir2 + 128;
+
+	snprintf(name, 128, "%s/%04d.%dfs.txt", rootdir, gettid(), rand());
+	snprintf(name2, 128, "%s/%04d-rename-%dfs.txt", rootdir, gettid(), rand());
+	snprintf(dir, 128, "%s/dir_%04d_%dfs", rootdir, gettid(), rand());
+	snprintf(dir2, 128, "%s/dir2_%04d_%dfs", rootdir, gettid(), rand());
+	strcpy(nameatdir, dir);
+	snprintf(nameatdir+strlen(dir), 128, "/aa_%04d.%dfs.txt", gettid(), rand());
 
 	#if defined(__mips__) || !defined(CONFIG_REE)
 		if (strcmp("/ree", rootdir) == 0 ||
-			strcmp("/user", rootdir) == 0)
+			strcmp("/user", rootdir) == 0) {
+			free(namestr);
 			return;
+		}
 	#endif
 
-	unlink(nameatdir);
-	unlink(name);
-	unlink(name2);
-	rmdir(dir);
-	rmdir(dir2);
+	pthread_cleanup_push(__fs_test_cleanup, namestr);
 
-	int fd = open(name, O_RDWR | O_CREAT, 0666);
+	fd = open(name, O_RDWR | O_CREAT, 0666);
 
 	err = errno;
 	if (err == ENOMEM || err == ENOSPC || err == EMFILE)
-		return;
+		goto out;
 
 	if (fd < 0) {
 		EMSG("create %s fd %d errno %d\n", name, fd, err);
@@ -620,9 +713,9 @@ static inline void __fs_test(const char *rootdir)
 	ret = lseek(fd, 0x1000, SEEK_SET);
 	err = errno;
 	if ((err == ENOMEM || err == ENOSPC) ||
-		(ret > 0 && ret < 0x1000)) {
+		(ret > 0 && ret < 0x1000))
 		goto out;
-	}
+
 	if (ret != 0x1000)
 		TRIGGER_EXCEPTION(err);
 
@@ -793,7 +886,7 @@ retry_open_name2_rdonly:
 		usleep(2000);
 		goto retry_open_name2_rdonly;
 	}
-	memset(buaff, 0, sizeof(buaff));
+	memset(buaff, 0, 128);
 	ret = lseek(fd2, 0x1000, SEEK_SET);
 	ret = read(fd2, buaff, 7);
 	err = errno;
@@ -936,29 +1029,40 @@ retry_open_name2_rdonly:
 	DMSG("readdir %s dddd=%p file=%s errno=%d\n", dir, dddd,
 		dddd ? dddd->d_name : "null", errno);
 
-	free(bigbuff);
 	close(fd4);
 	closedir(dd);
-	return;
 
 out:
 	free(bigbuff);
-	unlink(nameatdir);
-	unlink(name);
-	unlink(name2);
-	rmdir(dir);
-	rmdir(dir2);
+	pthread_cleanup_pop(1);
 }
 
-static inline void shmfs_mmap1(const char *rootdir)
+static void shmfs_mmap_cleanup(void *name)
+{
+	int ret = shm_unlink(name);
+	int err = errno;
+
+	if (ret && err != ENOENT) {
+		EMSG("shm_unlink %s failed %d\n", name, err);
+		while (err == ENOMEM) {
+			usleep(20000);
+			shm_unlink(name);
+			err = errno;
+		}
+	}
+}
+
+static void shmfs_mmap1(const char *rootdir)
 {
 	int ret = -1, fd = -1, err = -1;
 	char name[128] = {0};
-
-	snprintf(name, 128, "/%d%d.txt", gettid(), getpid());
 	char *ptr1 = NULL;
 
+	snprintf(name, 128, "/%d%dshm1.txt", gettid(), getpid());
+
 	shm_unlink(name);
+
+	pthread_cleanup_push(shmfs_mmap_cleanup, name);
 
 	if (rand()%2)
 		fd = shm_open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
@@ -968,7 +1072,7 @@ static inline void shmfs_mmap1(const char *rootdir)
 	DMSG("shm_open %s fd = %d error=%d, strerror = %s\n",
 		name, fd, err, strerror(err));
 	if (err == ENOMEM || err == ENOSPC || err == EMFILE)
-		return;
+		goto out;
 	if (fd < 0) {
 		EMSG("shm_open %s fd = %d error=%d, strerror = %s\n",
 			name, fd, err, strerror(err));
@@ -1030,21 +1134,20 @@ out:
 			munmap(ptr1, 1024);
 	}
 
-	ret = shm_unlink(name);
-	if (ret < 0)
-		DMSG("shm_unlink %s %d, errno=%d\n",
-			name, ret, errno);
+	pthread_cleanup_pop(1);
 }
 
-static inline void shmfs_mmap2(const char *rootdir)
+static void shmfs_mmap2(const char *rootdir)
 {
 	int ret = -1, fd = -1, err = -1, offset = 0;
 	char name[128] = {0};
-
-	snprintf(name, 128, "/%04d-%04d-big.txt", gettid(), getpid());
 	char *ptr1 = NULL;
 
+	snprintf(name, 128, "/%04d%04dshm2.txt", gettid(), getpid());
+
 	shm_unlink(name);
+
+	pthread_cleanup_push(shmfs_mmap_cleanup, name);
 
 	if (rand()%2)
 		fd = shm_open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
@@ -1054,7 +1157,7 @@ static inline void shmfs_mmap2(const char *rootdir)
 	DMSG("shm_open %s fd = %d error=%d %s\n",
 		name, fd, err, strerror(err));
 	if (err == ENOMEM || err == ENOSPC || err == EMFILE)
-		return;
+		goto out;
 	if (fd < 0) {
 		EMSG("shm_open %s fd = %d error=%d %s\n",
 			name, fd, err, strerror(err));
@@ -1124,10 +1227,7 @@ out:
 			munmap(ptr1, 1024*1024);
 	}
 
-	ret = shm_unlink(name);
-	if (ret < 0)
-		DMSG("shm_unlink %s %d, errno=%d %s\n",
-			name, ret, errno, strerror(errno));
+	pthread_cleanup_pop(1);
 }
 
 static void mqnotify_sigev(int signo, siginfo_t *info, void *ctx)
@@ -1177,7 +1277,7 @@ static void mqnotify_thd(union sigval sv)
 	mqnotify_sigev(info.si_signo, &info, NULL);
 }
 
-static inline void mq_notify_thread(void)
+static void mq_notify_thread(void)
 {
 	int ret = -1, i = 0, cnt = 0;
 	struct sigevent not;
@@ -1233,7 +1333,7 @@ out:
 	}
 }
 
-static inline void mq_notify_signal(void)
+static void mq_notify_signal(void)
 {
 	int ret = -1, i = 0, cnt = 0;
 	struct sigevent evp;
@@ -1290,7 +1390,7 @@ out:
 	}
 }
 
-static inline void mq_static_test(void)
+static void mq_static_test(void)
 {
 	static char mqbigbuff[16384] = {0};
 
@@ -1405,7 +1505,20 @@ out:
 		 ret, errno, strerror(errno));
 }
 
-static inline void mq_fd_2proc_send(void)
+static void mq_test_kill_peer(int peer)
+{
+	int ret = -1, killretry = 0;
+
+	do {
+		ret = kill(peer, SIGKILL);
+		if (ret) {
+			EMSG("kill %04d ret = %d error=%d\n", peer, ret, errno);
+			sleep(1);
+		}
+	} while (ret != 0 && (++killretry < 10));
+}
+
+static void mq_fd_2proc_send(void)
 {
 	int peer = -1;
 	int ret = -1, fd = -1, mqdes = -1;
@@ -1437,18 +1550,14 @@ static inline void mq_fd_2proc_send(void)
 	IMSG("mq_open %s mqdes = %d error=%d, strerror = %s\n",
 		name, mqdes, errno, strerror(errno));
 	if (mqdes < 0)	{
-		ret = kill(peer, SIGKILL);
-		if (ret)
-			EMSG("kill %04d ret = %d error=%d\n", peer, ret, errno);
+		mq_test_kill_peer(peer);
 		mq_unlink(name);
 		return;
 	}
 
 	fd = open(fdtestfile, O_RDWR | O_CREAT);
 	if (fd < 0)	{
-		ret = kill(peer, SIGKILL);
-		if (ret)
-			EMSG("kill %04d ret = %d error=%d\n", peer, ret, errno);
+		mq_test_kill_peer(peer);
 		mq_close(mqdes);
 		mq_unlink(name);
 		return;
@@ -1462,9 +1571,7 @@ static inline void mq_fd_2proc_send(void)
 		fd, ret, errno, strerror(errno));
 	close(fd);
 	if (ret < 0) {
-		ret = kill(peer, SIGKILL);
-		if (ret)
-			EMSG("kill %04d ret = %d error=%d\n", peer, ret, errno);
+		mq_test_kill_peer(peer);
 		mq_close(mqdes);
 		mq_unlink(name);
 		unlink(fdtestfile);
@@ -1478,9 +1585,7 @@ static inline void mq_fd_2proc_send(void)
 		sigqueue(peer, SIGCONT, (union sigval)(0));
 	IMSG("FDSIGCONT %04d ret %d, errno=%d\n", peer, ret, errno);
 	if (ret != 0) {
-		ret = kill(peer, SIGKILL);
-		if (ret)
-			EMSG("kill %04d ret = %d error=%d\n", peer, ret, errno);
+		mq_test_kill_peer(peer);
 		mq_close(mqdes);
 		mq_unlink(name);
 		unlink(fdtestfile);
@@ -1494,7 +1599,7 @@ static inline void mq_fd_2proc_send(void)
 	}
 }
 
-static inline void mq_fd_2proc_recv(void)
+static void mq_fd_2proc_recv(void)
 {
 	int ret = -1, fd = -1, mqdes = -1, err = -1;
 	char buaff[64] = {0};
@@ -1540,7 +1645,7 @@ retrymqopen:
 	mq_unlink(name);
 }
 
-static inline void mq_2proc_send(void)
+static void mq_2proc_send(void)
 {
 	static char mqbigbuff[16384] = {0};
 
@@ -1572,9 +1677,7 @@ static inline void mq_2proc_send(void)
 	fd = mq_open(name, O_RDWR | O_CREAT, 0666, &attr);
 	DMSG("mq_open %s fd = %d error=%d\n", name, fd, errno);
 	if (fd < 0)	{
-		ret = kill(peer, SIGKILL);
-		if (ret)
-			EMSG("kill %04d ret = %d error=%d\n", peer, ret, errno);
+		mq_test_kill_peer(peer);
 		return;
 	}
 
@@ -1628,7 +1731,7 @@ static inline void mq_2proc_send(void)
 		mq_unlink(name);
 }
 
-static inline void mq_2proc_recv(void)
+static void mq_2proc_recv(void)
 {
 	static char mqbigbuff[16384] = {0};
 
@@ -1694,7 +1797,7 @@ static void timer_thd_sigev(union sigval v)
 		str, v.sival_int, sigev_cnt);
 }
 
-static inline int timer_thd(void)
+static int timer_thd(void)
 {
 	int flags = 0;
 	int ret = -1, cnt = 0, i = 0, err = -1;
@@ -1802,7 +1905,7 @@ static void timer_sigev(int signo, siginfo_t *info, void *ctx)
 	sigev_cnt_sig++;
 }
 
-static inline int timer_sig(void)
+static int timer_sig(void)
 {
 	int flags = 0;
 	int ret = -1, cnt = 0, i = 0, err = -1;
@@ -2176,7 +2279,7 @@ static void *t4_routine(void *arg)
 	return (void *)0;
 }
 
-static inline void signal_handler(int signo, siginfo_t *info, void *ctx)
+static void signal_handler(int signo, siginfo_t *info, void *ctx)
 {
 	int i = 0;
 	unsigned int aaaa[1] = {0};
@@ -2190,7 +2293,7 @@ static inline void signal_handler(int signo, siginfo_t *info, void *ctx)
 	}
 }
 
-static inline void signal_handler_mutex(int signo, siginfo_t *info, void *ctx)
+static void signal_handler_mutex(int signo, siginfo_t *info, void *ctx)
 {
 	int i = 0;
 
@@ -2201,6 +2304,8 @@ static inline void signal_handler_mutex(int signo, siginfo_t *info, void *ctx)
 		global_sigtest_mutex++;
 		pthread_mutex_unlock(&test_mutex);
 	}
+
+	IMSG("idx=%ld done\n", (intptr_t)info->si_value.sival_int);
 }
 
 static void *t5_routine_mutex(void *arg)
@@ -2300,51 +2405,51 @@ static void *sigwaittest_trigger(void *arg)
 			break;
 		if (ret == ESRCH || ret == EPERM)
 			return NULL;
-		usleep(2000);
+		usleep(5000);
 	}  while (1);
 	while (sigwait_step < 2)
-		usleep(2000);
+		usleep(5000);
 
-	usleep(100000);
+	usleep(200000);
 	do { /* sigtimedwait */
 		ret = pthread_sigqueue(sigwait, SIGINT, (union sigval)(-3));
 		if (ret == 0)
 			break;
 		if (ret == ESRCH || ret == EPERM)
 			return NULL;
-		usleep(2000);
+		usleep(5000);
 	}  while (1);
 	while (sigwait_step < 3)
-		usleep(2000);
+		usleep(5000);
 
-	usleep(100000);
+	usleep(200000);
 	do { /* pause */
 		ret = pthread_sigqueue(sigwait, SIGINT, (union sigval)(-4));
 		if (ret == 0)
 			break;
 		if (ret == ESRCH || ret == EPERM)
 			return NULL;
-		usleep(2000);
+		usleep(5000);
 	}  while (1);
 	while (sigwait_step < 4)
-		usleep(2000);
+		usleep(5000);
 
-	usleep(100000);
+	usleep(200000);
 	do { /* sigsuspend */
 		ret = pthread_sigqueue(sigwait, SIGQUIT, (union sigval)(-5));
 		if (ret == 0)
 			break;
 		if (ret == ESRCH || ret == EPERM)
 			return NULL;
-		usleep(2000);
+		usleep(5000);
 	}  while (1);
 	while (sigwait_step < 5)
-		usleep(2000);
+		usleep(5000);
 
 	return NULL;
 }
 
-static inline void sig_checkpending(void)
+static void sig_checkpending(void)
 {
 	int i = 0, ret = -1;
 	sigset_t pset;
@@ -2358,7 +2463,7 @@ static inline void sig_checkpending(void)
 	}
 }
 
-static inline void sigtest(void)
+static void sigtest(void)
 {
 	int ret = -1, i = 0;
 	pthread_t thds[10] = {0};
@@ -2367,8 +2472,8 @@ static inline void sigtest(void)
 
 	if (rand() % 5 == 0) {
 		signal(SIGALRM, (void *)SIG_DFL);
-		alarm(2);
-		sleep(4);
+		alarm(1);
+		sleep(2);
 	}
 
 	sigemptyset(&set);
@@ -2394,7 +2499,7 @@ static inline void sigtest(void)
 	signal(SIGQUIT, (void *)signal_handler);
 
 	if (rand() % 7 == 0) {
-		pthread_create(&sigwait, NULL, sigwaittest_trigger, (void *)0);
+		pthread_create(&sigwait, NULL, sigwaittest_trigger, NULL);
 		/* pthread_join(sigwait, NULL); */
 	}
 
@@ -2430,7 +2535,7 @@ static inline void sigtest(void)
 	IMSG("global_sigtest_mutex=%ld\n", global_sigtest_mutex);
 }
 
-static inline void poll_test(void)
+static void poll_test(void)
 {
 	int ret = -1, i = 0;
 	int nr = rand() % 10240 + 1;
@@ -2483,7 +2588,7 @@ static void *epdel_routine(void *arg)
 	return NULL;
 }
 
-static inline void epoll_test(void)
+static void epoll_test(void)
 {
 	int ret = -1, i = 0, n = -1, nrevts = 0, _fd = -1;
 	int nr = rand() % ARRAY_SIZE(epollfds) + 1;
@@ -2556,7 +2661,6 @@ static inline void epoll_test(void)
 			}
 		}
 
-		usleep(1000);
 		nrevts = epoll_wait(epfd, evts, nr, randx % 4000);
 		IMSG("epoll_wait nrevts = %d errno %d\n", nrevts, errno);
 
@@ -2600,8 +2704,9 @@ static void mbedtest(void)
 
 	if (access("/test", R_OK)) {
 		IMSG("creating test folders\n");
+		mkdir("/", 0666); /* create the "/mbedtest" */
 		mkdir("/test", 0666); /* create the "/mbedtest/test" */
-		mkdir("/user", 0666); /* create the "/user/mbedtest" */
+		mkdir("/user", 0666); /* create the "/user/mbedtest" if user-space enabled*/
 		mkdir("/shm/test", 0666); /* create the "/shm/test" */
 	}
 
