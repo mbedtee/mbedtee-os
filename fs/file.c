@@ -517,7 +517,7 @@ int sys_dup2(int oldfd, int newfd)
 	struct file *f = NULL;
 	unsigned long flags = 0;
 
-	if (newfd >= PROCESS_FD_MAX)
+	if ((size_t)newfd >= PROCESS_FD_MAX)
 		return -EBADF;
 
 	oldd = fdesc_get(oldfd);
@@ -533,8 +533,8 @@ int sys_dup2(int oldfd, int newfd)
 
 	d = fdesc_find(fdt, newfd);
 	if (d != NULL) {
-		d->fd = -d->fd;
 		rb_del(&d->node, &fdt->fds);
+		d->fd = -d->fd;
 		f = d->file;
 		if (--d->refc != 0) /* silently close the conflict filedesc */
 			d = NULL;
@@ -645,6 +645,8 @@ int sys_open(const char *path, int fflags, ...)
 	ret = d->file->fops->open(d->file, va_arg(ap, mode_t), va_arg(ap, void *));
 	va_end(ap);
 	if (ret != 0) {
+		if (ret > 0)
+			ret = -ret;
 		LMSG("failed open %s %d\n", path, ret);
 		goto out;
 	}
