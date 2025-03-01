@@ -45,8 +45,8 @@ int tlb_refill(struct pt_struct *pt,
  */
 void tlb_invalidate_all(void)
 {
-	int old = 0;
-	int i = 0, max = 0;
+	unsigned long old = 0;
+	unsigned long i = 0, max = 0;
 	unsigned long flags = 0;
 
 	local_irq_save(flags);
@@ -56,9 +56,9 @@ void tlb_invalidate_all(void)
 
 	tlb_set_entrylo0(0);
 	tlb_set_entrylo1(0);
-	tlb_set_entryhi(0);
 
 	for (i = 0; i < max; i++) {
+		tlb_set_entryhi((KSEG0 + (i << (PAGE_SHIFT + 1))) | (1UL << 10));
 		tlb_set_index(i);
 		tlb_write_indexed();
 	}
