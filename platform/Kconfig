@@ -139,6 +139,18 @@ config SALIX_MIPS74K
 	help
 		select the salix MIPS74K(mips32r2) platform
 
+config QEMU_AST2600
+	bool "QEMU AST2600"
+	depends on AARCH32
+	help
+		select the QEMU -M ast2600-evb platform
+
+config QEMU_AST2700
+	bool "QEMU AST2700"
+	depends on AARCH64
+	help
+		select the QEMU -M ast2700-evb platform
+
 endchoice
 
 endmenu

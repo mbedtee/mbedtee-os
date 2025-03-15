@@ -119,7 +119,7 @@ static void __init ramfs_ta_init(void)
 	ramfs_ta.mnt.size = ramfs_ta_size();
 
 	INIT_DELAYED_WORK(&dw, ramfs_ta_transfer);
-	schedule_delayed_work(&dw, 500000);
+	schedule_delayed_work(&dw, 3000000);
 }
 
 MODULE_INIT_LATE(ramfs_ta_init);

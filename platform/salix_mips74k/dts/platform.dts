@@ -62,7 +62,7 @@
 		#size-cells = <1>;
 
 		serial16550@18018300 {
-			compatible = "ns16550";
+			compatible = "ns16550a";
 			reg = <0x18018300 0x0C>;
 			interrupts = <16>;
 			interrupt-parent = <&intcsoc>;

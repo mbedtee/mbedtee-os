@@ -1,0 +1,35 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ */
+
+/{
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	memory@400000000 {
+		compatible = "memory";
+		device_type = "memory";
+		/*
+		 * SoC installed memory mapping, this is a guideline for OS
+		 * to setup the early mmu-memory-section-mapping
+		 *
+		 * Mandatory node for ARM, MIPS SoC does not require it,
+		 * since MIPS already has the fix-mapping-table in MMU.
+		 *
+		 * e.g. QEMU AST2700 phys memory start from 0x400000000
+		 */
+		mapping = <4 0x00000000 0 0x80000000>;
+
+		/* dedicated memory region for current OS */
+		reg = <4 0x00000000 0 0x10000000>;
+
+		/* TAs loaded from REE will be placed in this area */
+		ta-ramfs = <4 0x15A00000 0 0x200000>;
+
+		ree-dtb = <4 0x15F00000 0 0x10000>;
+		rpc-t2r-ring = <4 0x15F10000 0 0x20000>;
+		rpc-t2r-shm = <4 0x15F30000 0 0x40000>;
+		ree-addr = <4 0x20000000 0 0x1800000>;
+	};
+};

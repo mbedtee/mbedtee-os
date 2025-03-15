@@ -99,10 +99,12 @@ struct irq_controller {
 
 	struct device_node *dn;
 
-	unsigned int flags;
+	void *data;
 
-	unsigned int start;
-	unsigned int nr_irqs;
+	unsigned char flags;
+
+	unsigned short start;
+	unsigned short nr_irqs;
 
 	struct irq_desc *irqs[];
 };

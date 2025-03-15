@@ -48,6 +48,7 @@ int device_unregister(struct device *dev)
 
 void modules_init(void)
 {
+	int cnt = 0;
 	init_func_t func = NULL;
 	unsigned long ptr = 0;
 	unsigned long module_s = 0, module_e = 0;
@@ -58,13 +59,18 @@ void modules_init(void)
 	for (ptr = module_s; ptr < module_e;
 			ptr += sizeof(unsigned long)) {
 		func = *(init_func_t *)ptr;
-		if (func)
+		if (func) {
 			func();
+			cnt++;
+		}
 	}
+
+	IMSG("initialized %d modules!\n", cnt);
 }
 
 void early_init(void)
 {
+	int cnt = 0;
 	init_func_t func = NULL;
 	unsigned long module_s = 0, module_e = 0;
 	unsigned long func_ptr = 0, func_val = 0;
@@ -78,14 +84,16 @@ void early_init(void)
 		if (func_val != 0) {
 			func = (init_func_t)func_val;
 			func();
+			cnt++;
 		}
 	}
 
-	IMSG("done!\n");
+	IMSG("initialized %d modules!\n", cnt);
 }
 
 void percpu_init(void)
 {
+	int cnt = 0;
 	init_func_t func = NULL;
 	unsigned long module_s = 0, module_e = 0;
 	unsigned long func_ptr = 0, func_val = 0;
@@ -99,6 +107,9 @@ void percpu_init(void)
 		if (func_val != 0) {
 			func = (init_func_t)func_val;
 			func();
+			cnt++;
 		}
 	}
+
+	IMSG("initialized %d modules!\n", cnt);
 }

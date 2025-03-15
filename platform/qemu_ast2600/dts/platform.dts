@@ -6,18 +6,16 @@
 /dts-v1/;
 
 #include "memory.dtsi"
+#include <generated/autoconf.h>
 
 #define GIC_SPI(x) ((x) + 32)
 #define GIC_PPI(x) ((x))
 
 / {
-	#address-cells = <2>;
-	#size-cells = <2>;
-
 	cpu {
 		compatible = "arm,cpu";
 		/* mpid of each CPU */
-		cpus = <0x0 0x1 0x2 0x3>;
+		cpus = <0xf00 0xf01>;
 	};
 
 	platform {
@@ -50,31 +48,36 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 
-		pl011@9040000 {
-			compatible = "arm,pl011";
-			reg = <0x09040000 0x1000>;
+		serial16550@1e784000 {
+			compatible = "ns16550a";
+			reg = <0x1e784000 0x100>;
+#if !defined(CONFIG_REE)
 			interrupts = <GIC_SPI(8)>;
+#endif
 			interrupt-parent = <&gic>;
-			clock-frequency = <24000000>;
+			clock-frequency = <1846153>;
 			current-speed = <115200>;
-			clock-divisor = <16>;
+			clock-divisor = <64>;
+			reg-shift = <2>;
+			reg-io-width = <4>;
 		};
 	};
 
 	/* interrupt-controller: CPU side */
-	gic: interrupt-controller@8000000 {
-		compatible = "arm,gic-v3";
+	gic: interrupt-controller@40461000 {
+		compatible = "arm,gic-v2";
 
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
+		#address-cells = <1>;
 
-		reg = <0 0x08000000 0 0x10000>, /* GICD */
-			<0 0x080a0000 0 0x100000>; /* GICR RD_Base / SGI_Base */
+		reg = <0x40461000 0x1000>, /* GICD */
+			<0x40462000 0x1000>; /* GICC */
 	};
 
 	timer {
-		compatible = "arm,armv8-timer";
+		compatible = "arm,armv7-generic-timer";
 		interrupts = <GIC_PPI(29)>; /* PPI 29 for SecureWorld tick_timer, 30 for REE */
 		interrupt-parent = <&gic>;
 		clock-frequency = <125000000>;

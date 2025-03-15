@@ -252,7 +252,7 @@ static int __init uart_parse_dts(struct uart_port *p,
 
 	ret = of_property_read_u32(dn, "interrupts", &p->hwirq);
 	if (ret)
-		return ret;
+		p->hwirq = -1;
 
 	ret = of_property_read_u32(dn, "clock-frequency", &p->clk);
 	if (ret)

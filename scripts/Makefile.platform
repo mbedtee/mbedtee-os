@@ -42,4 +42,8 @@ else ifeq ($(CONFIG_SALIX_MIPS74K),y)
 PLATFORM = salix_mips74k
 else ifeq ($(CONFIG_SALIX_CA7),y)
 PLATFORM = salix_ca7
+else ifeq ($(CONFIG_QEMU_AST2600),y)
+PLATFORM = qemu_ast2600
+else ifeq ($(CONFIG_QEMU_AST2700),y)
+PLATFORM = qemu_ast2700
 endif
