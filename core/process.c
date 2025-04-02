@@ -296,6 +296,9 @@ static void process_init_pself(struct process *proc)
 
 static void process_destroy(struct process *proc)
 {
+	/* set alive to negative */
+	atomic_set(&proc->alive, -(INT_MAX >> 1));
+
 	process_free_argv(proc);
 	process_free_pself(proc);
 
