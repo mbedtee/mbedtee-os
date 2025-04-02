@@ -23,7 +23,6 @@ struct epoll_fnode {
 	struct list_head rdlist;
 	struct waitqueue wq;
 	struct rb_node *fds;
-	struct work destroy;
 	int refc;
 	struct spinlock lock;
 };
@@ -36,6 +35,7 @@ struct epoll_item {
 	/*
 	 * wait queue nodes' list on this item
 	 * queued by - epoll_waitq_enqueue()
+ 	 * protected by epoll_item->lock
 	 */
 	struct list_head wqnlist;
 	/* @ which epoll file */
@@ -44,6 +44,8 @@ struct epoll_item {
 	struct file_desc *fdesc;
 	/* cleanup callback called @ fdesc close */
 	struct fdesc_atclose fdatc;
+
+	struct spinlock lock;
 };
 
 struct epoll_queue {
@@ -137,10 +139,10 @@ static void epoll_waitq_enqueue(struct file *filp,
 	struct thread *__curr = NULL;
 	struct epoll_queue *epq = container_of(p, struct epoll_queue, pt);
 	struct epoll_item *ei = epq->ei;
-	struct epoll_queue_node *en = NULL;
+	struct epoll_queue_node *eqn = NULL;
 
-	en = kmalloc(sizeof(*en));
-	if (en == NULL) {
+	eqn = kmalloc(sizeof(*eqn));
+	if (eqn == NULL) {
 		epq->errcode = -ENOMEM;
 		return;
 	}
@@ -151,28 +153,35 @@ static void epoll_waitq_enqueue(struct file *filp,
 
 	__curr = current;
 
-	__prepare_node(wq, &en->wqn, epoll_wake, ei);
+	__prepare_node(wq, &eqn->wqn, epoll_wake, ei);
 
 	/*
 	 * just like __prepare_wait() -
 	 * __prepare_wait(wq, &en->wqn, false, false);
 	 */
-	list_add_tail(&en->wqn.node, &wq->list);
-
-	list_add_tail(&en->node, &ei->wqnlist);
+	list_add_tail(&eqn->wqn.node, &wq->list);
 
 	spin_unlock_irqrestore(&wq->lock, flags);
+
+	spin_lock_irqsave(&ei->lock, flags);
+	list_add_tail(&eqn->node, &ei->wqnlist);
+	spin_unlock_irqrestore(&ei->lock, flags);
 }
 
 static void epoll_waitq_dequeue(struct epoll_item *ei)
 {
+	unsigned long flags = 0;
 	struct epoll_queue_node *n = NULL, *_n = NULL;
+
+	spin_lock_irqsave(&ei->lock, flags);
 
 	list_for_each_entry_safe(n, _n, &ei->wqnlist, node) {
 		list_del(&n->node);
 		waitqueue_node_del(&n->wqn);
 		kfree(n);
 	}
+
+	spin_unlock_irqrestore(&ei->lock, flags);
 }
 
 static void epoll_rditem_dequeue(struct epoll_fnode *epfn,
@@ -180,11 +189,9 @@ static void epoll_rditem_dequeue(struct epoll_fnode *epfn,
 {
 	unsigned long flags = 0;
 
-	if (!list_empty(&ei->rdnode)) {
-		spin_lock_irqsave(&epfn->lock, flags);
-		list_del(&ei->rdnode);
-		spin_unlock_irqrestore(&epfn->lock, flags);
-	}
+	spin_lock_irqsave(&epfn->lock, flags);
+	list_del(&ei->rdnode);
+	spin_unlock_irqrestore(&epfn->lock, flags);
 }
 
 static void epoll_rditem_enqueue(struct epoll_fnode *epfn,
@@ -203,8 +210,6 @@ static void epoll_rditem_enqueue(struct epoll_fnode *epfn,
 static void __epoll_del(struct epoll_fnode *epfn,
 	struct epoll_item *ei)
 {
-	ei->event.events = 0;
-
 	epoll_waitq_dequeue(ei);
 
 	epoll_rditem_dequeue(epfn, ei);
@@ -213,6 +218,7 @@ static void __epoll_del(struct epoll_fnode *epfn,
 
 	--epfn->refc;
 
+	assert(epfn->refc >= 0);
 	kfree(ei);
 }
 
@@ -221,6 +227,8 @@ static int epoll_del(struct epoll_fnode *epfn,
 {
 	if (fdesc_unregister_atclose(ei->fdesc, &ei->fdatc))
 		__epoll_del(epfn, ei);
+	else
+		rb_del(&ei->node, &epfn->fds);
 
 	return 0;
 }
@@ -239,8 +247,11 @@ static void epoll_fdatc(struct fdesc_atclose *p)
 
 	tfs_unlock_node(&epfn->node);
 
-	if (to_free)
+	if (to_free) {
+		wakeup(&epfn->wq);
+		waitqueue_flush(&epfn->wq);
 		kfree(epfn);
+	}
 }
 
 static int epoll_add(struct epoll_fnode *epfn,
@@ -263,7 +274,9 @@ static int epoll_add(struct epoll_fnode *epfn,
 	INIT_LIST_HEAD(&ei->rdnode);
 	INIT_LIST_HEAD(&ei->wqnlist);
 	rb_node_init(&ei->node);
+	spin_lock_init(&ei->lock);
 
+	INIT_LIST_HEAD(&ei->fdatc.node);
 	ei->fdatc.atclose = epoll_fdatc;
 
 	epoll_rbadd(epfn, ei);
@@ -389,9 +402,6 @@ static int epoll_xfer_events(struct epoll_fnode *epfn,
 	unsigned long flags = 0;
 	struct epoll_item *ei = NULL, *_ei = NULL;
 
-	if (list_empty(&epfn->rdlist))
-		return 0;
-
 	spin_lock_irqsave(&epfn->lock, flags);
 
 	list_for_each_entry_safe(ei, _ei, &epfn->rdlist, rdnode) {
@@ -456,12 +466,12 @@ int epoll_wait(int epfd, struct epoll_event *events,
 
 		if (timeusecs == 0) {
 			ret = 0;
-			goto outf;
+			break;
 		}
 
 		if (is_sigpending(current)) {
 			ret = -EINTR;
-			goto outf;
+			break;
 		}
 
 		timeusecs = wait_event_timeout_interruptible(&epfn->wq,
@@ -492,33 +502,28 @@ static struct tfs_node *epoll_alloc_node(struct tfs *fs)
 	return &epfn->node;
 }
 
-static void epoll_destroy(struct work *w)
+static void epoll_free_node(struct tfs_node *n)
 {
-	struct epoll_fnode *epfn = NULL;
-	struct epoll_item *ei = NULL, *next = NULL;
+	struct epoll_item *ei = NULL;
+	struct epoll_fnode *epfn = epoll_fnode_of(n);
 	bool to_free = false;
-
-	epfn = container_of(w, struct epoll_fnode, destroy);
 
 	tfs_lock_node(&epfn->node);
 
-	rb_for_each_entry_safe(ei, next, epfn->fds, node)
+	while ((ei = rb_first_entry_postorder(epfn->fds,
+				struct epoll_item, node)) != NULL)
 		epoll_del(epfn, ei);
 
 	to_free = (--epfn->refc == 0);
 
 	tfs_unlock_node(&epfn->node);
 
-	if (to_free)
+	wakeup(&epfn->wq);
+
+	if (to_free) {
+		waitqueue_flush(&epfn->wq);
 		kfree(epfn);
-}
-
-static void epoll_free_node(struct tfs_node *n)
-{
-	struct epoll_fnode *epfn = epoll_fnode_of(n);
-
-	INIT_WORK(&epfn->destroy, epoll_destroy);
-	schedule_work(&epfn->destroy);
+	}
 }
 
 static int epoll_do_open(struct tfs *fs,

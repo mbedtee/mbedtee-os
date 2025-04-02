@@ -391,13 +391,12 @@ static void dup_ok(int i)
 
 	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	err = errno;
-	if (err)
-		DMSG("create fd %d %s errno %d @ %s\n",
-			fd, name, err, strerror(err));
 	if (err == ENOMEM || err == ENOSPC || err == EMFILE)
 		goto out;
-	if (fd <= STDERR_FILENO)
+	if (fd <= STDERR_FILENO) {
+		EMSG("fd %d %s errno %d\n", fd, name, err);
 		TRIGGER_EXCEPTION(err);
+	}
 
 	ret = write(fd, "111", 3);
 	err = errno;
@@ -975,6 +974,9 @@ retry_open_name2_rdonly:
 		else
 			usleep(5000);
 	}
+
+	if (pos != FS_BIGBUFF_SIZE)
+		TRIGGER_EXCEPTION(pos);
 	for (i = 0; i < pos; i++)
 		if (bigbuff[i] != 0x5a)
 			TRIGGER_EXCEPTION(bigbuff[i]);
@@ -1815,7 +1817,7 @@ static int timer_thd(void)
 		ret = timer_create(CLOCK_REALTIME, &evp, &timerid);
 		err = errno;
 		IMSG("timer_create %d, timerid %lx, errno=%d\n",
-				ret, timerid, errno);
+				ret, timerid, err);
 		if (err == ENOMEM)
 			continue;
 
@@ -2588,7 +2590,101 @@ static void *epdel_routine(void *arg)
 	return NULL;
 }
 
-static void epoll_test(void)
+static void epoll_test1(void)
+{
+	int ret = -1, i = 0, n = -1, nrevts = 0, _fd = -1;
+	int nr = rand() % ARRAY_SIZE(epollfds) + 1;
+	char str[256] = {0};
+	struct epoll_event *evts = NULL, evt = {0};
+	int randx = rand();
+
+	_fd = open("/dev/uart1", O_RDWR | O_NONBLOCK);
+	if (_fd < 0 && rand() % 2)
+		_fd = open("/dev/null", O_RDWR | O_NONBLOCK);
+	else
+		_fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
+
+	if (_fd < 0)
+		return;
+
+	memset(epollfds, -1, sizeof(epollfds));
+
+	epfd = epoll_create(0);
+	if (epfd < 0)
+		goto out;
+
+	evt.events = EPOLLIN;
+	evt.data.u64 = 0x6a5612341177ffaa;
+
+	evts = malloc(nr * sizeof(struct epoll_event));
+	if (evts) {
+		ret = epoll_wait(epfd, evts, nr, 0);
+		IMSG("epoll_wait maxnr=%d ret = %d errno %d\n", nr, ret, errno);
+
+		ret = epoll_ctl(epfd, EPOLL_CTL_DEL, epfd, NULL);
+		IMSG("EPOLL_CTL_DEL ret = %d errno %d\n", ret, errno);
+
+		ret = epoll_ctl(epfd, EPOLL_CTL_ADD, _fd, &evt);
+		IMSG("EPOLL_CTL_ADD 1ret = %d errno %d\n", ret, errno);
+		ret = epoll_ctl(epfd, EPOLL_CTL_ADD, _fd, NULL);
+		IMSG("EPOLL_CTL_ADD 2ret = %d errno %d\n", ret, errno);
+		ret = epoll_ctl(epfd, EPOLL_CTL_ADD, _fd, &evt);
+		IMSG("EPOLL_CTL_ADD 3ret = %d errno %d\n", ret, errno);
+
+		ret = epoll_wait(epfd, evts, nr, rand() % 5000);
+		IMSG("epoll_wait nrevts = %d errno %d\n", ret, errno);
+		IMSG("epoll_wait 0xa55a12341177ff33 REVENTS %d DATA:0x%llx\n",
+			evts[0].events, (long long)evts[0].data.u64);
+
+		for (i = 0; i < nr; i++) {
+			epollfds[i] = open("/dev/uart1", O_RDWR | O_NONBLOCK);
+			if (epollfds[i] < 0 && rand() % 2)
+				epollfds[i] = open("/dev/null", O_RDWR | O_NONBLOCK);
+			else
+				epollfds[i] = open("/dev/uart0", O_RDWR | O_NONBLOCK);
+
+			if (epollfds[i] < 0)
+				break;
+
+			randx = rand();
+
+			evt.events = EPOLLIN | ((randx % 2) ? EPOLLET : 0) |
+						(((rand() % 5) == 0) ? EPOLLONESHOT : 0);
+
+			evt.data.fd = epollfds[i];
+			ret = epoll_ctl(epfd, EPOLL_CTL_ADD, epollfds[i], &evt);
+			if (ret != 0)
+				break;
+		}
+
+		nrevts = epoll_wait(epfd, evts, nr, randx % 4000);
+		IMSG("epoll_wait nrevts = %d[%d] errno %d\n", nrevts, nr, errno);
+
+		for (n = 0; n < nrevts; n++) {
+			ret = read(evts[n].data.fd, str, sizeof(str) - 1);
+			if (strlen(str))
+				IMSG("fd %d revent %d readret = %d errno %d str %s\n",
+					(int)evts[n].data.fd, (int)evts[n].events, ret, errno, str);
+			epoll_ctl(epfd, EPOLL_CTL_DEL, evts[n].data.fd, NULL);
+		}
+
+		for (i = 0; i < nr; i++) {
+			if (epollfds[i] <= 0)
+				continue;
+			if (i >= nrevts)
+				epoll_ctl(epfd, EPOLL_CTL_DEL, epollfds[i], NULL);
+			close(epollfds[i]);
+		}
+	}
+
+out:
+	free(evts);
+	ret = close(_fd);
+	ret = close(epfd);
+	epfd = -1;
+}
+
+static void epoll_test2(void)
 {
 	int ret = -1, i = 0, n = -1, nrevts = 0, _fd = -1;
 	int nr = rand() % ARRAY_SIZE(epollfds) + 1;
@@ -2597,15 +2693,16 @@ static void epoll_test(void)
 	int randx = rand(), del_routine = 0;
 	pthread_t epdel;
 
-	if (rand() % 2)
+	_fd = open("/dev/uart1", O_RDWR | O_NONBLOCK);
+	if (_fd < 0 && rand() % 2)
 		_fd = open("/dev/null", O_RDWR | O_NONBLOCK);
-	else if (rand() % 2)
-		_fd = open("/dev/uart1", O_RDWR | O_NONBLOCK);
 	else
 		_fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
 
 	if (_fd < 0)
 		return;
+
+	memset(epollfds, -1, sizeof(epollfds));
 
 	epfd = epoll_create(0);
 	if (epfd < 0)
@@ -2635,10 +2732,9 @@ static void epoll_test(void)
 			evts[0].events, (long long)evts[0].data.u64);
 
 		for (i = 0; i < nr; i++) {
-			if (rand() % 2)
+			epollfds[i] = open("/dev/uart1", O_RDWR | O_NONBLOCK);
+			if (epollfds[i] < 0 && rand() % 2)
 				epollfds[i] = open("/dev/null", O_RDWR | O_NONBLOCK);
-			else if (rand() % 2)
-				epollfds[i] = open("/dev/uart1", O_RDWR | O_NONBLOCK);
 			else
 				epollfds[i] = open("/dev/uart0", O_RDWR | O_NONBLOCK);
 
@@ -2662,7 +2758,7 @@ static void epoll_test(void)
 		}
 
 		nrevts = epoll_wait(epfd, evts, nr, randx % 4000);
-		IMSG("epoll_wait nrevts = %d errno %d\n", nrevts, errno);
+		IMSG("epoll_wait nrevts = %d[%d] errno %d\n", nrevts, nr, errno);
 
 		for (n = 0; n < nrevts; n++) {
 			ret = read(evts[n].data.fd, str, sizeof(str) - 1);
@@ -2682,7 +2778,8 @@ static void epoll_test(void)
 
 out:
 	free(evts);
-	ret = close(_fd);
+	if (rand() % 2 == 0)
+		ret = close(_fd);
 	if (randx % 2)
 		ret = close(epfd);
 }
@@ -2737,7 +2834,8 @@ static void mbedtest(void)
 	timer_sig();
 	timer_thd();
 	poll_test();
-	epoll_test();
+	epoll_test1();
+	epoll_test2();
 
 	mq_fd_2proc_send();
 	mq_2proc_send();
