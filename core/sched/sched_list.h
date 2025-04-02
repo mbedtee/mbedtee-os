@@ -411,12 +411,16 @@ static inline struct sched_priv *sched_pick_affinity_idle_cpu(
 {
 	struct sched_priv *sp = NULL, *ret = NULL;
 
+	spin_lock(&gd->idle_lock);
+
 	list_for_each_entry(sp, &gd->idle_cpus, idle_node) {
 		if (cpu_affinity_isset(s->affinity, sp->pc->id)) {
 			ret = sp;
 			break;
 		}
 	}
+
+	spin_unlock(&gd->idle_lock);
 
 	return ret;
 }
