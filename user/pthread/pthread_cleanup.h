@@ -19,6 +19,8 @@ static inline void __pthread_cleanup_exec(struct __pthread *t)
 		cleaner->routine(cleaner->arg);
 		cleaner = cleaner->next;
 	}
+
+	aux->cleanups = NULL;
 }
 
 #endif
