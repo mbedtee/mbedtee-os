@@ -233,10 +233,13 @@ static void __sigdefault(int signo,	siginfo_t *info, void *ctx)
 extern void signal_entry(void (*sighandler)(int signo,
 	siginfo_t *info, void *ctx), struct sigarguments *sa)
 {
+	int ori_errno = errno;
+
 	if ((_sig_func_ptr)sighandler == SIG_DFL)
 		sighandler = __sigdefault;
 
 	sighandler(sa->signo, &sa->info, sa->ctx);
 
+	errno = ori_errno;
 	__sigreturn();
 }
