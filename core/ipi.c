@@ -135,11 +135,8 @@ int ipi_call(unsigned int id, unsigned int cpu,
 	ring = ipi_ringof(cpu);
 
 	while (++retrycnt < 20 && !ipi_ring_enough(ring,
-			sizeof(struct ipi_hdr) + size)) {
-		if (retrycnt == 1)
-			raise_softint(SOFTINT_IPI, cpu);
+			sizeof(struct ipi_hdr) + size))
 		udelay(5);
-	}
 
 	spin_lock_irqsave(&ring->sl, flags);
 
@@ -184,11 +181,8 @@ int ipi_call_sync(unsigned int id, unsigned int cpu,
 	ring = ipi_ringof(cpu);
 
 	while (++retrycnt < 20 && !ipi_ring_enough(ring,
-			sizeof(struct ipi_hdr))) {
-		if (retrycnt == 1)
-			raise_softint(SOFTINT_IPI, cpu);
+			sizeof(struct ipi_hdr)))
 		usleep(100);
-	}
 
 	spin_lock_irqsave(&ring->sl, flags);
 	if (!ipi_ring_enough(ring, sizeof(struct ipi_hdr))) {
