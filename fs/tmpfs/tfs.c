@@ -40,18 +40,19 @@ static int tfs_init_node(
 	struct process *proc = current->proc;
 	int namel = strlen(name) + 1;
 
-	n->name = kmalloc(namel);
-	if (n->name == NULL)
-		return -ENOMEM;
-
 	n->refc = 1;
 	n->parent = dir;
 	n->owner = proc->c;
 
-	strlcpy(n->name, name, namel);
-
 	INIT_LIST_HEAD(&n->nodes);
 	mutex_init(&n->lock);
+
+	n->name = kmalloc(namel);
+	if (n->name == NULL)
+		return -ENOMEM;
+
+	strlcpy(n->name, name, namel);
+
 	dir->refc++;
 	dir->sub_nodes++;
 	tfs_update_time(&n->atime, &n->mtime, &n->ctime);
@@ -96,17 +97,14 @@ int tfs_put_node(struct tfs *fs,
 
 		kfree(n->name);
 
-		if (n->attr & TFS_ATTR_DIR)
-			kfree(n);
-		else
-			fs->free(n);
+		fs->free(n);
 
 		while (dir && (dir != fs->root)) {
 			n = dir->parent;
 			if (--dir->refc == 0) {
 				list_del(&dir->node);
 				kfree(dir->name);
-				kfree(dir);
+				fs->free(dir);
 				dir = n;
 				if (dir)
 					dir->sub_nodes--;
@@ -201,10 +199,7 @@ int tfs_make_node(struct tfs *fs,
 					goto out;
 				}
 
-				if (isdir)
-					n = kzalloc(sizeof(*n));
-				else
-					n = fs->alloc(fs);
+				n = fs->alloc(fs);
 				if (n == NULL) {
 					ret = -ENOMEM;
 					goto out;
@@ -212,10 +207,7 @@ int tfs_make_node(struct tfs *fs,
 
 				ret = tfs_init_node(dir, n, name);
 				if (ret) {
-					if (isdir)
-						kfree(n);
-					else
-						fs->free(n);
+					fs->free(n);
 					goto out;
 				}
 
