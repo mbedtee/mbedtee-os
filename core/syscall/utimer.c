@@ -133,10 +133,8 @@ static void timer_worker(struct work *w)
 
 	/* process exiting ? */
 	proc = process_get(t->pid);
-	if (proc == NULL) {
-		t->refc--;
+	if (proc == NULL)
 		goto out;
-	}
 
 	if (t->evp.sigev_notify == SIGEV_THREAD) {
 		struct thread *lastthd = thread_get(t->evplasttid);
