@@ -262,7 +262,6 @@ static inline void update_tlb_pte(pte_t *pte,
 	else
 		tlb_write_indexed();
 	tlb_set_entryhi(asid);
-
 }
 #endif
 
