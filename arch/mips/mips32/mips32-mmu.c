@@ -332,8 +332,10 @@ static void alloc_asid(struct pt_struct *pt)
 
 static void free_asid(struct pt_struct *pt)
 {
-	if (ASID_VALID(pt->asid))
+	if (ASID_VALID(pt->asid)) {
+		tlb_invalidate_all();
 		ida_free(&asida, pt->asid);
+	}
 }
 
 /*
@@ -359,7 +361,7 @@ int alloc_pt(struct process *proc)
 	struct pt_struct *pt = NULL;
 	ptd_t *ptds = NULL;
 
-	pt = kmalloc(sizeof(struct pt_struct));
+	pt = kzalloc(sizeof(struct pt_struct));
 	if (!pt)
 		return -ENOMEM;
 
@@ -386,8 +388,8 @@ err:
 void free_pt(struct pt_struct *pt)
 {
 	if (pt && pt != kpt()) {
-		unmap_cleanup(pt);
 		free_asid(pt);
+		unmap_cleanup(pt);
 		pages_free_continuous(pt->ptds);
 		kfree(pt);
 	}
