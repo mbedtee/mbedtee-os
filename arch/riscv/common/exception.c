@@ -87,7 +87,7 @@ static __nosprot void __oops(struct thread *t, struct thread_ctx *regs)
 	unsigned long addr = __bad_addr();
 	unsigned long cause = regs->cause;
 
-	EMSG("%s asid %d usp(0x%x@%p) ksp(0x%x@%p) sp(0x%lx) sig %d\n",
+	EMSG("oops@%s asid %d usp(0x%x@%p) ksp(0x%x@%p) sp(0x%lx) sig %d\n",
 		t->name, proc->pt->asid,
 		t->ustack_size, t->ustack_uva,
 		t->kstack_size, t, regs->sp, sighandling(t));
