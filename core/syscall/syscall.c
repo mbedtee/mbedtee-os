@@ -325,16 +325,18 @@ static long syscall_timer_create(struct thread_ctx *regs)
 	pthread_attr_t attr;
 	struct sigevent evp;
 
-	ret = copy_from_user(&evp, uevp, sizeof(evp));
-	if (ret != 0)
-		return -EFAULT;
-
-	if ((evp.sigev_notify == SIGEV_THREAD) &&
-			evp.sigev_notify_attributes) {
-		ret = copy_from_user(&attr, evp.sigev_notify_attributes, sizeof(attr));
+	if (uevp) {
+		ret = copy_from_user(&evp, uevp, sizeof(evp));
 		if (ret != 0)
 			return -EFAULT;
-		evp.sigev_notify_attributes = &attr;
+
+		if ((evp.sigev_notify == SIGEV_THREAD) &&
+				evp.sigev_notify_attributes) {
+			ret = copy_from_user(&attr, evp.sigev_notify_attributes, sizeof(attr));
+			if (ret != 0)
+				return -EFAULT;
+			evp.sigev_notify_attributes = &attr;
+		}
 	}
 
 	ret = timer_create(clockid, uevp ? &evp : NULL, &timerid);
@@ -686,16 +688,18 @@ static long syscall_mq_notify(struct thread_ctx *regs)
 	struct sigevent evp;
 	pthread_attr_t attr;
 
-	ret = copy_from_user(&evp, uevp, sizeof(evp));
-	if (ret != 0)
-		return -EFAULT;
-
-	if ((evp.sigev_notify == SIGEV_THREAD) &&
-			evp.sigev_notify_attributes) {
-		ret = copy_from_user(&attr, evp.sigev_notify_attributes, sizeof(attr));
+	if (uevp) {
+		ret = copy_from_user(&evp, uevp, sizeof(evp));
 		if (ret != 0)
 			return -EFAULT;
-		evp.sigev_notify_attributes = &attr;
+
+		if ((evp.sigev_notify == SIGEV_THREAD) &&
+				evp.sigev_notify_attributes) {
+			ret = copy_from_user(&attr, evp.sigev_notify_attributes, sizeof(attr));
+			if (ret != 0)
+				return -EFAULT;
+			evp.sigev_notify_attributes = &attr;
+		}
 	}
 
 	return mq_notify(mqdes, uevp ? &evp : NULL);
