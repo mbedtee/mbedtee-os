@@ -296,17 +296,16 @@ static void fdesc_call_atcloses(struct file_desc *d)
 	unsigned long flags = 0;
 	struct fdesc_atclose *fdatc = NULL;
 
-	if (d == NULL || list_empty(&d->atcloses))
+	if (d == NULL)
 		return;
 
-again:
 	spin_lock_irqsave(&d->lock, flags);
 	while ((fdatc = list_first_entry_or_null(&d->atcloses,
 				struct fdesc_atclose, node)) != NULL) {
 		list_del(&fdatc->node);
 		spin_unlock_irqrestore(&d->lock, flags);
 		fdatc->atclose(fdatc);
-		goto again;
+		spin_lock_irqsave(&d->lock, flags);
 	}
 	spin_unlock_irqrestore(&d->lock, flags);
 }
