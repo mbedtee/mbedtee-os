@@ -1000,9 +1000,28 @@ static struct file_system reefs_fs = {
 	.putpath = fs_putpath,
 };
 
+static void __reefs_init(struct work *w)
+{
+	struct delayed_work *dw = NULL;
+
+	dw = container_of(w, struct delayed_work, w);
+
+	fs_mount(&reefs_fs);
+
+	kfree(dw);
+}
+
 static void __init reefs_init(void)
 {
-	assert(fs_mount(&reefs_fs) == 0);
+#if defined(CONFIG_ARM)
+	if (!is_security_extn_ena())
+		return;
+#endif
+
+	struct delayed_work *dw = kmalloc(sizeof(*dw));
+
+	INIT_DELAYED_WORK(dw, __reefs_init);
+	schedule_delayed_work(dw, 200000);
 }
 
 MODULE_INIT_LATE(reefs_init);

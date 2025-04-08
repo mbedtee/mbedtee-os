@@ -1189,8 +1189,13 @@ void destroy_workqueue(struct workqueue *wq)
 
 static void system_worker_init(void)
 {
-	int cpu = percpu_id();
+	int cpu = 0;
+	unsigned long flags = 0;
 	struct worker *wk = NULL, *hwk = NULL;
+
+	local_irq_save(flags);
+
+	cpu = percpu_id();
 
 	wk = create_worker(cpu, system_wq, true);
 
@@ -1198,6 +1203,8 @@ static void system_worker_init(void)
 
 	system_worker[cpu] = wk;
 	system_highpri_worker[cpu] = hwk;
+
+	local_irq_restore(flags);
 
 	if (!wk || !hwk) {
 		EMSG("create_system_worker failed\n");

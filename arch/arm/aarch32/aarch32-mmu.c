@@ -201,7 +201,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 	unsigned long secval = 0, pteval = 0, ptdflag = 0;
 	unsigned long cache = 0, ap = 0, ns = 0;
 
-	if ((!va) || (!pa))
+	if (!va)
 		return -EINVAL;
 
 	if ((va & (~PAGE_MASK)) || (pa & (~PAGE_MASK))) {
@@ -412,6 +412,7 @@ static int arch_access_ok(struct pt_struct *pt,
 	size_t checked = 0;
 	unsigned long val = 0;
 	unsigned long va = (unsigned long)addr;
+	int acc = user_addr(addr) ? KERN_RW_USER_RW : KERN_RW_USER_NO;
 
 	while (checked < size) {
 		ptd = ptd_of(pt, va + checked);
@@ -420,16 +421,14 @@ static int arch_access_ok(struct pt_struct *pt,
 			pte = pte_of(ptd, va + checked);
 			val = pte->val;
 			if (!val || ((prot == PG_RW) &&	(((val >> MMU_L2_AP_SHIFT)
-				& MMU_AP_MASK) != KERN_RW_USER_RW)))
+				& MMU_AP_MASK) != acc)))
 				return false;
 
 			checked += PAGE_SIZE;
 		} else if (ptd_type_sect(ptd)) {
-			val = ptd->flags;
-
+			val = ioread32(ptd);
 			if ((prot == PG_RW) &&	(((val >> MMU_SECTION_AP_SHIFT)
-				& MMU_AP_MASK) != (user_addr(va + checked)
-					? KERN_RW_USER_RW : KERN_RW_USER_NO)))
+				& MMU_AP_MASK) != acc))
 				return false;
 
 			checked += SECTION_SIZE;

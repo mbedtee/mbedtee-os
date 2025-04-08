@@ -62,8 +62,6 @@ struct file_desc {
 	struct file *file;
 	/* atclose callbacks */
 	struct list_head atcloses;
-	/* protects the atcloses */
-	struct spinlock lock;
 };
 
 struct file_path {
@@ -132,6 +130,8 @@ struct fdtab {
 
 	/* Process's fd table lock */
 	struct spinlock lock;
+	/* Process's atclose lock */
+	struct spinlock atclock;
 };
 
 /*
@@ -141,11 +141,13 @@ struct fdesc_atclose {
 	struct list_head node;
 	void (*atclose)(struct fdesc_atclose *fdatc);
 };
-void fdesc_register_atclose(struct file_desc *d,
-	struct fdesc_atclose *fdatc);
-bool fdesc_unregister_atclose(struct file_desc *d,
-	struct fdesc_atclose *fdatc);
+void fdesc_register_atclose(struct file_desc *, struct fdesc_atclose *);
+bool fdesc_unregister_atclose(struct process *, struct fdesc_atclose *);
 
+/*
+ * 1. Find the desc pointer by FD
+ * 2. Increase the fdesc and file refc
+ */
 struct file_desc *fdesc_get(int fd);
 
 int fdesc_put(struct file_desc *fdesc);

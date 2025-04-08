@@ -688,14 +688,6 @@ static void __fs_test(const char *rootdir)
 	strcpy(nameatdir, dir);
 	snprintf(nameatdir+strlen(dir), 128, "/aa_%04d.%dfs.txt", gettid(), rand());
 
-	#if defined(__mips__) || !defined(CONFIG_REE)
-		if (strcmp("/ree", rootdir) == 0 ||
-			strcmp("/user", rootdir) == 0) {
-			free(namestr);
-			return;
-		}
-	#endif
-
 	pthread_cleanup_push(__fs_test_cleanup, namestr);
 
 	fd = open(name, O_RDWR | O_CREAT, 0666);
@@ -2541,16 +2533,15 @@ static void poll_test(void)
 {
 	int ret = -1, i = 0;
 	int nr = rand() % 10240 + 1;
-#ifdef __mips__
-	int _fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
-#else
-	int _fd = open("/dev/uart1", O_RDWR | O_NONBLOCK);
-
-	if (_fd < 0)
-		_fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
-#endif
 	char str[256] = {0};
 
+	int _fd = open("/dev/uart1", O_RDWR | O_NONBLOCK);
+	if (_fd < 0) {
+		if (!(rand() % 3))
+			_fd = open("/dev/null", O_RDWR | O_NONBLOCK);
+		else
+			_fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
+	}
 	if (_fd < 0)
 		return;
 
@@ -2582,7 +2573,7 @@ static void *epdel_routine(void *arg)
 
 	usleep(randx % 200000);
 	LMSG("async fd %d\n", fd);
-	if (randx % 2)
+	if (randx % 3)
 		epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);
 	else
 		close(fd);
@@ -2599,11 +2590,12 @@ static void epoll_test1(void)
 	int randx = rand();
 
 	_fd = open("/dev/uart1", O_RDWR | O_NONBLOCK);
-	if (_fd < 0 && rand() % 2)
-		_fd = open("/dev/null", O_RDWR | O_NONBLOCK);
-	else
-		_fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
-
+	if (_fd < 0) {
+		if (!(rand() % 3))
+			_fd = open("/dev/null", O_RDWR | O_NONBLOCK);
+		else
+			_fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
+	}
 	if (_fd < 0)
 		return;
 
@@ -2638,11 +2630,12 @@ static void epoll_test1(void)
 
 		for (i = 0; i < nr; i++) {
 			epollfds[i] = open("/dev/uart1", O_RDWR | O_NONBLOCK);
-			if (epollfds[i] < 0 && rand() % 2)
-				epollfds[i] = open("/dev/null", O_RDWR | O_NONBLOCK);
-			else
-				epollfds[i] = open("/dev/uart0", O_RDWR | O_NONBLOCK);
-
+			if (epollfds[i] < 0) {
+				if (!(rand() % 3))
+					epollfds[i] = open("/dev/null", O_RDWR | O_NONBLOCK);
+				else
+					epollfds[i] = open("/dev/uart0", O_RDWR | O_NONBLOCK);
+			}
 			if (epollfds[i] < 0)
 				break;
 
@@ -2694,11 +2687,12 @@ static void epoll_test2(void)
 	pthread_t epdel;
 
 	_fd = open("/dev/uart1", O_RDWR | O_NONBLOCK);
-	if (_fd < 0 && rand() % 2)
-		_fd = open("/dev/null", O_RDWR | O_NONBLOCK);
-	else
-		_fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
-
+	if (_fd < 0) {
+		if (!(rand() % 3))
+			_fd = open("/dev/null", O_RDWR | O_NONBLOCK);
+		else
+			_fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
+	}
 	if (_fd < 0)
 		return;
 
@@ -2733,11 +2727,12 @@ static void epoll_test2(void)
 
 		for (i = 0; i < nr; i++) {
 			epollfds[i] = open("/dev/uart1", O_RDWR | O_NONBLOCK);
-			if (epollfds[i] < 0 && rand() % 2)
-				epollfds[i] = open("/dev/null", O_RDWR | O_NONBLOCK);
-			else
-				epollfds[i] = open("/dev/uart0", O_RDWR | O_NONBLOCK);
-
+			if (epollfds[i] < 0) {
+				if (!(rand() % 3))
+					epollfds[i] = open("/dev/null", O_RDWR | O_NONBLOCK);
+				else
+					epollfds[i] = open("/dev/uart0", O_RDWR | O_NONBLOCK);
+			}
 			if (epollfds[i] < 0)
 				break;
 
@@ -2801,10 +2796,11 @@ static void mbedtest(void)
 
 	if (access("/test", R_OK)) {
 		IMSG("creating test folders\n");
-		mkdir("/", 0666); /* create the "/mbedtest" */
-		mkdir("/test", 0666); /* create the "/mbedtest/test" */
-		mkdir("/user", 0666); /* create the "/user/mbedtest" if user-space enabled*/
-		mkdir("/shm/test", 0666); /* create the "/shm/test" */
+		mkdir("/", 0700); /* create the "/mbedtest" */
+		mkdir("/test", 0700); /* create the "/mbedtest/test" */
+		mkdir("/user", 0700); /* create the "/user/mbedtest" if user-space enabled*/
+		mkdir("/ree", 0700); /* create the "/ree/mbedtest" if ree-fs enabled*/
+		mkdir("/shm/test", 0700); /* create the "/shm/test" */
 	}
 
 	time(&secs_raw);

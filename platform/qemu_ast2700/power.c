@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
- * QEMU virt AArch64 - Secondary CPUs PowerUp/PowerDown
+ * Copyright (c) 2025 KapaXL (kapa.xl@outlook.com)
+ * QEMU AST2700 AArch64 - Secondary CPUs PowerUp/PowerDown
  */
 
 #include <io.h>

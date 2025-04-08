@@ -305,7 +305,7 @@ void vma_destroy(struct vma *vm)
 	if (vm) {
 		spin_lock_irqsave(&vm->lock, flags);
 		for (i = 0; i < ARRAY_SIZE(vm->rbroot); i++) {
-			while ((pool = rb_first_entry(vm->rbroot[i],
+			while ((pool = rb_first_entry_postorder(vm->rbroot[i],
 					struct vma_pool, node)) != NULL) {
 				vma_pool_remove(vm, pool, i);
 			}

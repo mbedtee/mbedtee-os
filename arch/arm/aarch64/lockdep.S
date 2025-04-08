@@ -65,15 +65,15 @@ __wait_sem_event:
 FUNC_END arch_semaphore_acquire
 
 FUNC_START arch_semaphore_release
-#	int arch_semaphore_release(struct lockval *lv, unsigned char *limit);
+#	int arch_semaphore_release(struct lockval *lv, unsigned int *limit);
 
 	dmb ishst
 1:	ldaxrb	w2, [x0]
-	ldrb 	w3, [x1]
+	ldr 	w3, [x1]
 	cmp     w2, w3
 	bcs     __invalid_release
 	add     w2, w2, #1
-	stxrb    w3, w2, [x0]
+	stxrb   w3, w2, [x0]
 	cbnz    w3, 1b
 	dmb ish
 	mov     w0, #0

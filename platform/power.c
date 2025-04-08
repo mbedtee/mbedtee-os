@@ -182,6 +182,9 @@ void cpu_die(void)
 	/* never return */
 	if (pm_ops.cpu_die)
 		pm_ops.cpu_die();
+
+	while (1)
+		smp_mb();
 }
 
 void cpu_pm_register(const struct cpu_pm_ops *ops)

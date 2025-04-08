@@ -88,6 +88,8 @@ static void ca7_cpu_down(unsigned int cpu)
 	void *reg = (void *)CA7_CPU_CTRL_REG;
 	void *reg_pwr = (void *)CA7_CPU_PWR_REG;
 
+	udelay(5000);
+
 	iowrite32((ioread32(reg) | (CA7_SW_CORERESET << cpu)), reg);
 	iowrite32((ioread32(reg) | (CA7_SW_RST_REQ << cpu)), reg);
 	iowrite32((ioread32(reg_pwr) | (CA7_SW_PWRDOWN << cpu)), reg_pwr);

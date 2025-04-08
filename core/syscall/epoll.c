@@ -40,10 +40,14 @@ struct epoll_item {
 	struct list_head wqnlist;
 	/* @ which epoll file */
 	struct epoll_fnode *epfn;
-	struct epoll_event event;
-	struct file_desc *fdesc;
+	/* @ which process */
+	struct process *proc;
 	/* cleanup callback called @ fdesc close */
 	struct fdesc_atclose fdatc;
+
+	struct epoll_event event;
+
+	int fd;
 
 	struct spinlock lock;
 };
@@ -63,14 +67,14 @@ struct epoll_queue_node {
 #define epoll_fnode_of(n) container_of(n, struct epoll_fnode, node)
 
 static inline intptr_t epi_rbfind_cmp(
-	const void *fdesc, const struct rb_node *ref)
+	const void *fd, const struct rb_node *ref)
 {
-	struct file_desc *dst = (void *)fdesc;
+	int dst_fd = (intptr_t)fd;
 	struct epoll_item *ei = rb_entry_of(ref, struct epoll_item, node);
-	struct file_desc *refd = ei->fdesc;
+	int ref_fd = ei->fd;
 
-	return dst < refd ? -1 :
-		   dst > refd ? + 1 : 0;
+	return dst_fd < ref_fd ? -1 :
+		   dst_fd > ref_fd ? 1 : 0;
 }
 
 static inline intptr_t epi_rbadd_cmp(
@@ -79,33 +83,39 @@ static inline intptr_t epi_rbadd_cmp(
 	struct epoll_item *ei = rb_entry_of(n, struct epoll_item, node);
 	struct epoll_item *ei_ref = rb_entry_of(n, struct epoll_item, node);
 
-	return ei->fdesc < ei_ref->fdesc ? -1 :
-		   ei->fdesc > ei_ref->fdesc ? + 1 : 0;
+	return ei->fd < ei_ref->fd ? -1 :
+		   ei->fd > ei_ref->fd ? 1 : 0;
 }
 
 static inline struct epoll_item *epoll_find(
-	struct epoll_fnode *epfn, struct file_desc *dst)
+	struct epoll_fnode *epfn, intptr_t fd)
 {
-	return rb_entry(rb_find((void *)dst, epfn->fds,
+	return rb_entry(rb_find((void *)fd, epfn->fds,
 		epi_rbfind_cmp), struct epoll_item, node);
 }
 
 static inline void epoll_rbadd(
 	struct epoll_fnode *epfn, struct epoll_item *ei)
 {
+	epfn->refc++;
 	rb_add(&ei->node, &epfn->fds, epi_rbadd_cmp);
 }
 
 static int epoll_item_poll(struct epoll_item *ei,
 	struct poll_table *pt)
 {
-	int mask = 0;
-	struct file *f = ei->fdesc->file;
+	int mask = DEFAULT_EPOLLMASK;
+	struct file *f = NULL;
+	struct file_desc *fdesc = NULL;
 
-	if (!f->fops->poll)
-		mask = DEFAULT_EPOLLMASK;
-	else
-		mask = f->fops->poll(f, pt);
+	fdesc = fdesc_get(ei->fd);
+	if (fdesc) {
+		f = fdesc->file;
+		if (f->fops->poll)
+			mask = f->fops->poll(f, pt);
+
+		fdesc_put(fdesc);
+	}
 
 	mask &= ei->event.events | EPOLLERR | EPOLLHUP;
 
@@ -119,6 +129,8 @@ static void epoll_wake(struct waitqueue_node *n)
 	unsigned long flags = 0;
 
 	n->wq->condi--;
+
+	assert(!rb_empty(&ei->node));
 
 	spin_lock_irqsave(&epfn->lock, flags);
 
@@ -147,9 +159,13 @@ static void epoll_waitq_enqueue(struct file *filp,
 		return;
 	}
 
+	spin_lock_irqsave(&ei->lock, flags);
+
+	list_add_tail(&eqn->node, &ei->wqnlist);
+
 	/* assert(filp == ei->fdesc->file); */
 
-	spin_lock_irqsave(&wq->lock, flags);
+	spin_lock(&wq->lock);
 
 	__curr = current;
 
@@ -161,10 +177,8 @@ static void epoll_waitq_enqueue(struct file *filp,
 	 */
 	list_add_tail(&eqn->wqn.node, &wq->list);
 
-	spin_unlock_irqrestore(&wq->lock, flags);
+	spin_unlock(&wq->lock);
 
-	spin_lock_irqsave(&ei->lock, flags);
-	list_add_tail(&eqn->node, &ei->wqnlist);
 	spin_unlock_irqrestore(&ei->lock, flags);
 }
 
@@ -176,8 +190,8 @@ static void epoll_waitq_dequeue(struct epoll_item *ei)
 	spin_lock_irqsave(&ei->lock, flags);
 
 	list_for_each_entry_safe(n, _n, &ei->wqnlist, node) {
-		list_del(&n->node);
 		waitqueue_node_del(&n->wqn);
+		list_del(&n->node);
 		kfree(n);
 	}
 
@@ -218,17 +232,20 @@ static void __epoll_del(struct epoll_fnode *epfn,
 
 	--epfn->refc;
 
-	assert(epfn->refc >= 0);
+	ei->epfn = NULL;
+	ei->proc = NULL;
+	ei->fd = -1;
+
 	kfree(ei);
 }
 
 static int epoll_del(struct epoll_fnode *epfn,
 	struct epoll_item *ei)
 {
-	if (fdesc_unregister_atclose(ei->fdesc, &ei->fdatc))
+	assert(ei->epfn == epfn);
+
+	if (fdesc_unregister_atclose(ei->proc, &ei->fdatc))
 		__epoll_del(epfn, ei);
-	else
-		rb_del(&ei->node, &epfn->fds);
 
 	return 0;
 }
@@ -240,6 +257,8 @@ static void epoll_fdatc(struct fdesc_atclose *p)
 	struct epoll_fnode *epfn = ei->epfn;
 
 	tfs_lock_node(&epfn->node);
+
+	assert(epfn->refc > 0);
 
 	__epoll_del(epfn, ei);
 
@@ -255,7 +274,7 @@ static void epoll_fdatc(struct fdesc_atclose *p)
 }
 
 static int epoll_add(struct epoll_fnode *epfn,
-	struct file_desc *dst, struct epoll_event *evt)
+	struct file_desc *d, struct epoll_event *evt)
 {
 	struct epoll_item *ei = NULL;
 	struct epoll_queue epq;
@@ -268,9 +287,10 @@ static int epoll_add(struct epoll_fnode *epfn,
 	if (ei == NULL)
 		return -ENOMEM;
 
-	ei->event = *evt;
-	ei->fdesc = dst;
+	ei->fd = d->fd;
 	ei->epfn = epfn;
+	ei->event = *evt;
+	ei->proc = current->proc;
 	INIT_LIST_HEAD(&ei->rdnode);
 	INIT_LIST_HEAD(&ei->wqnlist);
 	rb_node_init(&ei->node);
@@ -280,7 +300,6 @@ static int epoll_add(struct epoll_fnode *epfn,
 	ei->fdatc.atclose = epoll_fdatc;
 
 	epoll_rbadd(epfn, ei);
-	epfn->refc++;
 
 	epq.ei = ei;
 	epq.errcode = 0;
@@ -295,7 +314,7 @@ static int epoll_add(struct epoll_fnode *epfn,
 	if (revents)
 		epoll_rditem_enqueue(epfn, ei);
 
-	fdesc_register_atclose(dst, &ei->fdatc);
+	fdesc_register_atclose(d, &ei->fdatc);
 
 	return 0;
 }
@@ -368,7 +387,7 @@ int epoll_ctl(int epfd, int op, int fd,
 
 	tfs_lock_node(n);
 
-	ei = epoll_find(epfn, dst);
+	ei = epoll_find(epfn, fd);
 
 	switch (op) {
 	case EPOLL_CTL_ADD:
@@ -494,7 +513,6 @@ static struct tfs_node *epoll_alloc_node(struct tfs *fs)
 		return NULL;
 
 	epfn->refc = 1;
-	epfn->fds = NULL;
 	INIT_LIST_HEAD(&epfn->rdlist);
 	waitqueue_init(&epfn->wq);
 	spin_lock_init(&epfn->lock);
@@ -504,23 +522,24 @@ static struct tfs_node *epoll_alloc_node(struct tfs *fs)
 
 static void epoll_free_node(struct tfs_node *n)
 {
-	struct epoll_item *ei = NULL;
+	struct epoll_item *ei = NULL, *_ei = NULL;
 	struct epoll_fnode *epfn = epoll_fnode_of(n);
 	bool to_free = false;
 
 	tfs_lock_node(&epfn->node);
 
-	while ((ei = rb_first_entry_postorder(epfn->fds,
-				struct epoll_item, node)) != NULL)
+	assert(epfn->refc > 0);
+
+	/* DO NOT force to delete, may have race condition @ epoll_fdatc */
+	rb_for_each_entry_safe_postorder(ei, _ei, epfn->fds, node)
 		epoll_del(epfn, ei);
 
 	to_free = (--epfn->refc == 0);
 
 	tfs_unlock_node(&epfn->node);
 
-	wakeup(&epfn->wq);
-
 	if (to_free) {
+		wakeup(&epfn->wq);
 		waitqueue_flush(&epfn->wq);
 		kfree(epfn);
 	}

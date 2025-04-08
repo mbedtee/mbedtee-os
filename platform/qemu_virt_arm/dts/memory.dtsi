@@ -19,7 +19,7 @@
 		 *
 		 * OS currently only supports max. to 2G for QEMU AArch32@ARMV7-A platforms
 		 */
-		mapping = <0x80000000 0x40000000>;
+		mapping = <0x80000000 0x80000000>;
 
 		/* dedicated memory region for current OS */
 		reg = <0x80000000 0x5800000>,

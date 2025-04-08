@@ -171,9 +171,6 @@ static void uart_sifive_setup(struct uart_port *p)
 	/* Enable Tx */
 	uart_sifive_iowrite(p, UART_TXCTRL, UART_TXEN);
 
-	/* Enable Rx */
-	uart_sifive_iowrite(p, UART_RXCTRL, UART_RXEN);
-
 	spin_unlock_irqrestore(&p->lock, flags);
 }
 
@@ -184,7 +181,10 @@ static void uart_sifive_attach(struct uart_port *p)
 	p->irq = irq_of_register(p->dn, p->hwirq,
 		(void *)uart_sifive_irq_handler, p);
 
-	/* set interrupt enable register */
+	/*
+	 * Enable RX and RX interrupt
+	 */
+	uart_sifive_iowrite(p, UART_RXCTRL, UART_RXEN);
 	uart_sifive_iowrite(p, UART_IE, UART_IERX);
 }
 

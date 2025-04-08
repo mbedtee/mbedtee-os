@@ -252,7 +252,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 	unsigned long memtype = 0, ap = 0, ns = 0;
 	unsigned long pteval = 0, pmdval = 0;
 
-	if ((!va) || (!pa))
+	if (!va)
 		return -EINVAL;
 
 	if ((va & (~PAGE_MASK)) || (pa & (~PAGE_MASK))) {

@@ -109,7 +109,8 @@ void percpu_info(void)
 
 	if (partstr == NULL)
 		EMSG("unknown partnum 0x%x\n", m.partnum);
-	else
-		IMSG("Processor %s r%dp%d, mpidr %lx\n", partstr,
-			m.major, m.minor, mpidr);
+	else {
+		IMSG("Processor %s r%dp%d\n", partstr, m.major, m.minor);
+		IMSG("Processor %lx SecurityExtn %d\n", mpidr, cpu_has_security_extn());
+	}
 }

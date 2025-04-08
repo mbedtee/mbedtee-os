@@ -95,6 +95,8 @@ int tfs_put_node(struct tfs *fs,
 		dir = n->parent;
 		dir->sub_nodes--;
 
+		mutex_destroy(&n->lock);
+
 		kfree(n->name);
 
 		fs->free(n);
@@ -103,6 +105,7 @@ int tfs_put_node(struct tfs *fs,
 			n = dir->parent;
 			if (--dir->refc == 0) {
 				list_del(&dir->node);
+				mutex_destroy(&dir->lock);
 				kfree(dir->name);
 				fs->free(dir);
 				dir = n;

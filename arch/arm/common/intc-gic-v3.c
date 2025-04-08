@@ -68,7 +68,7 @@
 
 #define GIC_SECURE_PRIORITY_MASK    U(0xFF)
 #define GICD_SECURE_PRIORITY        U(0x00)
-#define GICC_SECURE_PRIORITY        U(0xFF)
+#define GICC_SECURE_PRIORITY        U(0x80)
 
 #define GIC_REG_OFFSET(n)			(BYTES_PER_INT * ((n) / BITS_PER_INT))
 #define GIC_BIT_OFFSET(n)			((n) % BITS_PER_INT)
@@ -92,6 +92,7 @@ static struct gic_desc {
 	uint32_t total;
 	struct spinlock lock;
 	int8_t version;
+	bool security_extn;
 } gic_desc = {0};
 
 #define RDIST_BASE (gic_desc.rdist_base + (GICR_SIZE * percpu_id()))
@@ -399,6 +400,7 @@ static void gic_dist_init(void)
 	int i = 0;
 	int total = 0;
 	int version = 0;
+	int typer = 0;
 
 	/*
 	 * interrupts not forwarded
@@ -409,7 +411,8 @@ static void gic_dist_init(void)
 	/*
 	 * maximum number of interrupts is 32(N+1)
 	 */
-	total = gic_read_dist(GICD_TYPE) & 0x1F;
+	typer = gic_read_dist(GICD_TYPE);
+	total = typer & 0x1F;
 	total = 32 * (total + 1);
 	gic_desc.total = min(total, GIC_MAX_INT);
 
@@ -419,7 +422,10 @@ static void gic_dist_init(void)
 	version = (gic_read_dist(GICD_PIDR2) >> GICD_VERSION_SHIFT)
 			& GICD_VERSION_MASK;
 
-	IMSG("%d interrupts @ GICDv%d\n", total, version);
+	gic_desc.security_extn = typer >> 10 & 1;
+
+	IMSG("%d interrupts @ GICDv%d SecurityExtn %d\n",
+		total, version, gic_desc.security_extn);
 
 	assert(version == gic_desc.version);
 
@@ -662,6 +668,10 @@ static void gic_softint_raise(struct irq_desc *d, unsigned int cpu_id)
 	gic_num = gic_softint2sgi(d->hwirq);
 
 	if ((gic_num >= 0) && icc_read_igrpen1()) {
+		/* not support security_extn, so should not trigger NS SGIs */
+		if (!gic_desc.security_extn && gic_num <= GIC_SECURE_SGI_START)
+			return;
+
 		local_irq_save(flags);
 
 		unsigned long mpidr = mpid_of(cpu_id);
@@ -760,6 +770,11 @@ static void gic_handler(struct thread_ctx *regs)
 		irq_generic_invoke(gic_desc.controller, gic_num);
 		icc_write_eoir1(iar);
 	} while (1);
+}
+
+bool gic_has_security_extn(void)
+{
+	return gic_desc.security_extn;
 }
 
 static void __init gic_parse_dts(struct device_node *dn)

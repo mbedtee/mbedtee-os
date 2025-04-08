@@ -64,6 +64,23 @@ static __always_inline void set_current(void *curr)
 	asm volatile("mcr p15, 0, %0, c13, c0, 3" : : "r" (curr) : "memory", "cc");
 }
 
+static __always_inline bool cpu_has_security_extn(void)
+{
+	unsigned long id_pfr1 = 0;
+
+	asm volatile("mrc p15, 0, %0, c0, c1, 1\n"
+		: "=r" (id_pfr1) : : "memory", "cc");
+
+	return 	((id_pfr1 >> 4) & 0xf) ? true : false;
+}
+
+static __always_inline bool is_security_extn_ena(void)
+{
+	bool gic_has_security_extn(void);
+
+	return cpu_has_security_extn() && gic_has_security_extn();
+}
+
 static __always_inline void local_irq_restore(unsigned long flags)
 {
 	asm volatile("msr cpsr_c, %0" : : "r" (flags) : "memory", "cc");

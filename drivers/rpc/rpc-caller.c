@@ -213,8 +213,7 @@ out:
 
 	spin_unlock_irqrestore(&rpc_lock, flags);
 
-	if (ret == 0)
-		wait_event(&t->wait_q, t->rpc_caller == false);
+	wait_event(&t->wait_q, t->rpc_caller == false);
 
 	if (shm) {
 		memcpy(data, shm, size);

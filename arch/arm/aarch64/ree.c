@@ -29,6 +29,8 @@ void setup_ree(void)
 	unsigned long dts_ctx = 0;
 	static bool _ctxinit;
 
+	memset(ctx, 0, sizeof(*ctx));
+
 	if (_ctxinit == false) {
 		_ctxinit = true;
 /* check if the DTS have REE context pointer, use it firstly if prepsent */

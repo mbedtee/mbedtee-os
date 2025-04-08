@@ -48,6 +48,6 @@ int arch_semaphore_acquire(struct lockval *lv);
 /*
  * try to increase the sema
  */
-int arch_semaphore_release(struct lockval *lv, unsigned char *limit);
+int arch_semaphore_release(struct lockval *lv, unsigned int *limit);
 
 #endif

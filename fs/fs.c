@@ -39,10 +39,12 @@ int fs_umount(struct file_system *fs)
 {
 	int ret = -EINVAL;
 	unsigned long flags = 0;
+	const char *path = NULL;
 
 	if (fs) {
 		spin_lock_irqsave(&__fslock, flags);
 		if (fs->refc == 0) {
+			path = fs->mnt.path;
 			list_del(&fs->node);
 			if (fs->umount)
 				fs->umount(fs);
@@ -51,6 +53,7 @@ int fs_umount(struct file_system *fs)
 			ret = -EBUSY;
 		}
 		spin_unlock_irqrestore(&__fslock, flags);
+		sys_rmdir(path);
 	}
 
 	return ret;

@@ -21,8 +21,8 @@ irq_el1_sp0:
  	b exception_return
 	.align 7
 fiq_el1_sp0:
+	b irq_el1_sp0
 	b .
-	b synchronous_el1_sp0
 	.align 7
 serror_el1_sp0:
 	b .
@@ -62,8 +62,8 @@ irq_el0:
  	b exception_return
 	.align 7
 fiq_el0:
+	b irq_el0
 	b .
-	b synchronous_el0
 	.align 7
 serror_el0:
 	b .

@@ -148,9 +148,9 @@ static void pl011_setup(struct uart_port *p)
 				p->membase + PL011_IFLS);
 
 	/*
-	 * Enable UART with RX/TX
+	 * Enable UART with TX, without interrupt
 	 */
-	iowrite32(PL011_CR_UARTEN | PL011_CR_RXE | PL011_CR_TXE,
+	iowrite32(PL011_CR_UARTEN | PL011_CR_TXE,
 				p->membase + PL011_CR);
 
 	spin_unlock_irqrestore(&p->lock, flags);
@@ -165,8 +165,10 @@ static void pl011_attach(struct uart_port *p)
 		(void *)pl011_irq_handler, p);
 
 	/*
-	 * Enable RX interrupt
+	 * Enable RX and RX interrupt
 	 */
+	iowrite32(ioread32(p->membase + PL011_CR) |
+			PL011_CR_RXE, p->membase + PL011_CR);
 	iowrite32(PL011_RTIM | PL011_RXIM,
 				p->membase + PL011_IMSC);
 }

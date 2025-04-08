@@ -7,3 +7,5 @@ drivers-uart-$(CONFIG_UART) += uart.o
 drivers-uart-$(CONFIG_UART_16550) += uart_16550.o
 drivers-uart-$(CONFIG_UART_PL011) += uart_pl011.o
 drivers-uart-$(CONFIG_UART_SIFIVE) += uart_sifive.o
+drivers-uart-$(CONFIG_UART_CDNS) += uart_cdns.o
+drivers-uart-$(CONFIG_UART_IMX) += uart_imx.o

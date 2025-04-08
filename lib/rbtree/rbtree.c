@@ -186,13 +186,17 @@ static void rb_del_fixup(struct rb_node *parent,
 
 void rb_del(struct rb_node *node, struct rb_node **root)
 {
-	struct rb_node *parent = rb_parent(node);
-	struct rb_node *lchild = node->left;
-	struct rb_node *rchild = node->right;
+	struct rb_node *parent = NULL;
+	struct rb_node *lchild = NULL;
+	struct rb_node *rchild = NULL;
 	struct rb_node *fixup = NULL;
 
 	if (rb_empty(node))
 		return;
+
+	parent = rb_parent(node);
+	lchild = node->left;
+	rchild = node->right;
 
 	if (!lchild) {
 		rb_replace_child(node, root, rchild, parent);

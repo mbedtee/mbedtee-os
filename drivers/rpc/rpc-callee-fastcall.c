@@ -38,10 +38,7 @@ long rpc_fastcall_handler(unsigned long fn,
 		break;
 
 	case RPC_SUPPORT_YIELD:
-		ret = false;
-#ifdef CONFIG_RPC_YIELD
-		ret = true;
-#endif
+		ret = IS_ENABLED(CONFIG_RPC_YIELD);
 		break;
 
 	case RPC_COMPLETE_TEE:

@@ -82,16 +82,18 @@ FUNC_END secondary_cpu_restart
  * assign the secondary CPUs' run entry to the '__memstart'
  *
  * copy this jumper (24-bytes) to the SoC's fix secondary-entry
- * and set '__memstart' to the '.dword' of this jumper
+ * and set '__memstart' to the '.dword' of this jumper (offset 0x10)
  * before release the secondary-cpu
  */
+.align 3
 .global secondary_trampoline
 secondary_trampoline:
 #if (CONFIG_NR_CPUS > 1)
-	adr_l x0, 1f
+	adr x0, 1f
+	nop
 	ldr lr, [x0]
 	ret
-1:	.dword -1
+1:	.dword 0
 #else
 1:	wfi
 	b 1b
