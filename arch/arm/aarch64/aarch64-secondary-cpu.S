@@ -17,7 +17,7 @@ FUNC_START secondary_cpu_wait
 	ldr x3, =MPIDR_BITMASK
 	mrs x0, mpidr_el1
 	and x0, x0, x3
-	adr_l x1, cpu_mpid
+	adr_l x1, cpu_power_id
 1:	wfe
 	dsb ishst
 	ldr x2, [x1]
@@ -25,12 +25,12 @@ FUNC_START secondary_cpu_wait
 	cmp x5, x0
 	bne 1b
 
-	/* invalid the cpu_mpid */
+	/* invalid the cpu_power_id */
 	ldr x3, =-1
 	str x3, [x1]
 	dsb ish
 
-	/* cpu_mpid[63:40] contains the logic cpu-id
+	/* cpu_power_id[63:40] contains the logic cpu-id
 	 transfer cpu-id to x0 */
 	lsr x0, x2, 40
 	br lr
@@ -98,3 +98,9 @@ secondary_trampoline:
 1:	wfi
 	b 1b
 #endif
+
+.data
+.balign BYTES_PER_LONG, 0
+.global cpu_power_id
+cpu_power_id:
+	.fill 1, BYTES_PER_LONG, 0

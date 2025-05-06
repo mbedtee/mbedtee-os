@@ -25,6 +25,7 @@ int __init cpu_data_init(void)
 	for (i = 0; i < CONFIG_NR_CPUS; i++) {
 		percpu_dt[i].id = i;
 		percpu_dt[i].stack = &common_stack[i + 1];
+		cpu_affinity_set(cpus_possible, i);
 	}
 
 	return 0;

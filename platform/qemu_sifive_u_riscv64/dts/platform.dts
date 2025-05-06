@@ -47,11 +47,10 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
+		/* sifive-u does not have sswi ? OS will auto-check this */
 		reg = <0 0x2000000 0 0x4000>, /* for mswi */
 			<0 0x2F00000 0 0x4000>; /* for sswi */
-			/* sifive-u does not have sswi ? OS will auto-check this */
 	};
 
 	/* interrupt-controller: SoC side - external platform interrupt */
@@ -61,14 +60,12 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
-		interrupts = <9 11>; /* connects to CPU 9 (S-Mode), 11 (M-Mode) */
+		/* connects to CPU clint 11 (M-Mode), 9 (S-Mode) */
+		interrupts = <11 9>;
 		interrupt-parent = <&intc>;
 
-		hart0-machine-user-only = <1>;
-
-		max-irqs = <95>; /* unprecise number */
+		max-irqs = <96>; /* unprecise number */
 
 		reg = <0 0xc000000 0 0x600000>;
 	};

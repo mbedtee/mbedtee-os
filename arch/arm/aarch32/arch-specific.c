@@ -16,6 +16,8 @@
 
 void arch_specific_init(void)
 {
+	int cpu = 0;
+
 	if (IS_ENABLED(CONFIG_REE) && is_security_extn_ena()) {
 		setup_ree();
 		/* wait the REE startup */
@@ -23,8 +25,9 @@ void arch_specific_init(void)
 			msleep(100);
 	} else {
 		/* only CPU 0 does this, up the other CPUs */
-		if (percpu_id() == 0)
-			for (int i = 1; i < CONFIG_NR_CPUS; i++)
-				cpu_up(i, -1);
+		if (percpu_id() == 0) {
+			for_each_possible_cpu(cpu)
+				cpu_up(cpu, -1);
+		}
 	}
 }

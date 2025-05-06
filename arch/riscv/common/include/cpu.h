@@ -31,8 +31,6 @@
 #define STACK_SIZE          UL(4096)
 #endif
 
-#define VALID_CPUID(x)      ((unsigned int)(x) < CONFIG_NR_CPUS)
-
 #if defined(CONFIG_RISCV_S_MODE)
 
 #define CSR_STATUS        sstatus          /* Global status register */
@@ -49,12 +47,15 @@
 #define CSR_STIMECMP      stimecmp
 #define CSR_STIMECMPH     stimecmph
 
+#define CSR_TOPEI         stopei
+#define CSR_ISELECT       siselect
+#define CSR_IREG          sireg
+
 #define SR_IE		      (UL(1) << 1)
 #define SR_PIE	          (UL(1) << 5)
 #define SR_PP		      (UL(1) << 8)
 
 #define IE_TIE            (UL(1) << 5)
-#define IE_EIE            (UL(1) << 9)
 
 #define eret              sret
 
@@ -69,12 +70,15 @@
 #define CSR_TVAL          mtval            /* Trap value register */
 #define CSR_TVEC          mtvec            /* Trap vector base addr register */
 
+#define CSR_TOPEI         mtopei
+#define CSR_ISELECT       miselect
+#define CSR_IREG          mireg
+
 #define SR_IE		      (UL(1) << 3)
 #define SR_PIE	          (UL(1) << 7)
 #define SR_PP		      (UL(3) << 11)
 
 #define IE_TIE            (UL(1) << 7)
-#define IE_EIE            (UL(1) << 11)
 
 #define eret              mret
 
@@ -89,9 +93,11 @@
 #define SR_FS_CLEAN	      (UL(2) << 13)
 #define SR_FS_DIRTY	      (UL(3) << 13)
 
-#define ECALL_RDTIME      0x51110618
-#define ECALL_WRTIME      0x51110619
-#define ECALL_SENDIPI     0x51110620
+#define ECALL_RDTIME      0x51110618 /* Read time */
+#define ECALL_WRTIME      0x51110619 /* Set time */
+#define ECALL_SENDIPI     0x51110620 /* Send IPI */
+#define ECALL_APLIC_D     0x51110621 /* APLIC delegation */
+#define ECALL_APLIC_MSI   0x51110622 /* APLIC MSIAddrCfg */
 
 #define REG_STR(x) #x
 #define read_csr(reg) ({					\
@@ -107,31 +113,39 @@
 		"csrw " REG_STR(reg) ", %0"			\
 		: : "rK" (__v) : "memory", "cc");	})
 
-#define set_csr(reg, bits)	({				\
-	unsigned long __b = (bits);				\
+#define set_csr(reg, val)	({				\
+	unsigned long __v = (val);				\
 	asm volatile(							\
 		"csrs " REG_STR(reg) ", %0"			\
-		: : "rK" (__b) : "memory", "cc");	})
+		: : "rK" (__v) : "memory", "cc");	})
 
-#define clear_csr(reg, bits)  ({			\
-	unsigned long __b = (bits);				\
+#define clear_csr(reg, val)  ({				\
+	unsigned long __v = (val);				\
 	asm volatile(							\
 		"csrc " REG_STR(reg) ", %0"			\
-		: : "rK" (__b) : "memory", "cc");	})
+		: : "rK" (__v) : "memory", "cc");	})
 
-#define read_set_csr(reg, bits) ({			\
+#define read_set_csr(reg, val) ({			\
 	unsigned long __v = 0;					\
 	asm volatile(							\
 		"csrrs %0, " REG_STR(reg) ", %1"	\
-		: "=r" (__v) : "rK" (bits) :		\
+		: "=r" (__v) : "rK" (val) :			\
 		"memory", "cc");					\
 	__v;									})
 
-#define read_clear_csr(reg, bits) ({		\
+#define read_clear_csr(reg, val) ({			\
 	unsigned long __v = 0;					\
 	asm volatile(							\
 		"csrrc %0, " REG_STR(reg) ", %1"	\
-		: "=r" (__v) : "rK" (bits) :		\
+		: "=r" (__v) : "rK" (val) :			\
+		"memory", "cc");					\
+	__v;									})
+
+#define swap_csr(reg, v) ({			        \
+	unsigned long __v = (v);				\
+	asm volatile(							\
+		"csrrw %0, " REG_STR(reg) ", %1"	\
+		: "=r" (__v) : "rK" (__v) :		    \
 		"memory", "cc");					\
 	__v;									})
 
@@ -139,10 +153,21 @@
 #include <limits.h>
 #include <sys/cdefs.h>
 
-extern bool __sstc_supported;
-extern bool __sswi_supported;
-extern bool __hart0_supervisor_supported;
 extern unsigned long __misa;
+
+bool is_io_readable(void *addr);
+
+static __always_inline bool sstc_supported(void)
+{
+	extern bool __sstc_supported;
+	return __sstc_supported;
+}
+
+static __always_inline unsigned int supervisor_bmap(void)
+{
+	extern unsigned int __supervisor_bmap;
+	return __supervisor_bmap;
+}
 
 static __always_inline struct thread *get_current(void)
 {

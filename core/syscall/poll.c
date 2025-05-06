@@ -156,10 +156,10 @@ static int do_poll(struct poll_queue *pq, int timeout)
 				continue;
 			}
 
-			if (!d->file->fops->poll)
-				mask = DEFAULT_POLLMASK;
-			else
+			if (file_can_poll(d->file))
 				mask = d->file->fops->poll(d->file, &pq->pt);
+			else
+				mask = DEFAULT_POLLMASK;
 
 			fdesc_put(d);
 
@@ -267,6 +267,9 @@ long do_syscall_poll(struct pollfd *ufds,
 	int nfds_inline = ARRAY_SIZE(pq.inlinefds);
 
 	if (!nfds || !ufds)
+		return -EINVAL;
+
+	if (nfds >= PROCESS_FD_MAX)
 		return -EINVAL;
 
 	ret = poll_initwait(nfds, ufds, &pq);

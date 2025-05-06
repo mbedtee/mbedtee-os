@@ -25,26 +25,15 @@
 #define PLIC_REG_OFFSET(n) (BYTES_PER_INT * ((n) / BITS_PER_INT))
 #define PLIC_BIT_OFFSET(n) ((n) % BITS_PER_INT)
 
-static struct plic_intc_desc {
+struct plic_desc {
 	/* max interrupts in PLIC */
 	unsigned int max;
 
-	/*
-	 * interrupt index connected to its parent Processor
-	 * e.g. connected to RISCV CPU -> IP11 or IP9 ?
-	 */
-	unsigned int hwirq;
-
-	/* hart0 does not have supervisor mode ? */
-	unsigned int hart0_supervisor_supported;
-
-	struct device_node *dn;
-
-	struct irq_controller *controller;
-
 	/* memory-mapped registers */
 	void *regs;
-} plic_desc = {0};
+};
+
+static void plic_percpu_init(void);
 
 static void plic_set_enable(void *enreg, int irq)
 {
@@ -62,59 +51,63 @@ static void plic_clear_enable(void *enreg, int irq)
 	iowrite32(ioread32(reg) & ~mask, reg);
 }
 
-static void *plic_enable_base(int hartid)
+static void *plic_enable_base(struct plic_desc *d, int hartid)
 {
-	void *regs = NULL;
+	int i = 0;
+	void *regs = d->regs + CONTEXT_ENABLE_BASE;
 
-	regs = plic_desc.regs + CONTEXT_ENABLE_BASE +
-			(hartid * 2) * CONTEXT_ENABLE_SIZE;
-
-	if (hartid && !plic_desc.hart0_supervisor_supported)
-		regs -= CONTEXT_ENABLE_SIZE;
-
-	if (IS_ENABLED(CONFIG_RISCV_S_MODE))
-		if (hartid || plic_desc.hart0_supervisor_supported)
+	while (i < hartid) {
+		regs += CONTEXT_ENABLE_SIZE;
+		if (supervisor_bmap() & (1 << i))
 			regs += CONTEXT_ENABLE_SIZE;
-
-	return regs;
-}
-
-static void *plic_conetxt_base(int hartid)
-{
-	void *regs = NULL;
-
-	regs = plic_desc.regs + CONTEXT_BASE +
-			(hartid * 2) * CONTEXT_SIZE;
-
-	if (hartid && !plic_desc.hart0_supervisor_supported)
-		regs -= CONTEXT_SIZE;
+		i++;
+	}
 
 	if (IS_ENABLED(CONFIG_RISCV_S_MODE))
-		if (hartid || plic_desc.hart0_supervisor_supported)
-			regs += CONTEXT_SIZE;
+		regs += CONTEXT_ENABLE_SIZE;
 
 	return regs;
 }
 
-static void plic_irq_enable(struct irq_desc *desc)
+static void *plic_context_base(struct plic_desc *d, int hartid)
+{
+	int i = 0;
+	void *regs = d->regs + CONTEXT_BASE;
+
+	while (i < hartid) {
+		regs += CONTEXT_SIZE;
+		if (supervisor_bmap() & (1 << i))
+			regs += CONTEXT_SIZE;
+		i++;
+	}
+
+	if (IS_ENABLED(CONFIG_RISCV_S_MODE))
+		regs += CONTEXT_SIZE;
+
+	return regs;
+}
+
+static void plic_irq_enable(struct irq_desc *d)
 {
 	unsigned int cpu = 0;
 	unsigned int hartid = 0;
+	struct plic_desc *plic = d->controller->data;
 
-	for_each_affinity_cpu(cpu, desc->affinity) {
+	for_each_affinity_cpu(cpu, d->affinity) {
 		hartid = hartid_of(cpu);
-		plic_set_enable(plic_enable_base(hartid), desc->hwirq);
+		plic_set_enable(plic_enable_base(plic, hartid), d->hwirq);
 	}
 }
 
-static void plic_irq_disable(struct irq_desc *desc)
+static void plic_irq_disable(struct irq_desc *d)
 {
 	unsigned int cpu = 0;
 	unsigned int hartid = 0;
+	struct plic_desc *plic = d->controller->data;
 
-	for_each_affinity_cpu(cpu, desc->affinity) {
+	for_each_affinity_cpu(cpu, d->affinity) {
 		hartid = hartid_of(cpu);
-		plic_clear_enable(plic_enable_base(hartid), desc->hwirq);
+		plic_clear_enable(plic_enable_base(plic, hartid), d->hwirq);
 	}
 }
 
@@ -122,78 +115,82 @@ static void plic_irq_handler(void *data)
 {
 	unsigned int irq = 0;
 	unsigned int hartid = percpu_hartid();
-	void *claim = plic_conetxt_base(hartid) + CONTEXT_CLAIM;
+	struct irq_controller *ic = data;
+	struct plic_desc *plic = ic->data;
+	void *claim = plic_context_base(plic, hartid) + CONTEXT_CLAIM;
 
 	while ((irq = ioread32(claim)) != 0) {
-		irq_generic_invoke(data, irq);
+		irq_generic_invoke(ic, irq);
 		iowrite32(irq, claim); /* EOI */
 	}
 }
 
-static int plic_set_affinity(struct irq_desc *desc,
-	const struct cpu_affinity *affinity)
+static int plic_set_affinity(struct irq_desc *d,
+	const struct cpu_affinity *affinity, bool force)
 {
-	unsigned int cpu;
+	unsigned int cpu = -1;
 	struct cpu_affinity tmp;
 
-	cpu_affinity_and(&tmp, affinity, cpus_online);
+	if (force) {
+		if (cpu_affinity_isset(affinity, percpu_id()))
+			cpu = percpu_id();
+		else
+			cpu = cpu_affinity_next_one(affinity, 0);
+	} else {
+		cpu_affinity_and(&tmp, affinity, cpus_online);
+		cpu = cpu_affinity_next_one(&tmp, 0);
+	}
 
-	cpu = cpu_affinity_next_one(&tmp, 0);
 	if (!cpu_affinity_valid(cpu))
 		return -EINVAL;
 
-	plic_irq_disable(desc);
+	plic_irq_disable(d);
 
-	cpu_affinity_copy(desc->affinity, affinity);
+	cpu_affinity_copy(d->affinity, affinity);
 
-	plic_irq_enable(desc);
+	if (irq_is_enabled(d))
+		plic_irq_enable(d);
 
 	return 0;
 }
 
-static void plic_setup(struct plic_intc_desc *d)
+static void plic_setup(struct plic_desc *d)
 {
 	int i = 0, hartid = 0, irq = 0;
-	void *enreg = NULL, *hartreg = NULL;
+	void *enreg = NULL, *ctxreg = NULL;
 
-	for (i = 0; i < CONFIG_NR_CPUS; i++) {
+	for_each_possible_cpu(i) {
 		hartid = hartid_of(i);
 
-		enreg = d->regs + CONTEXT_ENABLE_BASE +
-				(hartid * 2) * CONTEXT_ENABLE_SIZE;
-		hartreg = d->regs + CONTEXT_BASE +
-				(hartid * 2) * CONTEXT_SIZE;
-
-		if (hartid && !d->hart0_supervisor_supported) {
-			enreg -= CONTEXT_ENABLE_SIZE;
-			hartreg -= CONTEXT_SIZE;
-		}
+		enreg = plic_enable_base(d, hartid);
+		ctxreg = plic_context_base(d, hartid);
 
 		/* clear M-Mode */
-		for (irq = 1; irq <= d->max; irq++)
+		for (irq = 1; irq < d->max; irq++)
 			plic_clear_enable(enreg, irq);
 
 		/* permits all external interrupts */
-		iowrite32(0, hartreg + CONTEXT_THRESHOLD);
+		iowrite32(0, ctxreg + CONTEXT_THRESHOLD);
 
 		/* clear S-Mode */
 		enreg += CONTEXT_ENABLE_SIZE;
-		for (irq = 1; irq <= d->max; irq++)
+		for (irq = 1; irq < d->max; irq++)
 			plic_clear_enable(enreg, irq);
 
 		/* permits all external interrupts */
-		hartreg += CONTEXT_SIZE;
-		iowrite32(0, hartreg + CONTEXT_THRESHOLD);
+		ctxreg += CONTEXT_SIZE;
+		iowrite32(0, ctxreg + CONTEXT_THRESHOLD);
 	}
 
 	/* priority of all external interrupts is 1 (lowest) */
-	for (irq = 0; irq <= d->max; irq++)
+	for (irq = 0; irq < d->max; irq++)
 		iowrite32(1, d->regs + PRIORITY_BASE + irq * 4);
 }
 
 static void plic_resume(struct irq_controller *ic)
 {
-	plic_setup(&plic_desc);
+	plic_setup(ic->data);
+	plic_percpu_init();
 }
 
 static const struct irq_controller_ops plic_intc_ops = {
@@ -205,55 +202,46 @@ static const struct irq_controller_ops plic_intc_ops = {
 	.irq_controller_resume = plic_resume
 };
 
-static int __init plic_parse_dts(struct plic_intc_desc *d,
+static int __init plic_parse_dts(struct plic_desc *d,
 	struct device_node *dn)
 {
 	int ret = -1;
-	unsigned long addr = 0;
-	size_t size = 0;
-	unsigned int hart0_machineuser_only = false;
-	unsigned int irqs[2] = {0};
 
-	ret = of_read_property_addr_size(dn, "reg", 0, &addr, &size);
+	d->regs = of_iomap(dn, 0);
+	if (d->regs == NULL)
+		return -EINVAL;
+
+	ret = of_irq_parse_max(dn, &d->max);
 	if (ret)
-		return -1;
+		return -EINVAL;
 
-	d->regs = iomap(addr, size);
-
-	ret = of_property_read_u32_array(dn, "interrupts", irqs, 2);
-	if (ret)
-		return -1;
-
-	d->hwirq = IS_ENABLED(CONFIG_RISCV_S_MODE) ? irqs[0] : irqs[1];
-
-	if (of_property_read_u32(dn, "hart0-machine-user-only",
-			&hart0_machineuser_only) == 0)
-		d->hart0_supervisor_supported = !hart0_machineuser_only;
-	else
-		d->hart0_supervisor_supported = __hart0_supervisor_supported;
-
-	ret = of_property_read_u32(dn, "max-irqs", &d->max);
-	if (ret)
-		return -1;
-
-	d->dn = dn;
-
-	IMSG("init %s %d irqs @ %d\n", dn->id.compat, d->max, d->hwirq);
+	IMSG("init %s %d irqs\n", dn->id.name, d->max);
 	return 0;
 }
 
-static void plic_link_parent(void)
+static void plic_percpu_init(void)
 {
-	struct plic_intc_desc *d = &plic_desc;
+	struct irq_controller *ic = NULL;
 
-	/* percpu link(register/enable) the plic @ its parent controller */
-	irq_of_register(d->dn, d->hwirq, plic_irq_handler, d->controller);
+	/*
+	 * currently there is only one plic in one RISCV system.
+	 * if there are multi-plic in one RISCV system in the future,
+	 * add a irq_for_each_matching_controller() to handle them all.
+	 */
+	ic = irq_matching_ops_controller(&plic_intc_ops);
+
+	/* percpu plic chained to its parent controller */
+	irq_chained_register(ic, IS_ENABLED(CONFIG_RISCV_S_MODE), plic_irq_handler, ic);
 }
-PERCPU_INIT_ROOT(plic_link_parent);
+PERCPU_INIT_ROOT(plic_percpu_init);
 
 static void __init plic_intc_init(struct device_node *dn)
 {
-	struct plic_intc_desc *d = &plic_desc;
+	struct plic_desc *d = NULL;
+
+	d = kmalloc(sizeof(*d));
+	if (d == NULL)
+		return;
 
 	if (plic_parse_dts(d, dn) != 0)
 		return;
@@ -261,9 +249,9 @@ static void __init plic_intc_init(struct device_node *dn)
 	plic_setup(d);
 
 	/*
-	 * create an interrupt controller, link it with its parent
-	 * controller later @ percpu routine -> plic_link_parent()
+	 * create an interrupt controller, it also will be chained to its
+	 * parent controller later at percpu routine -> plic_percpu_init()
 	 */
-	d->controller = irq_create_controller(d->dn, d->max + 1, &plic_intc_ops);
+	irq_create_controller(dn, d->max, &plic_intc_ops, d);
 }
 IRQ_CONTROLLER(plic, "riscv,plic", plic_intc_init);

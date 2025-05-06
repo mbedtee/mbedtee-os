@@ -67,10 +67,31 @@ static ssize_t pl011_gets(struct uart_port *p, char *buf, size_t count)
 	return pos;
 }
 
+static ssize_t pl011_poll_rx(struct uart_port *p)
+{
+	uint32_t rdbytes = 0, c = 0;
+	unsigned long flags = 0;
+
+	spin_lock_irqsave(&p->lock, flags);
+
+	/* Try to get data from FIFO */
+	while (!(ioread32(p->membase + PL011_FR) & PL011_FR_RXFE)) {
+		c = ioread32(p->membase + PL011_DR);
+		p->buf[p->wr++] = c & 0xff;
+		if (p->wr == sizeof(p->buf))
+			p->wr = 0;
+		rdbytes++;
+	}
+
+	spin_unlock_irqrestore(&p->lock, flags);
+
+	return rdbytes;
+}
+
 static void pl011_irq_handler(struct uart_port *p)
 {
-	uint32_t imsc = 0, fr = 0;
-	uint32_t stat = 0, c = 0;
+	uint32_t imsc = 0;
+	uint32_t stat = 0, rdbytes = 0;
 
 	imsc = ioread32(p->membase + PL011_IMSC);
 	stat = ioread32(p->membase + PL011_RIS) & imsc;
@@ -83,22 +104,13 @@ static void pl011_irq_handler(struct uart_port *p)
 				p->membase + PL011_ICR);
 
 		/* Try to get data from FIFO */
-		if (stat & (PL011_RTIC | PL011_RXIC)) {
-			fr = ioread32(p->membase + PL011_FR);
-			if ((fr & PL011_FR_RXFE) == 0) {
-				c = ioread32(p->membase + PL011_DR);
-				p->buf[p->wr++] = c & 0xff;
-				if (p->wr == sizeof(p->buf))
-					p->wr = 0;
-			} else {
-				break;
-			}
-		}
+		rdbytes += pl011_poll_rx(p);
 
 		stat = ioread32(p->membase + PL011_RIS) & imsc;
 	} while (stat);
 
-	wakeup(&p->wait_queue);
+	if (rdbytes)
+		wakeup(&p->wait_queue);
 }
 
 static void pl011_disable(struct uart_port *p)
@@ -108,6 +120,10 @@ static void pl011_disable(struct uart_port *p)
 	 */
 	iowrite32(0, p->membase + PL011_CR);
 	irq_unregister(p->irq);
+
+	pl011_irq_handler(p);
+	pl011_poll_rx(p);
+	wakeup(&p->wait_queue);
 }
 
 static void pl011_setup(struct uart_port *p)
@@ -154,15 +170,13 @@ static void pl011_setup(struct uart_port *p)
 				p->membase + PL011_CR);
 
 	spin_unlock_irqrestore(&p->lock, flags);
-
 }
 
 static void pl011_attach(struct uart_port *p)
 {
 	pl011_setup(p);
 
-	p->irq = irq_of_register(p->dn, p->hwirq,
-		(void *)pl011_irq_handler, p);
+	p->irq = irq_register(p->dn, (void *)pl011_irq_handler, p);
 
 	/*
 	 * Enable RX and RX interrupt
@@ -191,6 +205,7 @@ static void pl011_resume(struct uart_port *p)
 static const struct uart_ops pl011_port_ops = {
 	.tx = pl011_puts,
 	.rx = pl011_gets,
+	.poll_rx = pl011_poll_rx,
 	.suspend = pl011_suspend,
 	.resume = pl011_resume,
 	.attach = pl011_attach,

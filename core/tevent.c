@@ -137,6 +137,37 @@ void tevent_start(struct tevent *t, struct timespec *time)
 }
 
 /*
+ * add the tevent to the target CPU's timer list
+ * this tevent may not be triggered / handled immediately,
+ * because current cpu possibly can't set other CPU's timer hardware.
+ */
+void tevent_start_on(struct tevent *t, struct timespec *time, int cpu)
+{
+	struct timespec now;
+	unsigned long flags = 0;
+	struct percpu_ti *ti = NULL;
+
+	assert(VALID_CPUID(cpu));
+	assert(!INVALID_TIMESPEC(time));
+
+	spin_lock_irqsave(&t->lock, flags);
+	if (!tevent_active(t)) {
+		ti = &__percpu_ti[cpu];
+		read_time(&now);
+
+		timespecadd(&now, time, &t->expire);
+
+		spin_lock(&ti->lock);
+		if (tevent_queue_add(ti, t) == true) {
+			if (cpu == percpu_id())
+				__tevent_trigger_next(t, time);
+		}
+		spin_unlock(&ti->lock);
+	}
+	spin_unlock_irqrestore(&t->lock, flags);
+}
+
+/*
  * return true if it stopped this event,
  * otherwise return false (e.g. already been stopped, or not started).
  */

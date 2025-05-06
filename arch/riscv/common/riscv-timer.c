@@ -21,7 +21,7 @@ static struct arch_timer riscv_timer = {0};
 /* __noinline is required to avoid optimization to ecall_xx */
 static __noinline uint64_t riscv_read_cycles(void)
 {
-	if (__sstc_supported) {
+	if (sstc_supported()) {
 #if defined(CONFIG_64BIT)
 		return read_csr(CSR_TIME);
 #else
@@ -45,7 +45,7 @@ static void riscv_trigger_next(uint64_t cycles)
 
 	set_csr(CSR_IE, IE_TIE);
 
-	if (__sstc_supported) {
+	if (sstc_supported()) {
 #if defined(CONFIG_64BIT)
 		write_csr(CSR_STIMECMP, val);
 #else
@@ -77,11 +77,11 @@ static void riscv_timer_enable(struct arch_timer *t)
 	/*
 	 * Register the timer INT
 	 */
-	t->irq = irq_of_register(t->dn, t->hwirq, riscv_timer_isr, t);
+	t->irq = irq_register(t->dn, riscv_timer_isr, t);
 
-	IMSG("TimerFRQ: %ld.%02ldMhz hwirq: %d Sstc: %d\n",
+	IMSG("TimerFRQ: %ld.%02ldMhz irq: %d Sstc: %d\n",
 		t->frq / MICROSECS_PER_SEC,	(t->frq % MICROSECS_PER_SEC) * 100
-		/ MICROSECS_PER_SEC, t->hwirq, __sstc_supported);
+		/ MICROSECS_PER_SEC, t->irq, sstc_supported());
 }
 
 static void riscv_timer_disable(struct arch_timer *t)
@@ -108,10 +108,9 @@ static int __init riscv_timer_init(struct device_node *dn)
 	 * M-Mode clint-timer base address for forwarding
 	 * the timer functions to M-Mode
 	 */
-	if (!__sstc_supported) {
+	if (!sstc_supported()) {
 		clint = of_find_compatible_node(NULL, "riscv,clint-timer");
-		of_read_property_addr_size(clint, "reg", 0,
-				(unsigned long *)&t->base, NULL);
+		of_parse_io_resource(clint, 0, (unsigned long *)&t->base, NULL);
 		of_property_read_u32(clint, "clock-frequency", &t->frq);
 	}
 

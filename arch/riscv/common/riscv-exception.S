@@ -91,7 +91,10 @@ __mecall_exception:
 	beq a0, a7, __mecall_wrtime
 	li a7, ECALL_SENDIPI
 	beq a0, a7, __mecall_sendipi
-#	mret
+	li a7, ECALL_APLIC_D
+	beq a0, a7, __mecall_aplic_delegate
+	li a7, ECALL_APLIC_MSI
+	beq a0, a7, __mecall_aplic_msicfg
 	beqz zero, .
 
 __mecall_rdtime:
@@ -135,6 +138,21 @@ __mecall_sendipi:
 	li a7, 1
 	sw a7, (a3)
 	fence ow, orw
+	mret
+
+__mecall_aplic_delegate:
+	li a6, 1 << 10 /* sourcecfg D=1, Child=0 */
+	li a5, 0
+	add a1, a1, a2
+1:  sw a6, (a1)
+	addi a1, a1, BYTES_PER_INT
+	addi a5, a5, 1
+	blt	a5, a3, 1b
+	mret
+
+__mecall_aplic_msicfg:
+	sw a2, (a1)
+	sw a3, 4(a1)
 	mret
 
 FUNC_END exception_entry_mmode

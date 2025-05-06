@@ -266,6 +266,18 @@ void file_put(struct file *f)
 	}
 }
 
+bool file_can_poll(struct file *f)
+{
+	void *pollfn = NULL;
+
+	if (f->dev)
+		pollfn = ((struct device *)f->dev)->fops->poll;
+	else
+		pollfn = f->fops->poll;
+
+	return pollfn ? true : false;
+}
+
 int fdesc_alloc(struct file_desc **ppd,
 	const char *path, int fflags)
 {
@@ -310,8 +322,8 @@ static inline intptr_t fd_rbadd_cmp(
 	const struct rb_node *n,
 	const struct rb_node *ref)
 {
-	return rb_entry_of(n, struct file_desc, node)->fd -
-		rb_entry_of(ref, struct file_desc, node)->fd;
+	return (intptr_t)rb_entry_of(n, struct file_desc, node)->fd -
+		(intptr_t)rb_entry_of(ref, struct file_desc, node)->fd;
 }
 
 void fdesc_add(struct fdtab *fdt,

@@ -8,6 +8,7 @@
 #include <fs.h>
 #include <trace.h>
 #include <init.h>
+#include <poll.h>
 #include <ktime.h>
 #include <devfs.h>
 #include <strmisc.h>
@@ -386,7 +387,6 @@ static int devfs_open(struct file *f, mode_t mode, void *arg)
 
 		dev = n->priv;
 		f->dev = dev;
-
 		if (dev->fops->open == NULL) {
 			ret = -ENXIO;
 			goto out;
@@ -521,13 +521,16 @@ static int devfs_ioctl(struct file *f, int request, unsigned long arg)
 
 static int devfs_poll(struct file *f, struct poll_table *wait)
 {
+	int mask = POLLIN | POLLOUT | POLLRDNORM | POLLWRNORM;
 	struct device *dev = f->dev;
 
+	/*
+	 * return the default mask for poll/epoll
+ 	 */
 	if (dev == NULL)
-		return -EBADF;
-
+		return mask;
 	if (dev->fops->poll == NULL)
-		return -ENXIO;
+		return mask;
 
 	return dev->fops->poll(f, wait);
 }
@@ -911,7 +914,6 @@ static void __init dev_null_init(void)
 
 	device_register(dev);
 }
-
 
 static struct file_system devfs_root = {
 	.name = "devfs",

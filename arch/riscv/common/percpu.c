@@ -21,24 +21,26 @@ struct percpu percpu_dt[CONFIG_NR_CPUS]
 
 int __init cpu_data_init(void)
 {
-	int ret = -1, i = 0, start = 0;
+	int ret = -1, i = 0, start = 0, cnt = 0;
 /* +1 for E-Core, e.g. sifive_u S-mode */
-	int hartid_array[CONFIG_NR_CPUS + 1] = {0};
+	unsigned int hartid_array[CONFIG_NR_CPUS * 8] = {0};
 
-#if defined(CONFIG_RISCV_S_MODE)
-	start = __hart0_supervisor_supported ? 0 : 1;
-#endif
+	if (IS_ENABLED(CONFIG_RISCV_S_MODE))
+		start = __ctz(supervisor_bmap());
 
-	ret = of_property_read_s32_array(
+	ret = __of_property_read_u32_array(
 			of_find_compatible_node(NULL, "riscv,cpu"),
 			"cpus", hartid_array, CONFIG_NR_CPUS + start);
-	if (ret != 0)
+	if (ret < 0)
 		return ret;
 
-	for (i = 0; i < CONFIG_NR_CPUS; i++) {
+	cnt = min(CONFIG_NR_CPUS, ret - start);
+
+	for (i = 0; i < cnt; i++) {
 		percpu_dt[i].id = i;
 		percpu_dt[i].hartid = hartid_array[start++];
 		percpu_dt[i].stack = &common_stack[i + 1];
+		cpu_affinity_set(cpus_possible, i);
 	}
 
 	return 0;
@@ -50,7 +52,9 @@ void percpu_info(void)
 	int i = 0, pos = 0, xlen = 0;
 	struct percpu *pc = thiscpu;
 	static const char isa_order[] = "iemafdqclbjtpvnhkorwxyzg";
-	unsigned long isa = __misa;
+	unsigned long isa = 0;
+
+	isa = IS_ENABLED(CONFIG_RISCV_S_MODE) ? __misa : read_csr(misa);
 
 	if (isa != 0) {
 		xlen = isa >> (BITS_PER_LONG - 2);

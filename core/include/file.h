@@ -161,6 +161,8 @@ static inline void file_get(struct file *f)
 
 void file_put(struct file *f);
 
+bool file_can_poll(struct file *f);
+
 ssize_t sys_read(int fd, void *buf, size_t n);
 
 ssize_t sys_write(int fd, const void *buf, size_t n);

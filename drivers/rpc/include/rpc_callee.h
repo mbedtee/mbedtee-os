@@ -34,7 +34,8 @@ static inline long rpc_callee_handler(unsigned long remote)
 
 	rpc = phys_to_virt(remote);
 
-	if (!access_kern_ok((void *)rpc, sizeof(*rpc), PG_RW)) {
+	if (IS_ENABLED(CONFIG_MMU) && !access_kern_ok(
+		(void *)rpc, sizeof(*rpc), PG_RW)) {
 		EMSG("rpc remote badaddr %lx\n", remote);
 		return -EFAULT;
 	}
@@ -46,9 +47,8 @@ static inline long rpc_callee_handler(unsigned long remote)
 		if (rpc->waiter)
 			rpc_call(RPC_COMPLETE_REE, &remote, sizeof(remote));
 	} else {
-#if defined(CONFIG_RPC_YIELD)
-		ret = rpc_yield_handler(rpc->id, remote);
-#endif
+		if (IS_ENABLED(CONFIG_RPC_YIELD))
+			ret = rpc_yield_handler(rpc->id, remote);
 		rpc->ret = ret;
 	}
 

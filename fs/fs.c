@@ -12,6 +12,26 @@
 static SPIN_LOCK(__fslock);
 static LIST_HEAD(__fslist);
 
+/*
+ * if the fs_getpath assigns own folder for this proc,
+ * then create this folder to match the assigned prefix
+ */
+void fs_create(const char *name)
+{
+	unsigned long l = 0;
+	char path[FS_PATH_MAX];
+	struct file_system *fs = NULL, *_fs  = NULL;
+
+	list_for_each_entry_safe(fs, _fs, &__fslist, node) {
+		if (fs->getpath != fs_getpath)
+			continue;
+		l = snprintf(path, sizeof(path), "%s/%s", fs->mnt.path, name);
+		if (l >= sizeof(path))
+			continue;
+		sys_mkdir(path, 0700);
+	}
+}
+
 int fs_mount(struct file_system *fs)
 {
 	int ret = -1;
@@ -32,6 +52,11 @@ int fs_mount(struct file_system *fs)
 	list_add_tail(&fs->node, &__fslist);
 	spin_unlock_irqrestore(&__fslock, flags);
 
+	/* See fs_create() */
+	if ((IS_ENABLED(CONFIG_USER)) &&
+		(fs->getpath == fs_getpath))
+		process_handle_fs(fs->mnt.path);
+
 	return 0;
 }
 
@@ -40,20 +65,24 @@ int fs_umount(struct file_system *fs)
 	int ret = -EINVAL;
 	unsigned long flags = 0;
 	const char *path = NULL;
+	int (*umount)(struct file_system *fs) = NULL;
 
 	if (fs) {
 		spin_lock_irqsave(&__fslock, flags);
 		if (fs->refc == 0) {
 			path = fs->mnt.path;
 			list_del(&fs->node);
-			if (fs->umount)
-				fs->umount(fs);
+			umount = fs->umount;
 			ret = 0;
 		} else {
 			ret = -EBUSY;
 		}
 		spin_unlock_irqrestore(&__fslock, flags);
-		sys_rmdir(path);
+
+		if (umount)
+			umount(fs);
+		if (ret == 0)
+			sys_rmdir(path);
 	}
 
 	return ret;
@@ -129,7 +158,7 @@ int fs_getpath(struct file_path *p)
 	FMSG("alloc_path %s\n\n", p->path);
 
 	/*
-	 * rule is: /mnt/prefix/name
+	 * rule is: /mnt/prefix/file_dir_name
 	 * add prefix for each TA, each TA
 	 * access only to its own space
 	 */

@@ -789,13 +789,6 @@ retry_mkdir:
 	if (ret && (ret != EEXIST))
 		TRIGGER_EXCEPTION(ret);
 
-	ret = rmdir("/");
-	err = errno;
-	DMSG("rmdir %s ret=%d errno=%d @ %s\n", "/",
-		ret, err, strerror(errno));
-	if (!ret)
-		TRIGGER_EXCEPTION(err);
-
 	ret = rmdir(rootdir);
 	err = errno;
 	DMSG("rmdir %s ret=%d errno=%d @ %s\n",
@@ -2532,13 +2525,13 @@ static void sigtest(void)
 static void poll_test(void)
 {
 	int ret = -1, i = 0;
-	int nr = rand() % 10240 + 1;
+	int nr = rand() % 512 + 1;
 	char str[256] = {0};
 
 	int _fd = open("/dev/uart1", O_RDWR | O_NONBLOCK);
 	if (_fd < 0) {
 		if (!(rand() % 3))
-			_fd = open("/dev/null", O_RDWR | O_NONBLOCK);
+			_fd = open("/dev/urandom", O_RDWR | O_NONBLOCK);
 		else
 			_fd = open("/dev/uart0", O_RDWR | O_NONBLOCK);
 	}
@@ -2549,14 +2542,14 @@ static void poll_test(void)
 
 	if (fds) {
 		for (i = 0; i < nr; i++) {
-			fds[i].fd = _fd/*STDIN_FILENO*/;
+			fds[i].fd = _fd /*STDIN_FILENO*/;
 			fds[i].events = POLLIN;
 		}
 		ret = poll(fds, nr, 3000);
 		if (ret > 0)
 			read(_fd, str, sizeof(str) - 1);
 
-		IMSG("poll ret = %d errno %d str %s\n", ret, errno, str);
+		IMSG("poll %d ret = %d errno %d str %s\n", nr, ret, errno, str);
 
 		free(fds);
 	}
@@ -2601,7 +2594,7 @@ static void epoll_test1(void)
 
 	memset(epollfds, -1, sizeof(epollfds));
 
-	epfd = epoll_create(0);
+	epfd = epoll_create(1);
 	if (epfd < 0)
 		goto out;
 
@@ -2631,10 +2624,13 @@ static void epoll_test1(void)
 		for (i = 0; i < nr; i++) {
 			epollfds[i] = open("/dev/uart1", O_RDWR | O_NONBLOCK);
 			if (epollfds[i] < 0) {
-				if (!(rand() % 3))
+				if (!(rand() % 3)) {
 					epollfds[i] = open("/dev/null", O_RDWR | O_NONBLOCK);
-				else
+					LMSG("opened /dev/null %d\n", epollfds[i]);
+				} else {
 					epollfds[i] = open("/dev/uart0", O_RDWR | O_NONBLOCK);
+					LMSG("opened /dev/uart0 %d\n", epollfds[i]);
+				}
 			}
 			if (epollfds[i] < 0)
 				break;
@@ -2651,7 +2647,7 @@ static void epoll_test1(void)
 		}
 
 		nrevts = epoll_wait(epfd, evts, nr, randx % 4000);
-		IMSG("epoll_wait nrevts = %d[%d] errno %d\n", nrevts, nr, errno);
+		IMSG("epoll_wait %d nrevts = %d[%d] errno %d\n", i, nrevts, nr, errno);
 
 		for (n = 0; n < nrevts; n++) {
 			ret = read(evts[n].data.fd, str, sizeof(str) - 1);
@@ -2698,7 +2694,7 @@ static void epoll_test2(void)
 
 	memset(epollfds, -1, sizeof(epollfds));
 
-	epfd = epoll_create(0);
+	epfd = epoll_create(1);
 	if (epfd < 0)
 		goto out;
 
@@ -2728,10 +2724,13 @@ static void epoll_test2(void)
 		for (i = 0; i < nr; i++) {
 			epollfds[i] = open("/dev/uart1", O_RDWR | O_NONBLOCK);
 			if (epollfds[i] < 0) {
-				if (!(rand() % 3))
+				if (!(rand() % 3)) {
 					epollfds[i] = open("/dev/null", O_RDWR | O_NONBLOCK);
-				else
+					LMSG("opened /dev/null %d\n", epollfds[i]);
+				} else {
 					epollfds[i] = open("/dev/uart0", O_RDWR | O_NONBLOCK);
+					LMSG("opened /dev/uart0 %d\n", epollfds[i]);
+				}
 			}
 			if (epollfds[i] < 0)
 				break;
@@ -2753,7 +2752,7 @@ static void epoll_test2(void)
 		}
 
 		nrevts = epoll_wait(epfd, evts, nr, randx % 4000);
-		IMSG("epoll_wait nrevts = %d[%d] errno %d\n", nrevts, nr, errno);
+		IMSG("epoll_wait %d nrevts = %d[%d] errno %d\n", i, nrevts, nr, errno);
 
 		for (n = 0; n < nrevts; n++) {
 			ret = read(evts[n].data.fd, str, sizeof(str) - 1);
@@ -2777,6 +2776,7 @@ out:
 		ret = close(_fd);
 	if (randx % 2)
 		ret = close(epfd);
+	epfd = -1;
 }
 
 static void mbedtest(void)
@@ -2795,17 +2795,16 @@ static void mbedtest(void)
 	int timedout = 0;
 
 	if (access("/test", R_OK)) {
-		IMSG("creating test folders\n");
-		mkdir("/", 0700); /* create the "/mbedtest" */
-		mkdir("/test", 0700); /* create the "/mbedtest/test" */
-		mkdir("/user", 0700); /* create the "/user/mbedtest" if user-space enabled*/
-		mkdir("/ree", 0700); /* create the "/ree/mbedtest" if ree-fs enabled*/
-		mkdir("/shm/test", 0700); /* create the "/shm/test" */
+		mkdir("/test", 0700);
+		mkdir("/ree", 0700);
+		mkdir("/user", 0700);
+		mkdir("/shm/test", 0700);
 	}
 
 	time(&secs_raw);
 	clock_gettime(CLOCK_REALTIME, &tt1);
 	gettimeofday(&tv1, NULL);
+	srand(tv1.tv_sec + tv1.tv_usec);
 
 	info = localtime(&secs_raw);
 	IMSG("current date: %s", asctime(info));

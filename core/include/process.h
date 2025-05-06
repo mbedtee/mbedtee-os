@@ -27,8 +27,8 @@
 /* 32 ~ 8192 */
 #define PROCESS_THREAD_MAX (sched_idx_max)
 
-/* 256 FD per MB */
-#define PROCESS_FD_MAX (mem_size >> 12)
+/* 64 FD per MB */
+#define PROCESS_FD_MAX (mem_size >> 14)
 
 struct argv  {
 	int argc;

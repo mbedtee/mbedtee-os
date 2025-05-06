@@ -34,6 +34,12 @@ else ifeq ($(CONFIG_QEMU_VIRT_RISCV32),y)
 PLATFORM = qemu_virt_riscv32
 else ifeq ($(CONFIG_QEMU_VIRT_RISCV64),y)
 PLATFORM = qemu_virt_riscv64
+else ifeq ($(CONFIG_QEMU_VIRT_RISCV32_IMSIC),y)
+PLATFORM = qemu_virt_riscv32_imsic
+else ifeq ($(CONFIG_QEMU_VIRT_RISCV64_IMSIC),y)
+PLATFORM = qemu_virt_riscv64_imsic
+else ifeq ($(CONFIG_QEMU_VIRT_RISCV64_APLIC),y)
+PLATFORM = qemu_virt_riscv64_aplic
 else ifeq ($(CONFIG_QEMU_SIFIVE_U_RISCV32),y)
 PLATFORM = qemu_sifive_u_riscv32
 else ifeq ($(CONFIG_QEMU_SIFIVE_U_RISCV64),y)
@@ -56,4 +62,6 @@ else ifeq ($(CONFIG_QEMU_IMX7D),y)
 PLATFORM = qemu_imx7d
 else ifeq ($(CONFIG_QEMU_IMX8MP),y)
 PLATFORM = qemu_imx8mp
+else ifeq ($(CONFIG_QEMU_XIANGSHAN_KMH),y)
+PLATFORM = qemu_xiangshan_kmh
 endif

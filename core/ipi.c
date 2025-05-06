@@ -24,10 +24,10 @@
 #include <ipi.h>
 
 struct ipi_hdr {
-	/* callee function id */
-	unsigned short id;
+	/* callee function */
+	void *func;
 	/* content size of data-buffer */
-	unsigned short size;
+	unsigned int size;
 	/* if none zero, means the sync-ipi */
 	unsigned int tid;
 	/* data-buffer, for sync-ipi only */
@@ -54,8 +54,6 @@ static struct percpu_ipi {
 	struct spinlock sl;
 	unsigned char *mem;
 } __percpu_ipi[CONFIG_NR_CPUS] __aligned(64) = {0};
-
-static ipi_func_t ipifuncs[IPI_NR] = {NULL};
 
 static inline struct percpu_ipi *ipi_ringof(int cpu)
 {
@@ -117,16 +115,28 @@ static void ipi_ring_write(struct percpu_ipi *ring,
 	smp_mb();
 }
 
-int ipi_call(unsigned int id, unsigned int cpu,
+static bool ipi_is_valid_func(void *func)
+{
+	unsigned long callee = (unsigned long)func;
+
+	if (callee >= __text_start() && callee < __rodata_end())
+		return true;
+
+	return false;
+}
+
+int ipi_call(void *func, unsigned int cpu,
 	const void *data, size_t size)
 {
-	int ret = -EPERM, retrycnt = 0;
 	unsigned long flags = 0;
 	struct ipi_hdr hdr;
 	struct percpu_ipi *ring = NULL;
+	int ret = -EPERM, retrycnt = 0;
 
-	if ((size > IPI_MSG_MAX_SIZE) || (id >= IPI_NR)
-		|| !cpu_online(cpu))
+	if (!ipi_is_valid_func(func))
+		return -EINVAL;
+
+	if ((size > IPI_MSG_MAX_SIZE) || !cpu_online(cpu))
 		return -EINVAL;
 
 	if (!data && size)
@@ -150,7 +160,7 @@ int ipi_call(unsigned int id, unsigned int cpu,
 	/* similar as TLV (NAME + SIZE + DATA) */
 
 	/* enqueue the ipi_hdr + DATA */
-	hdr.id = id;
+	hdr.func = func;
 	hdr.size = size;
 	hdr.tid = 0; /* tid == 0, means for async-ipi */
 	ipi_ring_write(ring, (void *)&hdr, sizeof(hdr));
@@ -161,12 +171,13 @@ int ipi_call(unsigned int id, unsigned int cpu,
 	ret = 0;
 
 out:
-	raise_softint(SOFTINT_IPI, cpu);
+	if (ret == 0)
+		softint_raise(SOFTINT_IPI, cpu);
 	spin_unlock_irqrestore(&ring->sl, flags);
 	return ret;
 }
 
-int ipi_call_sync(unsigned int id, unsigned int cpu,
+int ipi_call_sync(void *func, unsigned int cpu,
 	void *data, size_t size)
 {
 	int ret = -EPERM, retrycnt = 0;
@@ -175,27 +186,32 @@ int ipi_call_sync(unsigned int id, unsigned int cpu,
 	struct percpu_ipi *ring = NULL;
 	struct ipi_hdr hdr;
 
-	if (!cpu_online(cpu) || (id >= IPI_NR))
+	if (!ipi_is_valid_func(func))
+		return -EINVAL;
+
+	if (!cpu_online(cpu) || !func)
 		return -EINVAL;
 
 	ring = ipi_ringof(cpu);
 
-	while (++retrycnt < 20 && !ipi_ring_enough(ring,
-			sizeof(struct ipi_hdr)))
+	while (!ipi_ring_enough(ring, sizeof(struct ipi_hdr))) {
+		if (!cpu_online(cpu))
+			return -EINVAL;
 		usleep(100);
+		if ((++retrycnt % 200) == 0)
+			EMSG("%d ipi ring not enough, wr %d rd %d\n",
+				cpu, ring->wr, ring->rd);
+	}
 
 	spin_lock_irqsave(&ring->sl, flags);
-	if (!ipi_ring_enough(ring, sizeof(struct ipi_hdr))) {
-		EMSG("%d ipi ring not enough, wr %d rd %d\n",
-			cpu, ring->wr, ring->rd);
-		ret = -ENOMEM;
-		goto out;
-	}
+
+	while (!ipi_ring_enough(ring, sizeof(struct ipi_hdr)))
+		;
 
 	t->wait_q.condi = false;
 
 	/* enqueue the ipi_hdr + DATA_PTR */
-	hdr.id = id;
+	hdr.func = func;
 	hdr.size = size;
 	hdr.data = data;
 	hdr.tid = t->id; /* tid != 0, means for sync-ipi */
@@ -204,13 +220,10 @@ int ipi_call_sync(unsigned int id, unsigned int cpu,
 
 	ret = 0;
 
-out:
-	raise_softint(SOFTINT_IPI, cpu);
+	softint_raise(SOFTINT_IPI, cpu);
 	spin_unlock_irqrestore(&ring->sl, flags);
 
-	if (ret == 0)
-		wait(&t->wait_q);
-
+	wait(&t->wait_q);
 	return ret;
 }
 
@@ -280,7 +293,6 @@ static struct ipi_work *ipi_pick_next(
 	struct ipi_work *c,
 	void *inlinebuffer)
 {
-	ipi_func_t func = NULL;
 	struct ipi_hdr hdr;
 
 	if (ipi_available_size(ring) < sizeof(hdr))
@@ -288,17 +300,8 @@ static struct ipi_work *ipi_pick_next(
 
 	ipi_ring_read(ring, &hdr, sizeof(hdr));
 
-	if (hdr.id >= IPI_NR) {
-		panic("invalid ipi %d ??\n", hdr.id);
-		return NULL;
-	}
-
 	if (hdr.size > ring->size)
-		panic("invalid hdr %d ??\n", hdr.size);
-
-	func = ipifuncs[hdr.id];
-	if (func == NULL)
-		panic("ipi %d unregister??\n", hdr.id);
+		EMSG("invalid hdr %d ??\n", hdr.size);
 
 	if (hdr.tid == 0) {
 		/* async ipi notification from peer */
@@ -317,7 +320,7 @@ static struct ipi_work *ipi_pick_next(
 
 	c->size = hdr.size;
 	c->tid = hdr.tid;
-	c->func = func;
+	c->func = hdr.func;
 
 	return c;
 }
@@ -334,8 +337,9 @@ static void ipi_yield(struct work *w)
 	kfree(c);
 }
 
-static void ipi_isr(void *unused)
+static int ipi_isr(void *unused)
 {
+	int cnt = 0;
 	struct ipi_work iw, *c = &iw;
 	unsigned char buffer[IPI_MSG_MAX_SIZE];
 	struct percpu_ipi *ring = ipi_ringof(percpu_id());
@@ -356,22 +360,10 @@ static void ipi_isr(void *unused)
 			INIT_WORK(&c->work, ipi_yield);
 			schedule_highpri_work_on(percpu_id(), &c->work);
 		}
+		cnt++;
 	}
-}
 
-int ipi_register(unsigned int id, ipi_func_t func)
-{
-	if (id >= IPI_NR)
-		return -EINVAL;
-
-	ipifuncs[id] = func;
-	return 0;
-}
-
-void ipi_unregister(unsigned int id)
-{
-	if (id < IPI_NR)
-		ipifuncs[id] = NULL;
+	return cnt;
 }
 
 void ipi_init(void)
@@ -384,12 +376,12 @@ void ipi_init(void)
 	spin_lock_irqsave(&ring->sl, flags);
 
 	ring->rd = ring->wr = 0;
-	ring->size = 2048;
+	ring->size = sizeof(long) * 512;
 	ring->mem = kmalloc(ring->size);
 
 	spin_unlock_irqrestore(&ring->sl, flags);
 
-	if (register_softint(SOFTINT_IPI, ipi_isr, NULL) < 0)
+	if (softint_register(SOFTINT_IPI, ipi_isr, NULL) < 0)
 		cpu_set_error();
 
 	if (ring->mem == NULL)

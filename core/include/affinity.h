@@ -13,6 +13,10 @@ struct cpu_affinity {
 	DECLARE_BITMAP(cpus, CONFIG_NR_CPUS);
 };
 
+extern struct cpu_affinity cpus_online[1];
+extern struct cpu_affinity cpus_error[1];
+extern struct cpu_affinity cpus_possible[1];
+
 /*
  * Set the bit@idx in a cpu_affinity struct
  */
@@ -29,7 +33,7 @@ static inline void cpu_affinity_clear(struct cpu_affinity *affinity, unsigned in
 	bitmap_clear_bit(affinity->cpus, idx);
 }
 
-static inline bool cpu_affinity_isset(struct cpu_affinity *affinity, unsigned int idx)
+static inline bool cpu_affinity_isset(const struct cpu_affinity *affinity, unsigned int idx)
 {
 	return bitmap_bit_isset(affinity->cpus, idx);
 }
@@ -43,7 +47,7 @@ static inline bool cpu_affinity_isset(struct cpu_affinity *affinity, unsigned in
  * return #nbits if the input bits between start/nbits are all zero.
  */
 static inline unsigned int cpu_affinity_next_one(
-	struct cpu_affinity *affinity, unsigned int start)
+	const struct cpu_affinity *affinity, unsigned int start)
 {
 	return bitmap_next_one(affinity->cpus, CONFIG_NR_CPUS, start);
 }
@@ -57,29 +61,37 @@ static inline unsigned int cpu_affinity_next_one(
  * return #nbits if the input bits between start/nbits are all set.
  */
 static inline unsigned int cpu_affinity_next_zero(
-	struct cpu_affinity *affinity, unsigned int start)
+	const struct cpu_affinity *affinity, unsigned int start)
 {
 	return bitmap_next_zero(affinity->cpus, CONFIG_NR_CPUS, start);
+}
+
+/*
+ * return the max. number of possible CPUs
+ */
+static inline unsigned int cpu_max_possible_num(void)
+{
+	return bitmap_fls(cpus_possible->cpus, BITMAP_LONG(CONFIG_NR_CPUS)) + 1;
 }
 
 static inline void cpu_affinity_and(
 	struct cpu_affinity *dst, const struct cpu_affinity *a1,
 	const struct cpu_affinity *a2)
 {
-	bitmap_and(dst->cpus, a1->cpus, a2->cpus, CONFIG_NR_CPUS);
+	bitmap_and(dst->cpus, a1->cpus, a2->cpus, cpu_max_possible_num());
 }
 
 static inline void cpu_affinity_or(
 	struct cpu_affinity *dst, const struct cpu_affinity *a1,
 	const struct cpu_affinity *a2)
 {
-	bitmap_or(dst->cpus, a1->cpus, a2->cpus, CONFIG_NR_CPUS);
+	bitmap_or(dst->cpus, a1->cpus, a2->cpus, cpu_max_possible_num());
 }
 
 static inline void cpu_affinity_copy(
 	struct cpu_affinity *dst, const struct cpu_affinity *src)
 {
-	bitmap_copy(dst->cpus, src->cpus, CONFIG_NR_CPUS);
+	bitmap_copy(dst->cpus, src->cpus, cpu_max_possible_num());
 }
 
 static inline void cpu_affinity_zero(struct cpu_affinity *dst)
@@ -89,13 +101,12 @@ static inline void cpu_affinity_zero(struct cpu_affinity *dst)
 
 static inline void cpu_affinity_fill(struct cpu_affinity *dst)
 {
-	bitmap_fill(dst->cpus, CONFIG_NR_CPUS);
+	cpu_affinity_copy(dst, cpus_possible);
 }
 
-extern struct cpu_affinity cpus_online[1];
-extern struct cpu_affinity cpus_error[1];
+#define VALID_CPUID(cpu)		((unsigned int)(cpu) < cpu_max_possible_num())
 
-#define cpu_affinity_valid(cpu) ((unsigned int)(cpu) < (CONFIG_NR_CPUS))
+#define cpu_affinity_valid(cpu)	VALID_CPUID(cpu)
 
 #define cpu_affinity_empty(affinity) \
 	(!cpu_affinity_valid(cpu_affinity_next_one((affinity), 0)))
@@ -103,6 +114,9 @@ extern struct cpu_affinity cpus_error[1];
 #define for_each_affinity_cpu(bit, affinity) \
 	for ((bit) = 0; (bit) = cpu_affinity_next_one((affinity), (bit)), \
 			cpu_affinity_valid(bit); (bit)++)
+
+#define for_each_possible_cpu(cpu)       \
+	for_each_affinity_cpu((cpu), cpus_possible)
 
 #define for_each_online_cpu(cpu)         \
 	for_each_affinity_cpu((cpu), cpus_online)

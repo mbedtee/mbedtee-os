@@ -56,15 +56,15 @@ static void ramfs_ta_transfer(struct work *w)
 	off_t fd = -1, offset = 0;
 	off_t rdbytes = 0, bsize = 0;
 
-	fd = reefs_rpc_open(REEFS_BINARY, O_RDONLY);
-	if (fd < 0) {
+	if (!rpc_test_callee() || ((fd = reefs_rpc_open(
+			REEFS_BINARY, O_RDONLY)) < 0)) {
 		DMSG("%s not ready ret %ld\n", REEFS_BINARY, fd);
 		schedule_delayed_work(&dw, 200000);
 		return;
 	}
 
 	while (offset < tsize) {
-		bsize = min((off_t)(PAGE_SIZE * 4), tsize - offset);
+		bsize = min((off_t)(PAGE_SIZE * 7), tsize - offset);
 		rdbytes = reefs_rpc_read(fd, buff + offset, bsize);
 		if (rdbytes <= 0) {
 			EMSG("rdbytes 0x%lx @ 0x%lx\n", rdbytes, bsize);
@@ -119,7 +119,7 @@ static void __init ramfs_ta_init(void)
 	ramfs_ta.mnt.size = ramfs_ta_size();
 
 	INIT_DELAYED_WORK(&dw, ramfs_ta_transfer);
-	schedule_delayed_work(&dw, 3000000);
+	schedule_delayed_work(&dw, 1000000);
 }
 
 MODULE_INIT_LATE(ramfs_ta_init);

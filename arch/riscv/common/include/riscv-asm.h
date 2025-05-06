@@ -52,6 +52,93 @@
 	LDR tp, PERCPU_CURRENT_THREAD(tp)
 .endm
 
+.macro delay_asm
+	li a3, 5555
+2:	li a2, 5555
+1:	addi a2, a2, -1
+	bnez a2, 1b
+	addi a3, a3, -1
+	bnez a3, 2b
+.endm
+
+.macro csr_writeable tvec, csr, val
+/* backup the exception entry */
+	csrr a1, \tvec
+	la a2, 11f
+	csrw \tvec, a2
+	li a0, 0
+
+/* a0 holds the return value */
+	li a2, \val
+	csrw \csr, a2
+	li a0, 1
+
+/* resume exception entry */
+	.align 2
+11:	csrw \tvec, a1
+.endm
+
+.macro is_readable addrreg
+/* backup the s-mode exception entry */
+	csrr a1, stvec
+	la a2, 22f
+	csrw stvec, a2
+
+	move a2, \addrreg
+	li a0, 0
+
+/* a0 holds the return value */
+	lw a2, (a2)
+
+	li a0, 1
+
+/* resume s-mode exception entry */
+	.align 2
+22:	csrw stvec, a1
+.endm
+
+.macro set_menvcfg
+	/* backup the m-mode exception entry */
+	csrr a1, mtvec
+	/* check if the menvcfg exist or not */
+	la a2, 33f
+	csrw mtvec, a2
+
+#if defined(CONFIG_64BIT)
+	li a2, (1 << 63) | (1 << 62) /* STCE / PBMTE */
+	or a2, a2, 0xf0  /* CBZE / CBCFE / CBIE / without-FIOM */
+	csrw menvcfg, a2
+#else
+	csrw mstatush, zero
+	li a2, (1 << 31) | (1 << 30) /* STCE / PBMTE */
+	csrw menvcfgh, a2
+	li a2, 0xf0  /* CBZE / CBCFE / CBIE / without-FIOM */
+	csrw menvcfg, a2
+#endif
+
+	.align 2
+33:	csrw mtvec, a1 /* resume m-mode exception entry */
+.endm
+
+.macro set_mstateen0
+	/* backup the m-mode exception entry */
+	csrr a1, mtvec
+	/* check if the mstateen0 exist or not */
+	la a2, 44f
+	csrw mtvec, a2
+
+#if defined(CONFIG_64BIT)
+	li a2, (1 << 60) | (1 << 59) | (1 << 58)
+	csrw mstateen0, a2
+#else
+	li a2, (1 << 28) | (1 << 27) | (1 << 26)
+	csrw mstateen0h, a2
+#endif
+
+	.align 2
+44:	csrw mtvec, a1 /* resume m-mode exception entry */
+.endm
+
 /* Using PMP TOR: pmpaddr[i-1] <= y < pmpaddr[i] */
 .macro set_pmp
 	/* pmp0cfg: 0 ~ 0x7FFFFFFF is set to RW (major for IO) */
@@ -101,6 +188,7 @@
 	li t2, 1 << 3 | 1 << 7 | 7
 	csrw pmpcfg1, t2
 #endif
+	sfence.vma
 .endm
 
 /*

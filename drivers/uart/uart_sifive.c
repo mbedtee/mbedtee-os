@@ -100,9 +100,29 @@ static ssize_t uart_sifive_gets(struct uart_port *p, char *buf, size_t count)
 	return pos;
 }
 
+static ssize_t uart_sifive_poll_rx(struct uart_port *p)
+{
+	unsigned int rdbytes = 0, rxval = 0;
+	unsigned long flags = 0;
+
+	spin_lock_irqsave(&p->lock, flags);
+
+	while (!((rxval = uart_sifive_ioread(p, UART_RXFIFO))
+			& UART_RXEMPTY)) {
+		p->buf[p->wr] = rxval & 0xff;
+		if (++p->wr == sizeof(p->buf))
+			p->wr = 0;
+		rdbytes++;
+	}
+
+	spin_unlock_irqrestore(&p->lock, flags);
+
+	return rdbytes;
+}
+
 static void uart_sifive_irq_handler(struct uart_port *p)
 {
-	unsigned int ip = 0, rxval = 0;
+	unsigned int ip = 0, rdbytes = 0;
 
 	ip = uart_sifive_ioread(p, UART_IP);
 	if (ip == 0) /* no interrupt */
@@ -111,18 +131,10 @@ static void uart_sifive_irq_handler(struct uart_port *p)
 	if (!(ip & UART_IPRX)) /* not for Rx */
 		return;
 
-	do {
-		rxval = uart_sifive_ioread(p, UART_RXFIFO);
+	rdbytes = uart_sifive_poll_rx(p);
 
-		if (rxval & UART_RXEMPTY)
-			break;
-
-		p->buf[p->wr] = rxval & 0xff;
-		if (++p->wr == sizeof(p->buf))
-			p->wr = 0;
-	} while (1);
-
-	wakeup(&p->wait_queue);
+	if (rdbytes)
+		wakeup(&p->wait_queue);
 }
 
 static void uart_sifive_disable(struct uart_port *p)
@@ -130,6 +142,10 @@ static void uart_sifive_disable(struct uart_port *p)
 	uart_sifive_iowrite(p, UART_IE, 0);
 
 	irq_unregister(p->irq);
+
+	uart_sifive_irq_handler(p);
+	uart_sifive_poll_rx(p);
+	wakeup(&p->wait_queue);
 }
 
 /**
@@ -178,8 +194,7 @@ static void uart_sifive_attach(struct uart_port *p)
 {
 	uart_sifive_setup(p);
 
-	p->irq = irq_of_register(p->dn, p->hwirq,
-		(void *)uart_sifive_irq_handler, p);
+	p->irq = irq_register(p->dn, (void *)uart_sifive_irq_handler, p);
 
 	/*
 	 * Enable RX and RX interrupt
@@ -206,6 +221,7 @@ static void uart_sifive_resume(struct uart_port *p)
 static const struct uart_ops uart_sifive_port_ops = {
 	.tx = uart_sifive_puts,
 	.rx = uart_sifive_gets,
+	.poll_rx = uart_sifive_poll_rx,
 	.suspend = uart_sifive_suspend,
 	.resume = uart_sifive_resume,
 	.attach = uart_sifive_attach,

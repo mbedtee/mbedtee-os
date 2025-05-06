@@ -36,8 +36,6 @@
 #define IRQ_MASK            (UL(1) << 7)
 #define FIQ_MASK            (UL(1) << 6)
 
-#define VALID_CPUID(x)      ((unsigned int)(x) < CONFIG_NR_CPUS)
-
 #if defined(CONFIG_ARM_BIGLITTLE)
 #define MPIDR_BITMASK       UL(0x00ffffff)
 #else

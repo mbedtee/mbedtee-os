@@ -9,19 +9,18 @@
 #include <defs.h>
 #include <errno.h>
 #include <stdint.h>
+
+#include <bitops.h>
 #include <printk.h>
 #include <atomic.h>
 #include <kmalloc.h>
 
 int ida_init(struct ida *ida, unsigned int total)
 {
-	unsigned int nbits = 0;
-
 	if ((total == 0) || (ida->bitmap != NULL))
 		return -EINVAL;
 
-	nbits = roundup(total, BITS_PER_LONG);
-	ida->bitmap = kzalloc(nbits / 8);
+	ida->bitmap = bitmap_zalloc(total);
 	if (ida->bitmap == NULL)
 		return -ENOMEM;
 

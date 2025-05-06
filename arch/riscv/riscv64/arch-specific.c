@@ -14,8 +14,11 @@
 
 void arch_specific_init(void)
 {
+	int cpu = 0;
+
 	/* only CPU 0 does this, up the other CPUs */
-	if (percpu_id() == 0)
-		for (int i = 1; i < CONFIG_NR_CPUS; i++)
-			cpu_up(i, -1);
+	if (percpu_id() == 0) {
+		for_each_possible_cpu(cpu)
+			cpu_up(cpu, -1);
+	}
 }

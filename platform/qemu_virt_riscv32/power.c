@@ -15,13 +15,10 @@
 #include <timer.h>
 #include <driver.h>
 #include <cacheops.h>
-#include <interrupt.h>
 
 #include <power.h>
 
 #if CONFIG_NR_CPUS > 1
-
-unsigned int cpu_hartid;
 
 #define CPU_HARTID(x) (((unsigned int)(x) << 16) | hartid_of(x))
 
@@ -29,22 +26,22 @@ static int virt_riscv_cpu_up(unsigned int cpu)
 {
 	unsigned int intime = 10000;
 
-	cpu_hartid = CPU_HARTID(cpu);
+	cpu_power_id = CPU_HARTID(cpu);
 
 	do {
 		/*
-		 * #cpu_hartid is possibly updating by peer,
+		 * #cpu_power_id is possibly updating by peer,
 		 * make sure it's update to date for current CPU
 		 */
 		smp_mb();
 
-		if (cpu_hartid != CPU_HARTID(cpu))
+		if (cpu_power_id != CPU_HARTID(cpu))
 			break;
 
 		udelay(5);
 	} while (--intime);
 
-	if (cpu_hartid == CPU_HARTID(cpu) || !intime)
+	if (cpu_power_id == CPU_HARTID(cpu) || !intime)
 		return -1;
 
 	return 0;
@@ -83,8 +80,7 @@ static int __init cpu_power_probe(struct device *dev)
 
 	IMSG("init %s\n", dn->id.compat);
 
-	ret = of_read_property_addr_size(dn, "reg", 0,
-			&addr, &bsize);
+	ret = of_parse_io_resource(dn, 0, &addr, &bsize);
 	if (ret != 0) {
 		WMSG("cpu-power dts\n");
 		return ret;

@@ -18,26 +18,25 @@
 struct intc_soc_desc {
 	void *base;
 	unsigned int max;
-	unsigned int parent_gic;
 };
 
 static void intc_soc_enable(struct irq_desc *d)
 {
-	struct intc_soc_desc *isd = d->controller->data;
-	void *base = isd->base + INTC_SOC_ENABLE_REG;
+	struct intc_soc_desc *intc = d->controller->data;
+	void *base = intc->base + INTC_SOC_ENABLE_REG;
 	unsigned int bit = d->hwirq;
 
-	if (bit < isd->max)
+	if (bit < intc->max)
 		iowrite32(ioread32(base) | (1 << bit), base);
 }
 
 static void intc_soc_disable(struct irq_desc *d)
 {
-	struct intc_soc_desc *isd = d->controller->data;
-	void *base = isd->base + INTC_SOC_ENABLE_REG;
+	struct intc_soc_desc *intc = d->controller->data;
+	void *base = intc->base + INTC_SOC_ENABLE_REG;
 	unsigned int bit = d->hwirq;
 
-	if (bit < isd->max)
+	if (bit < intc->max)
 		iowrite32(ioread32(base) & (~(1 << bit)), base);
 }
 
@@ -55,52 +54,36 @@ static void intc_soc_handler(void *data)
 {
 	uint32_t hwirq = 0;
 	struct irq_controller *ic = data;
-	struct intc_soc_desc *isd = ic->data;
-	unsigned long stat = ioread32(isd->base + INTC_SOC_STATUS_REG);
+	struct intc_soc_desc *intc = ic->data;
+	unsigned long stat = ioread32(intc->base + INTC_SOC_STATUS_REG);
 
-	for_each_set_bit(hwirq, &stat, isd->max) {
+	for_each_set_bit(hwirq, &stat, intc->max) {
 		irq_generic_invoke(ic, hwirq);
-		iowrite32(BIT(hwirq), isd->base + INTC_SOC_STATUS_REG);
+		iowrite32(BIT(hwirq), intc->base + INTC_SOC_STATUS_REG);
 	}
 }
 
 static void __init intc_soc_init(struct device_node *dn)
 {
 	int ret = -1;
-	unsigned long base = 0;
-	size_t size = 0;
-	struct intc_soc_desc *d = NULL;
+	struct intc_soc_desc *intc = NULL;
 	struct irq_controller *ic = NULL;
 
-	d = kmalloc(sizeof(struct intc_soc_desc));
-	if (d == NULL) {
-		EMSG("failed alloc for %s\n", dn->id.name);
+	intc = kmalloc(sizeof(struct intc_soc_desc));
+	if (intc == NULL)
 		return;
-	}
 
-	ret = of_read_property_addr_size(dn, "reg", 0, &base, &size);
-	if (ret != 0) {
-		EMSG("error parsing %s\n", dn->id.name);
-		return;
-	}
-
-	ret = of_property_read_u32(dn, "max-irqs", &d->max);
+	ret = of_irq_parse_max(dn, &intc->max);
 	if (ret)
 		return;
 
-	ret = of_property_read_u32(dn, "interrupts", &d->parent_gic);
-	if (ret)
-		return;
-
-	d->base = iomap(base, size);
+	intc->base = of_iomap(dn, 0);
 
 	/* create an interrupt controller */
-	ic = irq_create_controller(dn, d->max, &__intc_soc_ops);
-	/* link(register/enable) the irq @ its parent controller */
-	irq_register(ic->parent, d->parent_gic, intc_soc_handler, ic);
+	ic = irq_create_controller(dn, intc->max, &__intc_soc_ops, intc);
+	/* current controller's irq being chained to its parent controller */
+	irq_chained_register(ic, 0, intc_soc_handler, ic);
 
-	ic->data = d;
-
-	IMSG("%s irqs %d\n", dn->id.name, d->max);
+	IMSG("%s irqs %d\n", dn->id.name, intc->max);
 }
 IRQ_CONTROLLER(ast2700_intc, "aspeed,ast2700-intc", intc_soc_init);

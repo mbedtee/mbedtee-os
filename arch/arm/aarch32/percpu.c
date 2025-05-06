@@ -29,18 +29,20 @@ unsigned long common_stack[CONFIG_NR_CPUS][STACK_SIZE/sizeof(long)]
 
 int __init cpu_data_init(void)
 {
-	int ret = -1, i = 0, mpid_array[CONFIG_NR_CPUS] = {0};
+	int ret = -1, i = 0;
+	unsigned int mpid_array[CONFIG_NR_CPUS] = {0};
 
-	ret = of_property_read_s32_array(
+	ret = __of_property_read_u32_array(
 			of_find_compatible_node(NULL, "arm,cpu"),
 			"cpus", mpid_array, CONFIG_NR_CPUS);
-	if (ret != 0)
+	if (ret < 0)
 		return ret;
 
-	for (i = 0; i < CONFIG_NR_CPUS; i++) {
+	for (i = 0; i < ret; i++) {
 		percpu_dt[i].id = i;
 		percpu_dt[i].mpid = mpid_array[i];
 		percpu_dt[i].stack = &common_stack[i + 1];
+		cpu_affinity_set(cpus_possible, i);
 	}
 
 	return 0;

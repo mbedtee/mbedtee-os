@@ -20,18 +20,17 @@
 
 #include <property.h>
 
-static SPIN_LOCK(pconf_sl);
 static LIST_HEAD(pconfigs);
+static DECLARE_MUTEX(pconf_mtx);
 
 struct process_config *process_config_of(const TEE_UUID *uuid)
 {
 	struct process_config *c = NULL, *ret = NULL;
-	unsigned long flags = 0;
 
 	if (!uuid)
 		return NULL;
 
-	spin_lock_irqsave(&pconf_sl, flags);
+	mutex_lock(&pconf_mtx);
 	list_for_each_entry(c, &pconfigs, node) {
 		if (memcmp(uuid, &c->uuid,
 			sizeof(TEE_UUID)) == 0) {
@@ -39,7 +38,7 @@ struct process_config *process_config_of(const TEE_UUID *uuid)
 			break;
 		}
 	}
-	spin_unlock_irqrestore(&pconf_sl, flags);
+	mutex_unlock(&pconf_mtx);
 
 	return ret;
 }
@@ -48,21 +47,40 @@ const TEE_UUID *process_uuid_of(const char *name)
 {
 	TEE_UUID *ret = NULL;
 	struct process_config *c = NULL;
-	unsigned long flags = 0;
 
 	if (!name)
 		return NULL;
 
-	spin_lock_irqsave(&pconf_sl, flags);
+	mutex_lock(&pconf_mtx);
 	list_for_each_entry(c, &pconfigs, node) {
 		if (strcmp(name, c->name) == 0) {
 			ret = &c->uuid;
 			break;
 		}
 	}
-	spin_unlock_irqrestore(&pconf_sl, flags);
+	mutex_unlock(&pconf_mtx);
 
 	return ret;
+}
+
+void process_handle_fs(const char *mnt)
+{
+	struct process_config *c = NULL;
+	unsigned long l = 0;
+	char path[FS_PATH_MAX];
+
+	mutex_lock(&pconf_mtx);
+
+	list_for_each_entry(c, &pconfigs, node) {
+		if (!c->privilege) {
+			l = snprintf(path, sizeof(path), "%s/%s", mnt, c->name);
+			if (l >= sizeof(path))
+				continue;
+			sys_mkdir(path, 0700);
+		}
+	}
+
+	mutex_unlock(&pconf_mtx);
 }
 
 static char *strstr_of(char *buf, const char *e)
@@ -261,10 +279,9 @@ out:
 
 static int process_duplicated(const char *name, TEE_UUID *uuid)
 {
-	unsigned long flags = 0;
 	struct process_config *c = NULL, *ret = NULL;
 
-	spin_lock_irqsave(&pconf_sl, flags);
+	mutex_lock(&pconf_mtx);
 
 	list_for_each_entry(c, &pconfigs, node) {
 		if (memcmp(uuid, &c->uuid, sizeof(TEE_UUID)) == 0 ||
@@ -274,7 +291,7 @@ static int process_duplicated(const char *name, TEE_UUID *uuid)
 		}
 	}
 
-	spin_unlock_irqrestore(&pconf_sl, flags);
+	mutex_unlock(&pconf_mtx);
 
 	return (ret != NULL);
 }
@@ -458,7 +475,6 @@ int process_config_set(char *config, size_t size, bool privilege)
 	int e_size = 0, name_l = 0;
 	const char *eoc = config + size;
 	struct process_config *c = NULL;
-	unsigned long flags = 0;
 	char *str = NULL;
 	TEE_UUID uuid;
 
@@ -570,11 +586,11 @@ int process_config_set(char *config, size_t size, bool privilege)
 	mutex_init(&c->inst_lock);
 
 	if (c->privilege == false)
-		sys_mkdir(c->name, 0700);
+		fs_create(c->name);
 
-	spin_lock_irqsave(&pconf_sl, flags);
+	mutex_lock(&pconf_mtx);
 	list_add_tail(&c->node, &pconfigs);
-	spin_unlock_irqrestore(&pconf_sl, flags);
+	mutex_unlock(&pconf_mtx);
 
 	return 0;
 

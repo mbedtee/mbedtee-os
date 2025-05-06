@@ -88,6 +88,11 @@ int sched_getaffinity(pid_t id,
 /* yield the processor to other threads */
 void schedule(void);
 
+/*
+ * ipi call to trigger schedule() (on the specified #cpu)
+ */
+void sched_ipi_trigger(unsigned int cpu);
+
 /* init the scheduler */
 void sched_init(void);
 

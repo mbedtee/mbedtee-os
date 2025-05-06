@@ -2106,6 +2106,10 @@ int fat_mount(struct file_system *pfs)
 	memset(&fs->root, 0, sizeof(fs->root));
 	fs->root.attr = ATTR_DIR | ATTR_RO | ATTR_VOL;
 
+	/* root directory does not have date/time, just set to current time */
+	fatfs_update_time(&fs->root.cdate, &fs->root.ctime);
+	fatfs_update_time(&fs->root.date, &fs->root.time);
+
 	LMSG("ssize %d, csize %d, fsize %d, nr_fats %d, total_sec %d\n",
 			fs->ssize, fs->csize, fs->fsize,
 			fs->nr_fats, total_sec);

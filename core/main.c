@@ -48,8 +48,6 @@ static void __init kern_info(void)
 	time_t sec = strtoul(BUILD_TIME_SEC, NULL, 10);
 	long nsec = strtoul(BUILD_TIME_NSEC, NULL, 10);
 
-	set_systime(sec, nsec);
-
 	time2date(sec, &t);
 
 	IMSG("Product: %s\n", PRODUCT_NAME);
@@ -61,7 +59,7 @@ static void __init kern_info(void)
 
 	IMSG("Build Tag - %s\n", BUILD_TAG);
 	IMSG("Build Time - %04d-%02d-%02d %02d:%02d:%02d.%03ld\n",
-		t.tm_year+1900, t.tm_mon+1, t.tm_mday,
+		t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
 		t.tm_hour, t.tm_min, t.tm_sec,
 		nsec / MICROSECS_PER_SEC);
 
@@ -136,6 +134,9 @@ static void init(void)
 
 static void __init early_init_once(void)
 {
+	time_t sec = strtoul(BUILD_TIME_SEC, NULL, 10);
+	long nsec = strtoul(BUILD_TIME_NSEC, NULL, 10);
+
 	assert(of_fdt_early_init() == 0);
 	assert(kmalloc_early_init() == 0);
 	assert(mem_early_init() == 0);
@@ -145,9 +146,10 @@ static void __init early_init_once(void)
 
 	timer_early_init();
 
-#if defined(CONFIG_UART)
-	uart_early_init();
-#endif
+	set_systime(sec, nsec);
+
+	if (IS_ENABLED(CONFIG_UART))
+		uart_early_init();
 
 	irq_init();
 

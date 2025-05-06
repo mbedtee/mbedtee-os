@@ -47,8 +47,6 @@ static int cci_enable_slave(void *base)
 static int cci_enable(void *data)
 {
 	int ret = -1;
-	unsigned long addr = 0;
-	size_t size = 0;
 	struct device_node *child = NULL;
 	struct device_node *dn = ccidn;
 	void *base = NULL;
@@ -56,15 +54,13 @@ static int cci_enable(void *data)
 	IMSG("init %s\n", dn->id.compat);
 
 	for_each_matching_child_of_node(dn, child, &cci_slave_if) {
-		ret = of_read_property_addr_size(child, "reg", 0,
-				&addr, &size);
-		if (ret != 0) {
+		base = of_iomap(child, 0);
+		if (base == NULL) {
 			EMSG("cci dts\n");
-			return ret;
+			return -EINVAL;
 		}
-		base = iomap(addr, size);
-		ret |= cci_enable_slave(base);
-		iounmap(base, size);
+		ret = cci_enable_slave(base);
+		iounmap(base);
 	}
 
 	return ret;

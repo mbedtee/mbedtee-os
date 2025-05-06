@@ -89,17 +89,17 @@ static __nosprot void __oops(struct thread *t, struct thread_ctx *regs)
 	unsigned long addr = __bad_addr();
 
 	EMSG("address: 0x%lx\n", addr);
-	EMSG("gp 0x%lx\n", regs->gp);
-	EMSG("sp 0x%lx\n", regs->sp);
-	EMSG("s8 0x%lx\n", regs->r30);
-	EMSG("stat 0x%lx\n", regs->stat);
-	EMSG("cause 0x%lx\n", regs->cause);
+	EMSG("gp 0x%lx s8 0x%lx\n", regs->gp, regs->r30);
+	EMSG("sp 0x%lx pc 0x%lx ra 0x%lx\n", regs->sp, regs->pc, regs->lr);
+	EMSG("stat 0x%lx, cause 0x%lx\n", regs->stat, regs->cause);
 	EMSG("encoding: %s\n", fault_encodings[MIPS32_CAUSE]);
 
 	proc = t->proc;
 
-	EMSG("oops@%s asid %d usp(0x%x@%p) ksp(0x%x@%p)\n",
-		t->name, proc->pt->asid,
+	EMSG("oops@%s asid %d sig %d\n",
+		t->name, proc->pt->asid, sighandling(t));
+
+	EMSG("usp(0x%x@%p) ksp(0x%x@%p)\n",
 		t->ustack_size, t->ustack_uva,
 		t->kstack_size, t);
 

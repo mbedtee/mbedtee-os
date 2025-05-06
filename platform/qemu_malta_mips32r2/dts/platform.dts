@@ -44,7 +44,6 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
 		interrupts = <2>; /* connects to CPU IP2 */
 		interrupt-parent = <&intc>;

@@ -3,42 +3,56 @@
 
 config INTC
 	bool "Interrupt-Controller @ SoC"
-	default y
+	default n
 	help
 		Say Y here to enable the SoC (or Platform) Side interrupt-controller.
 		these interrupt-controller connects to the CPU IRQ pin
 
 if INTC
 
-choice
-	prompt "SoC INTC Selection"
-	default INTEL_I8259 if MIPS
-	default RISCV_PLIC if RISCV
 config INTEL_I8259
 	bool "intel i8259"
+	depends on MIPS
 	help
-		Enable Intel i8259 interrupt-controller
+		Enable Intel i8259 interrupt-controller.
+
 config RISCV_PLIC
 	bool "riscv plic"
 	depends on RISCV
 	help
-		Enable riscv plic interrupt-controller
+		Enable riscv plic interrupt-controller.
+
+config RISCV_APLIC
+	bool "riscv aplic"
+	depends on RISCV
+	help
+		Enable riscv aplic interrupt-controller.
+
+config RISCV_IMSIC
+	bool "riscv imsic"
+	depends on RISCV
+	select RISCV_APLIC
+	help
+		Enable riscv aplic-imsic interrupt-controller.
+
 config SALIX_MIPS_INTC
 	bool "salix intc of mips"
 	depends on MIPS
 	help
 		Enable salix MIPS SoC interrupt-controller.
+
 config SALIX_ARM_INTC
 	bool "salix intc of arm"
 	depends on ARM
 	help
 		Enable salix ARM SoC interrupt-controller.
 		usually connects to the ARM GIC
+
 config ASPEED_AST2700_INTC
-	bool "ASPEED AST2700 INTC"
+	bool "aspeed AST2700 intc"
 	depends on ARM
 	help
-		Enable ASPEED AST2700 INTC interrupt-controller.
-endchoice
+		Enable Aspeed AST2700 SoC interrupt-controller.
+		connects to the ARM GIC
 
 endif

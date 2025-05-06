@@ -11,17 +11,15 @@
 #include <stddef.h>
 
 /*
- * map the memory-phys to a high virtual space
- * return the high virtual address
- *
- * #pa/#size must be aligned to page bounds
+ * map the io-memory-phys to a kernel virtual space
+ * return the kernel virtual address
  */
 void *kmap(unsigned long pa, size_t size, int flags);
 
 /*
  * unmap and free the va
  */
-void kunmap(void *kva, size_t size);
+void kunmap(void *kva);
 
 /*
  * map the dev-phys to a high virtual space
@@ -32,6 +30,6 @@ void *iomap(unsigned long pa, size_t size);
 /*
  * unmap and free the va
  */
-void iounmap(void *va, size_t size);
+void iounmap(void *va);
 
 #endif

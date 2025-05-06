@@ -11,6 +11,8 @@
 #include <errno.h>
 #include <string.h>
 
+#include <kmalloc.h>
+
 /*
  * Find the first set bit in an integer
  *
@@ -104,11 +106,34 @@ static inline int __flsl(unsigned long x)
 /* start from S bit, end at E bit (S <= x <= E) */
 #define BITMAP_MASK(S, E) (((-1UL) << (S)) & (-1UL >> (BITS_PER_LONG - (E))))
 
+#define BITMAP_LAST_WORD_MASK(nbits) (~0UL >> (-(nbits) & (BITS_PER_LONG - 1)))
+
 /* number of long integers needed for nbits bitmap */
 #define BITMAP_LONG(nbits) ((((nbits) + BITS_PER_LONG - 1) / BITS_PER_LONG))
 
 /* declare a bitmap with number of bits */
 #define DECLARE_BITMAP(name, nbits) unsigned long name[BITMAP_LONG(nbits)]
+
+/*
+ * allocate a long integer array
+ */
+static inline unsigned long *bitmap_alloc(unsigned int nbits)
+{
+	return kmalloc(BITMAP_LONG(nbits) * sizeof(long));
+}
+
+/*
+ * allocate a long integer array and set all bits to zero
+ */
+static inline unsigned long *bitmap_zalloc(unsigned int nbits)
+{
+	return kzalloc(BITMAP_LONG(nbits) * sizeof(long));
+}
+
+static inline void bitmap_free(const unsigned long *bmap)
+{
+	kfree(bmap);
+}
 
 /*
  * Set the bit@idx in a long integer array
@@ -126,7 +151,7 @@ static inline void bitmap_clear_bit(unsigned long *bmap, unsigned int idx)
 	bmap[idx >> BIT_SHIFT_PER_LONG] &= ~(1UL << (idx & BIT_MASK_PER_LONG));
 }
 
-static inline bool bitmap_bit_isset(unsigned long *bmap, unsigned int idx)
+static inline bool bitmap_bit_isset(const unsigned long *bmap, unsigned int idx)
 {
 	return !!(bmap[idx >> BIT_SHIFT_PER_LONG] & (1UL << (idx & BIT_MASK_PER_LONG)));
 }
@@ -138,7 +163,7 @@ static inline bool bitmap_bit_isset(unsigned long *bmap, unsigned int idx)
  * return 0 ~ (number*(32 or 64) - 1) normally;
  * return -1 if the input array are all zero.
  */
-static inline int bitmap_fls(unsigned long *bmap, unsigned int nr)
+static inline int bitmap_fls(const unsigned long *bmap, unsigned int nr)
 {
 	int i = 0;
 
@@ -150,10 +175,10 @@ static inline int bitmap_fls(unsigned long *bmap, unsigned int nr)
 	return -1;
 }
 
-unsigned int bitmap_find_next_zero(unsigned long *bmap,
+unsigned int bitmap_find_next_zero(const unsigned long *bmap,
 	unsigned int nbits, unsigned int start);
 
-unsigned int bitmap_find_next_one(unsigned long *bmap,
+unsigned int bitmap_find_next_one(const unsigned long *bmap,
 	unsigned int nbits, unsigned int start);
 
 /*
@@ -164,7 +189,7 @@ unsigned int bitmap_find_next_one(unsigned long *bmap,
  * return #start ~ #nbits - 1 normally (start <= ret < nbits)
  * return #nbits if the input bits between start/nbits are all zero.
  */
-static inline unsigned int bitmap_next_one(unsigned long *bmap,
+static inline unsigned int bitmap_next_one(const unsigned long *bmap,
 	unsigned int nbits, unsigned int start)
 {
 	if (__builtin_constant_p(nbits) && (nbits) <= BITS_PER_LONG) {
@@ -187,7 +212,7 @@ static inline unsigned int bitmap_next_one(unsigned long *bmap,
  * return #start ~ #nbits - 1 normally (start <= ret < nbits)
  * return #nbits if the input bits between start/nbits are all set.
  */
-static inline unsigned int bitmap_next_zero(unsigned long *bmap,
+static inline unsigned int bitmap_next_zero(const unsigned long *bmap,
 	unsigned int nbits, unsigned int start)
 {
 	if (__builtin_constant_p(nbits) && (nbits) <= BITS_PER_LONG) {
@@ -211,7 +236,7 @@ static inline unsigned int bitmap_next_zero(unsigned long *bmap,
  * return #nbits if no contiguous zero area found between start/nbits.
  */
 static inline unsigned int bitmap_next_zero_area(
-	unsigned long *bmap, unsigned int nbits,
+	const unsigned long *bmap, unsigned int nbits,
 	unsigned int start, unsigned int nr)
 {
 	unsigned int id = 0, end = 0;
@@ -236,7 +261,7 @@ again:
  * return the idx - #0 ~ #nbits - 1 normally (0 <= ret < nbits)
  */
 static inline unsigned int bitmap_max_zero_area(
-	unsigned long *bmap, unsigned int nbits, unsigned int *max)
+	const unsigned long *bmap, unsigned int nbits, unsigned int *max)
 {
 	unsigned int id0 = 0, id1 = 0, maxz = 0, ret = 0;
 
@@ -358,10 +383,15 @@ static inline void bitmap_or(unsigned long *dst, const unsigned long *bmap1,
 static inline void bitmap_copy(unsigned long *dst, const unsigned long *src,
 			unsigned int nbits)
 {
+	unsigned int tailbits = 0;
+
 	if (__builtin_constant_p(nbits) && (nbits) <= BITS_PER_LONG)
 		*dst = *src;
 	else
 		memcpy(dst, src, roundup(nbits, BITS_PER_LONG) >> 3);
+
+	if ((tailbits = (nbits % BITS_PER_LONG)) != 0)
+		dst[nbits / BITS_PER_LONG] &= BITMAP_MASK(0, tailbits);
 }
 
 #define for_each_set_bit(bit, bmap, nbits) \

@@ -18,8 +18,8 @@
 #include <driver.h>
 #include <kthread.h>
 #include <cacheops.h>
-#include <interrupt.h>
 #include <affinity.h>
+#include <interrupt.h>
 
 #include <power.h>
 
@@ -27,6 +27,7 @@
 
 struct cpu_affinity cpus_online[1] = {0};
 struct cpu_affinity cpus_error[1] = {0};
+struct cpu_affinity cpus_possible[1] = {0};
 
 #if CONFIG_NR_CPUS > 1
 
@@ -121,7 +122,7 @@ int cpu_up(unsigned int cpu, unsigned long pa)
 		sched_setscheduler(tid, SCHED_FIFO, &p);
 		sched_ready(tid);
 		/* run the __cpu_up() ASAP */
-		ipi_call_sched(0);
+		sched_ipi_trigger(0);
 	} else {
 		__cpu_up((void *)(intptr_t)cpu);
 	}

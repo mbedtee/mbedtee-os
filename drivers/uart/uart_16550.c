@@ -102,24 +102,37 @@ static ssize_t u16550a_gets(struct uart_port *p, char *buf, size_t count)
 	return pos;
 }
 
+static ssize_t u16550a_poll_rx(struct uart_port *p)
+{
+	uint32_t lsr = 0, rdbytes = 0;
+	unsigned long flags = 0;
+
+	spin_lock_irqsave(&p->lock, flags);
+
+	while ((lsr = u16550a_ioread(p, UART_LSR)) & UART_LSR_DR) {
+		p->buf[p->wr] = u16550a_ioread(p, UART_RX);
+		if (++p->wr == sizeof(p->buf))
+			p->wr = 0;
+		rdbytes++;
+	}
+
+	spin_unlock_irqrestore(&p->lock, flags);
+
+	return rdbytes;
+}
+
 static void u16550a_irq_handler(struct uart_port *p)
 {
-	uint32_t iir = 0, lsr = 0;
+	uint32_t iir = 0, rdbytes = 0;
 
 	iir = u16550a_ioread(p, UART_IIR);
 	if ((iir & 0xF) == UART_IIR_NOINT)
-		return;
+		;
 
-	do {
-		lsr = u16550a_ioread(p, UART_LSR);
-		if (lsr & UART_LSR_DR) {
-			p->buf[p->wr] = u16550a_ioread(p, UART_RX);
-			if (++p->wr == sizeof(p->buf))
-				p->wr = 0;
-		}
-	} while (lsr & UART_LSR_DR);
+	rdbytes = u16550a_poll_rx(p);
 
-	wakeup(&p->wait_queue);
+	if (rdbytes)
+		wakeup(&p->wait_queue);
 }
 
 static void u16550a_disable(struct uart_port *p)
@@ -127,6 +140,11 @@ static void u16550a_disable(struct uart_port *p)
 	u16550a_iowrite(p, UART_IER, 0);
 
 	irq_unregister(p->irq);
+
+	u16550a_irq_handler(p);
+	u16550a_poll_rx(p);
+
+	wakeup(&p->wait_queue);
 }
 
 static void u16550a_setup(struct uart_port *p)
@@ -164,8 +182,7 @@ static void u16550a_attach(struct uart_port *p)
 {
 	u16550a_setup(p);
 
-	p->irq = irq_of_register(p->dn, p->hwirq,
-		(void *)u16550a_irq_handler, p);
+	p->irq = irq_register(p->dn, (void *)u16550a_irq_handler, p);
 
 	/* set interrupt enable reg */
 	u16550a_iowrite(p, UART_IER, 1);
@@ -189,6 +206,7 @@ static void u16550a_resume(struct uart_port *p)
 static const struct uart_ops u16550a_port_ops = {
 	.tx = u16550a_puts,
 	.rx = u16550a_gets,
+	.poll_rx = u16550a_poll_rx,
 	.suspend = u16550a_suspend,
 	.resume = u16550a_resume,
 	.attach = u16550a_attach,

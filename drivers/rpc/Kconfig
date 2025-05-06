@@ -2,15 +2,15 @@
 # Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
 
 config RPC
-	bool "RPC call"
+	bool "RPC module"
 	default n
 	help
-		Say Y here to enable RPC
+		Say Y here to enable RPC caller/fast-callee
 
 config RPC_YIELD
-	bool "RPC YieldCall"
+	bool "RPC yield"
 	depends on USER && RPC
 	default y
 	help
-		Say Y here to enable support RPC YieldCall / RPC SHM
+		Say Y here to enable support RPC YieldCall / RPC SHM (callee)
 		current RPC YieldCall/SHM follows the GlobalPlatform style

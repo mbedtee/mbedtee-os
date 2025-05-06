@@ -77,6 +77,11 @@ static inline unsigned long __text_start(void)
 	return (unsigned long)&__TEXT_START;
 }
 
+static inline unsigned long __text_end(void)
+{
+	return (unsigned long)&__TEXT_END;
+}
+
 static inline unsigned long __text_size(void)
 {
 	return (unsigned long)&__TEXT_END -
@@ -86,6 +91,11 @@ static inline unsigned long __text_size(void)
 static inline unsigned long __rodata_start(void)
 {
 	return (unsigned long)&__RODATA_START;
+}
+
+static inline unsigned long __rodata_end(void)
+{
+	return (unsigned long)&__RODATA_END;
 }
 
 static inline unsigned long __rodata_size(void)

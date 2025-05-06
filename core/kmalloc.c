@@ -241,7 +241,6 @@ static inline void __kmalloc_buddy_rbtree_sort(
 	}
 }
 
-
 /*
  * return the num of bytes held by 'addr' (aligned power of 2)
  */
@@ -652,7 +651,7 @@ void *krealloc(void *oldp, size_t size)
 	if (oldsize == 0)
 		return NULL;
 
-	IMSG("%p nsz:0x%lx osz:0x%lx\n", oldp,
+	DMSG("%p nsz:0x%lx osz:0x%lx\n", oldp,
 		 (long)size, (long)oldsize);
 
 	if (roundup2pow(size) == oldsize)

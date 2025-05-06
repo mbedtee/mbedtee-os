@@ -15,7 +15,7 @@
  * return #start ~ #nbits - 1 normally (start <= ret < nbits)
  * return #nbits if the input bits between start/nbits are all set.
  */
-unsigned int bitmap_find_next_zero(unsigned long *bmap,
+unsigned int bitmap_find_next_zero(const unsigned long *bmap,
 	unsigned int nbits, unsigned int start)
 {
 	unsigned int bid = 0;
@@ -46,7 +46,7 @@ unsigned int bitmap_find_next_zero(unsigned long *bmap,
  * return #start ~ #nbits - 1 normally (start <= ret < nbits)
  * return #nbits if the input bits between start/nbits are all zero.
  */
-unsigned int bitmap_find_next_one(unsigned long *bmap,
+unsigned int bitmap_find_next_one(const unsigned long *bmap,
 	unsigned int nbits, unsigned int start)
 {
 	unsigned int bid = 0;

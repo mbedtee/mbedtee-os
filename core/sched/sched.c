@@ -563,7 +563,7 @@ bool sched_ready(pid_t id)
 		if (regs && (s == sched_pick_next(currsp)))
 			__sched_exec_specified(currsp, s, regs);
 	} else if (s->sp->ready_num < 2)
-		ipi_call_sched(s->sp->pc->id);
+		sched_ipi_trigger(s->sp->pc->id);
 
 	sched_put_lock(s, flags);
 
@@ -1231,6 +1231,21 @@ static int sched_str_resume(void *data)
 	return 0;
 }
 
+static void sched_ipi_event(void)
+{
+	struct sched_priv *sp = sched_priv();
+
+	__sched_exec(sp, sp->pc->int_ctx);
+}
+
+/*
+ * ipi call to trigger schedule() (on the specified #cpu)
+ */
+void sched_ipi_trigger(unsigned int cpu)
+{
+	ipi_call(sched_ipi_event, cpu, NULL, 0);
+}
+
 static void sched_event(struct tevent *e)
 {
 	struct sched_priv *sp = sched_priv();
@@ -1238,13 +1253,6 @@ static void sched_event(struct tevent *e)
 	__sched_exec(sp, sp->pc->int_ctx);
 
 	sched_rotate(sp, SCHED_INTERVAL_USEC);
-}
-
-static void sched_ipi_event(void)
-{
-	struct sched_priv *sp = sched_priv();
-
-	__sched_exec(sp, sp->pc->int_ctx);
 }
 
 /*
@@ -1302,8 +1310,6 @@ void sched_init(void)
 	sp->stamp_reward = sp->stamp;
 
 	tevent_init(&sp->tevent, sched_event, sp);
-
-	ipi_register(IPI_SCHED, (void *)sched_ipi_event);
 
 	sched_arch_init(sp);
 	sched_tasklet_init(sp);

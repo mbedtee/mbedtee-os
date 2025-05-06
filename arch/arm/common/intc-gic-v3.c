@@ -290,6 +290,24 @@ static void gic_set_enable(unsigned int gic_num)
 	sync_wp();
 }
 
+static bool gic_is_enabled(unsigned int gic_num)
+{
+	uint32_t val = 0;
+	uint32_t reg_off = GIC_REG_OFFSET(gic_num);
+	void *reg = NULL;
+
+	if (GIC_IS_SPI(gic_num)) {
+		reg = gic_desc.dist_base + GICD_ISENABLER + reg_off;
+	} else {
+		reg_off += percpu_id() * GICR_SIZE;
+		reg = gic_desc.rdist_base + GICR_ISENABLER + reg_off;
+	}
+
+	val = ioread32(reg) & 1U << GIC_BIT_OFFSET(gic_num);
+
+	return !!val;
+}
+
 static void gic_configure_group(unsigned int gic_num)
 {
 	uint32_t val = 0;
@@ -345,7 +363,8 @@ static void gic_configure_prio(unsigned int gic_num)
 	sync_wp();
 }
 
-static void gic_configure_target(unsigned int gic_num, unsigned int target_cpu)
+static void gic_configure_target(unsigned int gic_num,
+	unsigned int target_cpu)
 {
 	uint64_t affinity = mpid_of(target_cpu);
 	uint32_t reg_off = GICD_IROUTER + (gic_num * 8);
@@ -516,10 +535,10 @@ static void gic_rdist_init(void)
 	gic_write_rdist(0, GICR_IGRPMODR);
 
 	/*
-	 * SGIs are always edge-triggered
+	 * SGIs are level-sensitive
 	 * PPIs are level-sensitive
 	 */
-	gic_write_rdist(0xFFFFFFFF, GICR_ICFGR);
+	gic_write_rdist(0, GICR_ICFGR);
 	gic_write_rdist(0, GICR_ICFGR + BYTES_PER_INT);
 
 	/*
@@ -599,18 +618,13 @@ static void gic_cpuif_init(void)
 static void gic_enable_int(struct irq_desc *d)
 {
 	unsigned long flags = 0;
-	unsigned int gic_num = d->hwirq, cpu = 0;
+	unsigned int gic_num = d->hwirq;
 
 	spin_lock_irqsave(&gic_desc.lock, flags);
 
 	gic_configure_group(gic_num);
 	gic_configure_prio(gic_num);
 	gic_set_enable(gic_num);
-
-	if (GIC_IS_SPI(gic_num)) {
-		cpu = cpu_affinity_next_one(d->affinity, 0);
-		gic_configure_target(gic_num, cpu);
-	}
 
 	spin_unlock_irqrestore(&gic_desc.lock, flags);
 }
@@ -624,26 +638,78 @@ static void gic_disable_int(struct irq_desc *d)
 	spin_unlock_irqrestore(&gic_desc.lock, flags);
 }
 
-static int gic_set_affinity(struct irq_desc *desc,
-	const struct cpu_affinity *affinity)
+static int gic_set_affinity(struct irq_desc *d,
+	const struct cpu_affinity *affinity, bool force)
 {
-	unsigned int cpu;
+	unsigned int cpu = -1;
 	struct cpu_affinity tmp;
+	unsigned long flags = 0, is_enabled = false;
 
-	cpu_affinity_and(&tmp, affinity, cpus_online);
+	if (!GIC_IS_SPI(d->hwirq))
+		return -EINVAL;
 
-	cpu = cpu_affinity_next_one(&tmp, 0);
+	if (force) {
+		if (cpu_affinity_isset(affinity, percpu_id()))
+			cpu = percpu_id();
+		else
+			cpu = cpu_affinity_next_one(affinity, 0);
+	} else {
+		cpu_affinity_and(&tmp, affinity, cpus_online);
+		cpu = cpu_affinity_next_one(&tmp, 0);
+	}
+
 	if (!cpu_affinity_valid(cpu))
 		return -EINVAL;
 
-	gic_disable_int(desc);
+	spin_lock_irqsave(&gic_desc.lock, flags);
 
-	cpu_affinity_copy(desc->affinity, affinity);
+	if ((is_enabled = gic_is_enabled(d->hwirq)))
+		gic_clear_enable(d->hwirq);
 
-	gic_enable_int(desc);
+	cpu_affinity_copy(d->affinity, affinity);
+
+	gic_configure_group(d->hwirq);
+	gic_configure_target(d->hwirq, cpu);
+
+	if (is_enabled)
+		gic_set_enable(d->hwirq);
+
+	spin_unlock_irqrestore(&gic_desc.lock, flags);
 
 	return 0;
 }
+
+static int gic_set_type(struct irq_desc *d, unsigned int type)
+{
+	unsigned int val = 0, mask = 0;
+	unsigned int offset = 0, bit = 0;
+
+	if (!GIC_IS_SPI(d->hwirq))
+		return -EINVAL;
+
+	switch (type) {
+	case IRQ_TYPE_LEVEL_LOW:
+	case IRQ_TYPE_LEVEL_HIGH:
+		val = 0;
+		break;
+	case IRQ_TYPE_EDGE_FALLING:
+	case IRQ_TYPE_EDGE_RISING:
+		val = 1;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	bit = (d->hwirq % 16) * 2;
+	offset = GICD_ICFGR + ((d->hwirq / 16) * BYTES_PER_INT);
+
+	val <<= bit;
+	mask = 3 << bit;
+	gic_write_dist((gic_read_dist(offset) & ~mask) | val, offset);
+
+	return 0;
+}
+
 
 #define SGIR_VAL(mpidr, intid) (          \
 	((unsigned long)intid << 24)        | \
@@ -662,16 +728,17 @@ static int gic_set_affinity(struct irq_desc *desc,
  */
 static void gic_softint_raise(struct irq_desc *d, unsigned int cpu_id)
 {
-	int gic_num = 0;
+	int gic_num = d->hwirq;
 	unsigned long flags = 0;
 
-	gic_num = gic_softint2sgi(d->hwirq);
+	/* not support security_extn, so should not trigger NS SGIs */
+	if (!gic_desc.security_extn && gic_num <= GIC_SECURE_SGI_START)
+		return;
 
-	if ((gic_num >= 0) && icc_read_igrpen1()) {
-		/* not support security_extn, so should not trigger NS SGIs */
-		if (!gic_desc.security_extn && gic_num <= GIC_SECURE_SGI_START)
-			return;
+	if (gic_num >= GIC_SECURE_SGI_START + SOFTINT_MAX)
+		return;
 
+	if (icc_read_igrpen1()) {
 		local_irq_save(flags);
 
 		unsigned long mpidr = mpid_of(cpu_id);
@@ -688,30 +755,9 @@ static void gic_softint_raise(struct irq_desc *d, unsigned int cpu_id)
 	}
 }
 
-/*
- * Get the parent hwirq/handler of the specified #d
- */
-static int gic_softint_parent(struct irq_desc *d,
-	unsigned int *hwirq, irq_handler_t *handler)
-{
-	int gic_num = 0;
-
-	if (!(d->controller->flags & IRQCTRL_SOFTINT))
-		return -EINVAL;
-
-	gic_num = gic_softint2sgi(d->hwirq);
-	if (gic_num < 0)
-		return -EINVAL;
-
-	*hwirq = gic_num;
-/* use the child's handler directly, no need to do extra eoi */
-	*handler = d->handler;
-	return 0;
-}
-
 static void gic_suspend(struct irq_controller *ic)
 {
-//	gic_rdist_disable();
+	gic_rdist_disable();
 
 	/*
 	 * Disable Secure-group1 interrupts
@@ -744,18 +790,16 @@ static const struct irq_controller_ops gic_interrupt_ops = {
 
 	.irq_set_affinity = gic_set_affinity,
 
+	.irq_set_type = gic_set_type,
+
+	.irq_send = gic_softint_raise,
+
 	.irq_controller_suspend = gic_suspend,
 	.irq_controller_resume = gic_resume,
 };
 
-static const struct irq_controller_ops gic_softint_ops = {
-	.name = "arm,gic,softint",
-
-	.irq_parent = gic_softint_parent,
-	.irq_send = gic_softint_raise,
-};
-
-static void gic_handler(struct thread_ctx *regs)
+static void gic_handler(struct irq_controller *ic,
+	struct thread_ctx *regs)
 {
 	uint32_t iar = 0, gic_num = 0;
 
@@ -767,7 +811,7 @@ static void gic_handler(struct thread_ctx *regs)
 			break;
 
 		icc_write_dir(iar);
-		irq_generic_invoke(gic_desc.controller, gic_num);
+		irq_generic_invoke(ic, gic_num);
 		icc_write_eoir1(iar);
 	} while (1);
 }
@@ -779,18 +823,20 @@ bool gic_has_security_extn(void)
 
 static void __init gic_parse_dts(struct device_node *dn)
 {
-	unsigned long base = 0;
 	size_t size = 0;
+	unsigned long base = 0;
 
 	gic_desc.version = GICD_VERSION;
 
-	of_read_property_addr_size(dn, "reg", 0, &base, &size);
+	of_parse_io_resource(dn, 0, &base, &size);
 	gic_desc.dist_base = iomap(base, size);
-	IMSG("gic-dist %p 0x%lx, size: 0x%x\n", gic_desc.dist_base, base, (int)size);
+	IMSG("gic-dist %p 0x%lx, size: 0x%lx\n",
+		gic_desc.dist_base, base, (long)size);
 
-	of_read_property_addr_size(dn, "reg", 1, &base, &size);
+	of_parse_io_resource(dn, 1, &base, &size);
 	gic_desc.rdist_base = iomap(base, size);
-	IMSG("gic-rdist %p 0x%lx, size: 0x%x\n", gic_desc.rdist_base, base, (int)size);
+	IMSG("gic-rdist %p 0x%lx, size: 0x%lx\n",
+		gic_desc.rdist_base, base, (long)size);
 }
 
 static void gic_percpu_init(void)
@@ -806,6 +852,12 @@ PERCPU_INIT_ROOT(gic_percpu_init);
 static void __init gic_init(struct device_node *dn)
 {
 	struct gic_desc *d = &gic_desc;
+	struct irq_controller *ic = NULL;
+	unsigned int softint_source[SOFTINT_MAX] = {
+		GIC_SECURE_SGI_START + SOFTINT_RPC_CALLER,
+		GIC_SECURE_SGI_START + SOFTINT_RPC_CALLEE,
+		GIC_SECURE_SGI_START + SOFTINT_IPI
+	};
 
 	gic_parse_dts(dn);
 
@@ -815,13 +867,11 @@ static void __init gic_init(struct device_node *dn)
 	 * create interrupt controller, this is the root, no parent.
 	 * combo means: PERCPU(Local SGI/PPI) + Shared(External SPI)
 	 */
-	d->controller = irq_create_combo_controller(dn,
-			d->total, &gic_interrupt_ops);
-
-	/* create the Softint controller */
-	d->softint_controller = irq_create_softint_controller(
-		d->controller, SOFTINT_MAX, &gic_softint_ops);
+	ic = irq_create_combo_controller(dn, d->total, &gic_interrupt_ops, d);
 
 	irq_set_root_handler(gic_handler);
+
+	/* GIC provides 3 SGI sources for softint framework */
+	softint_init(ic, softint_source, SOFTINT_MAX);
 }
 IRQ_CONTROLLER(gicv3, "arm,gic-v3", gic_init);
