@@ -77,10 +77,10 @@
 		#address-cells = <2>;
 		#size-cells = <1>;
 
-		serial16550@10000800 {
+		serial16550@10000000 {
 			compatible = "ns16550a";
-			reg = <0 0x10000800 0x0C>;
-			interrupts = <12 IRQ_TYPE_EDGE_RISING>;
+			reg = <0 0x10000000 0x0C>;
+			interrupts = <10 IRQ_TYPE_EDGE_RISING>;
 			interrupt-parent = <&aplic>;
 			clock-frequency = <3686400>;
 			current-speed = <115200>;
