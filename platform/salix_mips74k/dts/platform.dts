@@ -35,7 +35,6 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 	};
 
 	/* interrupt-controller: SoC side */
@@ -45,7 +44,6 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
 		interrupts = <3>; /* connect to CPU IP3 */
 		interrupt-parent = <&intc>;

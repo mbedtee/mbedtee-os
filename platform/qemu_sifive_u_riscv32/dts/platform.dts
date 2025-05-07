@@ -47,7 +47,6 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
 		/* sifive-u does not have sswi ? OS will auto-check this */
 		reg = <0x2000000 0x4000>, /* for mswi */
@@ -61,7 +60,6 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
 		/* connects to CPU clint 11 (M-Mode), 9 (S-Mode) */
 		interrupts = <11 9>;

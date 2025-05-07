@@ -48,7 +48,6 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
 		reg = <0x1bf01000 0x1000>, /* GICD */
 			<0x1bf02000 0x2000>; /* GICC */
@@ -61,7 +60,6 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
 		interrupt-parent = <&gic>;
 
