@@ -138,10 +138,12 @@ static __init int rpc_callee_init(struct device *dev)
 	r2t_ring = phys_to_virt(addr);
 	r2t_ring_sz = size - sizeof(struct rpc_ringbuf);
 	r2t_ring->rd = r2t_ring->wr = r2t_ring_rd;
+	r2t_ring->callee_id = percpu_id();
+	r2t_ring->callee_ready = true;
 
 	softint_register(SOFTINT_RPC_CALLEE, rpc_callee_isr, r2t_ring);
 
-	IMSG("r2t-ring=%p size=%ld\n", r2t_ring, (long)r2t_ring_sz);
+	IMSG("rpc-r2t-ring=%p size=%ld\n", r2t_ring, (long)r2t_ring_sz);
 
 	return 0;
 }
