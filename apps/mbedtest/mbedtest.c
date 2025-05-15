@@ -342,7 +342,7 @@ static __noinline void float_ld_test(void)
 				TRIGGER_EXCEPTION(i);
 		}
 
-		for (i = 12; i < ARRAY_SIZE(in_ld1) + 8; i++) {
+		for (i = 12; i < ARRAY_SIZE(in_ld1) + 12; i++) {
 			if (diff[i] >= 0.000001)
 				TRIGGER_EXCEPTION(i);
 		}
