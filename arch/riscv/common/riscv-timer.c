@@ -18,7 +18,8 @@ static struct arch_timer riscv_timer = {0};
 /* if Sstc does not present, forward the requests to M-Mode Timer */
 #define MTIMER_BASE ((uintptr_t)riscv_timer.base)
 
-static uint64_t riscv_read_cycles(void)
+/* __noinline is required to avoid optimization to ecall_xx */
+static __noinline uint64_t riscv_read_cycles(void)
 {
 	if (__sstc_supported) {
 #if defined(CONFIG_64BIT)
@@ -71,7 +72,7 @@ static void riscv_timer_isr(void *data)
 	tevent_isr();
 }
 
-static inline void riscv_timer_enable(struct arch_timer *t)
+static void riscv_timer_enable(struct arch_timer *t)
 {
 	/*
 	 * Register the timer INT

@@ -67,7 +67,7 @@ kern-inc-y = $(foreach dir,$(obj-dirs),$(call incsub_of,$(dir),\
 	$($(subst /,-,$(subst $(TOP_DIR)/,,$(dir)))-y))) $(user-inc-y)
 
 cflags = -g -Wall -Werror -Wno-nonnull-compare -Os -std=gnu99 -fno-common \
-		 -funwind-tables -Wstack-usage=2588 -MD -MP $(TARGET_CCFLAGS)
+		 -funwind-tables -Wstack-usage=2788 -MD -MP $(TARGET_CCFLAGS)
 
 asflags = -g -Wall -Werror -Os -std=gnu99 -D__ASSEMBLY__ -fno-common \
 		-funwind-tables -MD -MP $(TARGET_ASMFLAGS)

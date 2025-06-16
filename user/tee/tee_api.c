@@ -395,7 +395,7 @@ TEE_Result TEE_GetTAPersistentTime(TEE_Time *time)
 TEE_Result TEE_SetTAPersistentTime(TEE_Time *time)
 {
 	TEE_Result ret = TEE_ERROR_GENERIC;
-	struct timespec sys, nsys, diff;
+	struct timespec sys, nsys, diff = {0};
 	struct timespec ta, nta;
 
 	if (time == NULL)

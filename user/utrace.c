@@ -39,6 +39,9 @@ void utrace(const char *func, int line,
 	char *dstraw = NULL;
 	int flen = 0, l = 0;
 
+	if (fmt == NULL)
+		return;
+
 	flen = strnlen(func, FUNC_SIZE - 1);
 
 	__pthread_mutex_lock(&_trace_lock);

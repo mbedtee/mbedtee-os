@@ -11,6 +11,7 @@
 #include <regdef.h>
 #include <generated/asm-offsets.h>
 
+
 .macro FUNC_START name
 	.global \name
 	.type \name, % function
@@ -37,6 +38,34 @@
 .macro percpu_asid rd
 	la		\rd, percpu_dt
 	lw		\rd, PERCPU_DATA_ASID(\rd)
+.endm
+
+/* used for when making a pie kernel, pie is currently not in use */
+.macro set_gp
+	bal	1f
+	nop
+	.word _gp
+1 : lw	gp, 0(ra)
+.endm
+
+/*
+ * although the pie kernel is not in use,
+ * but to keep the compatibility, still use t9 as jumper.
+ * In case when you building a pie kernel, remember to add
+ * the gap between link/run addresses to t9
+ */
+.macro jump lable
+	/*
+	 * patch:
+	 * in case of the gcc gives instructions like:
+	 * "addiu sp,sp,-40"
+	 * "sw v0,40(sp)"
+	 * */
+	addi	sp, -16
+	la		t9, \lable
+	jalr	t9
+	nop
+	addi	sp, 16
 .endm
 
 /*
@@ -95,8 +124,9 @@
 	/* sighandle with ctx @ v0, use v0 as sp top */
 	move sp, v0
 
-	bal sched_sighandle
 	move a0, v0
+
+	jump sched_sighandle
 
 	/* restore context @ v0 */
 	bal restore_thread_ctx
@@ -105,27 +135,6 @@
 	/* clear k0/k1 */
 	move k0, zero
 	move k1, zero
-.endm
-
-/* used for when making a pie kernel, pie is currently not in use */
-.macro set_gp
-	bal	1f
-	nop
-	.word _gp
-1 : lw	gp, 0(ra)
-.endm
-
-/*
- * although the pie kernel is not in use,
- * but to keep the compatibility, still use t9 as jumper.
- * In case when you building a pie kernel, remember to add
- * the gap between link/run addresses to t9
- */
-.macro jump lable
-	la		t9, \lable
-
-	jalr	t9
-	nop
 .endm
 
 .macro align_ebase
