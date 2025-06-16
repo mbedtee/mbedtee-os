@@ -9,7 +9,7 @@ TA_BUILD = $(OUTPUT_DIR)/ta
 ta_cflags   = $(cflags) $(user-inc-y) $(TARGET_PICFLAGS)
 ta_asflags  = $(asflags) $(user-inc-y) $(TARGET_PICFLAGS)
 ta_ldflags  = -EL -nostdlib -z max-page-size=4096 -pie -o
-ta_libs     = $(libgcc) -L$(LIBC_BUILD) -lc
+ta_libs     = $(libgcc) -L$(BINARY_DIR) -lc
 
 include $(shell find $(TA_SRC) -iname "uobjects.mk")
 

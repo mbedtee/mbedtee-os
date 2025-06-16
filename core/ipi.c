@@ -384,7 +384,7 @@ void ipi_init(void)
 	spin_lock_irqsave(&ring->sl, flags);
 
 	ring->rd = ring->wr = 0;
-	ring->size = 256 * sizeof(long);
+	ring->size = 2048;
 	ring->mem = kmalloc(ring->size);
 
 	spin_unlock_irqrestore(&ring->sl, flags);

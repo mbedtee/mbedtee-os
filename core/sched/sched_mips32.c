@@ -68,6 +68,14 @@ static void sched_init_ctx(struct sched *s,
 	}
 
 	/*
+	 * patch:
+	 * in case of the gcc gives instructions like:
+	 * "addiu sp,sp,-40"
+	 * "sw v0,40(sp)"
+	 */
+	regs->sp -= 16;
+
+	/*
 	 * From: MIPSABI Position Independent Function Prologue
 	 * The virtual address of a called function is passed
 	 * to the function in general register $25, hereafter

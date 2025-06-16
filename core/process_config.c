@@ -181,7 +181,7 @@ static int uuid2val(const char *c, size_t size, TEE_UUID *uuid)
 	uuid->clockSeqAndNode[1] = clock_seq_hilow;
 
 	temptr_strtok = strtok_r(NULL, split_c, &c_bak);
-	while (temptr_strtok && *temptr_strtok) {
+	while (temptr_strtok && *temptr_strtok && (i < 6)) {
 		tmp[0] = temptr_strtok[0];
 		tmp[1] = temptr_strtok[1];
 		tmp[2] = 0;
@@ -619,7 +619,7 @@ static void __init process_config_init(void)
 	int fd = -1, dird = -1;
 	const char *path = "/apps/";
 	const char *ext = ".config";
-	char name[PROCESS_PATH_LEN * 2];
+	char name[FS_NAME_MAX * 2];
 	struct dirent d;
 
 	dird = sys_open(path, O_DIRECTORY);
@@ -634,7 +634,7 @@ static void __init process_config_init(void)
 			if (strstr(d.d_name, ext)) {
 				if (strlen(strstr(d.d_name, ext)) != strlen(ext))
 					continue;
-				strncat(name, d.d_name, PROCESS_PATH_LEN);
+				strncat(name, d.d_name, FS_NAME_MAX);
 				IMSG("Processing %s\n", name);
 				fd = sys_open((const char *)name, O_RDONLY);
 				if (fd < 0) {

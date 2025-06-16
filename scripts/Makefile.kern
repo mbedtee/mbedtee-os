@@ -75,7 +75,7 @@ $(OUTPUT_DIR)/$(PRODUCT).bin: $(OUTPUT_DIR)/$(PRODUCT).elf
 	$(Q)$(strip) --strip-unneeded $< -o $(BINARY_DIR)/$(PRODUCT).elf
 	$(Q)$(objcopy) -O binary $(BINARY_DIR)/$(PRODUCT).elf $@
 	$(Q)cp -f $@ $(BINARY_DIR)
-	$(Q)$(objdump) -D $< > $<.dis
+	$(Q)$(objdump) -d $< > $<.dis
 
 .PHONY: clean
 clean:
