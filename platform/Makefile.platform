@@ -64,4 +64,8 @@ else ifeq ($(CONFIG_QEMU_IMX8MP),y)
 PLATFORM = qemu_imx8mp
 else ifeq ($(CONFIG_QEMU_XIANGSHAN_KMH),y)
 PLATFORM = qemu_xiangshan_kmh
+else ifeq ($(CONFIG_QEMU_MICROBLAZE_V_RISCV32),y)
+PLATFORM = qemu_microblaze_v
+else ifeq ($(CONFIG_QEMU_MICROBLAZE_V_RISCV64),y)
+PLATFORM = qemu_microblaze_v
 endif

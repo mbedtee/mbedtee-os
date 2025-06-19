@@ -205,6 +205,20 @@ config QEMU_XIANGSHAN_KMH
 	help
 		select the QEMU xiangshan-kunminghu platform
 
+config QEMU_MICROBLAZE_V_RISCV32
+	bool "QEMU microblaze-v RISCV32"
+	depends on RISCV32
+	help
+		select the QEMU amd-microblaze-v-generic platform
+		by "qemu-system-riscv32 -M amd-microblaze-v-generic"
+
+config QEMU_MICROBLAZE_V_RISCV64
+	bool "QEMU microblaze-v RISCV64"
+	depends on RISCV64
+	help
+		select the QEMU amd-microblaze-v-generic platform
+		by "qemu-system-riscv64 -M amd-microblaze-v-generic"
+
 endchoice
 
 endmenu

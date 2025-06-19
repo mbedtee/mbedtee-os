@@ -3,14 +3,14 @@
 
 config RNG
 	bool "RNG module"
-	default Y
+	default y
 	help
 		Say Y here to enable the RNG framework.
 
 if RNG
 config PRNG
 	bool "pseudo RNG"
-	default Y
+	default y
 	help
 		Say Y here to enable the PRNG by software.
 endif

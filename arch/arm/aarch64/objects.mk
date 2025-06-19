@@ -14,8 +14,6 @@ arch-arm-aarch64-$(CONFIG_REE) += ree.o
 
 arch-arm-aarch64-$(CONFIG_MMU) += aarch64-mmu.o aarch64-mmu-asm.o
 
-arch-arm-aarch64-$(CONFIG_ARMV8_GENERIC_TIMER) += armv8-timer.o
-
 ifneq ($(CONFIG_KERN_NEWLIB),y)
 arch-arm-aarch64-y += memcpy.o memset.o
 endif

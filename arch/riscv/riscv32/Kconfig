@@ -4,15 +4,14 @@
 if RISCV32
 
 config MMU_SV32
-	bool
+	bool "sv32 mmu"
 	depends on MMU
-	default y
 	help
 		Enables the SV32 MMU
 
 config CFLAGS
 	string "RISCV32_CFLAGS"
-	default "-mabi=ilp32d -march=rv32imafd_zicsr_zifencei -mstrict-align -mcmodel=medany -mno-riscv-attribute"
+	default "-mabi=ilp32d -march=rv32imafdc_zicsr_zifencei_zicbom -mstrict-align -mcmodel=medany -mno-riscv-attribute"
 	help
 		Define the default compile FLAGS.
 

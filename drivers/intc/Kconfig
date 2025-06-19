@@ -52,7 +52,12 @@ config ASPEED_AST2700_INTC
 	bool "aspeed AST2700 intc"
 	depends on ARM
 	help
-		Enable Aspeed AST2700 SoC interrupt-controller.
+		Enable ASpeed AST2700 SoC interrupt-controller.
 		connects to the ARM GIC
+
+config XLNX_INTC
+	bool "xlnx xps-intc"
+	help
+		Enable xilinx interrupt-controller.
 
 endif

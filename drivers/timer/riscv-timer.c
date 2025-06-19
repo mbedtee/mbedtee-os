@@ -110,6 +110,8 @@ static int __init riscv_timer_init(struct device_node *dn)
 	 */
 	if (!sstc_supported()) {
 		clint = of_find_compatible_node(NULL, "riscv,clint-timer");
+		if (clint == NULL)
+			return -ENXIO;
 		of_parse_io_resource(clint, 0, (unsigned long *)&t->base, NULL);
 		of_property_read_u32(clint, "clock-frequency", &t->frq);
 	}

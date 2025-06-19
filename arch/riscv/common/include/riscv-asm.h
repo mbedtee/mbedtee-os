@@ -61,6 +61,20 @@
 	bnez a3, 2b
 .endm
 
+.macro csr_write tvec, csr, val
+/* backup the exception entry */
+	csrr a1, \tvec
+	la a2, 11f
+	csrw \tvec, a2
+
+	li a2, \val
+	csrw \csr, a2
+
+/* resume exception entry */
+	.align 2
+11:	csrw \tvec, a1
+.endm
+
 .macro csr_writeable tvec, csr, val
 /* backup the exception entry */
 	csrr a1, \tvec

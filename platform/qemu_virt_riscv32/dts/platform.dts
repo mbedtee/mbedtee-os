@@ -65,7 +65,7 @@
 		/* connects to CPU clint 11 (M-Mode), 9 (S-Mode) */
 		interrupts = <11 9>;
 
-		max-irqs = <96>; /* unprecise number */
+		max-irqs = <96>;
 
 		reg = <0xc000000 0x600000>;
 	};
@@ -78,8 +78,10 @@
 		serial16550@10000000 {
 			compatible = "ns16550a";
 			reg = <0x10000000 0x0C>;
+#if !defined(CONFIG_REE) /* Give the UART INT to REE */
 			interrupts = <10>;
 			interrupt-parent = <&plic>;
+#endif
 			clock-frequency = <3686400>;
 			current-speed = <230400>;
 			clock-divisor = <16>;

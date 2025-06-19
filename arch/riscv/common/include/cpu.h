@@ -31,6 +31,22 @@
 #define STACK_SIZE          UL(4096)
 #endif
 
+#define SEIE               9
+#define STIE               5
+#define SSIE               1
+#define MEIE               11
+#define MTIE               7
+#define MSIE               3
+
+#define SR_SUM	          (UL(1) << 18)
+#define SR_MXR	          (UL(1) << 19)
+#define SR_SD	          (UL(1) << 31)
+#define SR_FS	          (UL(3) << 13)
+#define SR_FS_OFF	      (UL(0) << 13)
+#define SR_FS_INIT	      (UL(1) << 13)
+#define SR_FS_CLEAN	      (UL(2) << 13)
+#define SR_FS_DIRTY	      (UL(3) << 13)
+
 #if defined(CONFIG_RISCV_S_MODE)
 
 #define CSR_STATUS        sstatus          /* Global status register */
@@ -55,7 +71,7 @@
 #define SR_PIE	          (UL(1) << 5)
 #define SR_PP		      (UL(1) << 8)
 
-#define IE_TIE            (UL(1) << 5)
+#define IE_TIE            (UL(1) << STIE)
 
 #define eret              sret
 
@@ -78,20 +94,11 @@
 #define SR_PIE	          (UL(1) << 7)
 #define SR_PP		      (UL(3) << 11)
 
-#define IE_TIE            (UL(1) << 7)
+#define IE_TIE            (UL(1) << MTIE)
 
 #define eret              mret
 
 #endif
-
-#define SR_SUM	          (UL(1) << 18)
-#define SR_MXR	          (UL(1) << 19)
-#define SR_SD	          (UL(1) << 31)
-#define SR_FS	          (UL(3) << 13)
-#define SR_FS_OFF	      (UL(0) << 13)
-#define SR_FS_INIT	      (UL(1) << 13)
-#define SR_FS_CLEAN	      (UL(2) << 13)
-#define SR_FS_DIRTY	      (UL(3) << 13)
 
 #define ECALL_RDTIME      0x51110618 /* Read time */
 #define ECALL_WRTIME      0x51110619 /* Set time */

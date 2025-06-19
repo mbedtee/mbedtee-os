@@ -921,6 +921,8 @@ int softint_register(unsigned int id,
 	spin_lock_irqsave(&__irq_lock, flags);
 
 	ic = softint->controller;
+	if (ic == NULL)
+		goto out;
 
 	hwirq = softint->hwirqs[id];
 	softint->handlers[id] = handler;
@@ -971,6 +973,9 @@ void softint_unregister(unsigned int id)
 	if (id >= SOFTINT_MAX)
 		return;
 
+	if (softint->controller == NULL)
+		return;
+
 	spin_lock_irqsave(&__irq_lock, flags);
 
 	hwirq = softint->hwirqs[id];
@@ -1002,6 +1007,9 @@ void softint_raise(unsigned int id, unsigned int cpu)
 	struct softint_desc *softint = &softint_desc;
 
 	if (!VALID_CPUID(cpu) || (id >= SOFTINT_MAX))
+		return;
+
+	if (softint->controller == NULL)
 		return;
 
 	spin_lock_irqsave(&__irq_lock, flags);

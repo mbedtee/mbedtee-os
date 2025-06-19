@@ -49,10 +49,10 @@ FUNC_START exception_entry_mmode
 	li a7, (1 << (__riscv_xlen - 1)) - 1
 	and a7, a7, a6
 
-	li a6, 7  /* M-Timer */
+	li a6, MTIE  /* M-Timer */
 	beq a6, a7, __mtimer_irq
 
-	li a6, 3  /* M-IPI */
+	li a6, MSIE  /* M-IPI */
 	beq a6, a7, __mipi_irq
 
 	beqz zero, .
@@ -65,13 +65,13 @@ __mipi_irq:
 	add	a7, a7, a6
 	sw zero, (a7)
 	fence ow, ow
-	csrs mip, 1 << 1 /* S-IPI */
+	csrs mip, 1 << SSIE /* S-IPI */
 	beqz zero, __mirq_done
 
 __mtimer_irq:
-	li a6, 1 << 7
+	li a6, 1 << MTIE
 	csrc mie, a6 /* M-Timer */
-	li a6, 1 << 5
+	li a6, 1 << STIE
 	csrs mip, a6 /* S-Timer */
 
 __mirq_done:
@@ -122,13 +122,14 @@ __mecall_wrtime:
 	sw a1, (a7)
 	sw a2, 4(a7)
 #endif
-	li a6, 1 << 5 /* S-Timer */
+	li a6, 1 << STIE /* S-Timer */
 	csrc mip, a6
-	li a6, 1 << 7 /* M-Timer */
+	li a6, 1 << MTIE /* M-Timer */
 	csrs mie, a6
 	mret
 
 __mecall_sendipi:
+	csrs mie, 1 << MSIE /* enable M-IPI (mswi) */
 	la a7, __ipibase
 	LDR a6, (a7)
 	beq a6, a3, 1f

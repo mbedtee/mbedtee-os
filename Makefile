@@ -45,6 +45,7 @@ $(VERSION_FILE):
 	@( printf '#ifndef _VERSION_H\n' ) > $@.tmp
 	@( printf '#define _VERSION_H\n' ) >> $@.tmp
 	@( printf '#define PRODUCT_NAME "%s"\n' '$(PRODUCT)') >> $@.tmp
+	@( printf '#define PLATFORM_NAME "%s"\n' '$(PLATFORM)') >> $@.tmp
 	@( printf '#define PRODUCT_VERSION "%s"\n' '$(PRODUCT_VERSION)') >> $@.tmp
 	@( echo "#define PRODUCT_VERSION_INT ($(MAJOR_VER)<<16 |"\
 		"$(MEDIUM_VER)<<8 | $(MINOR_VER))") >> $@.tmp
@@ -53,11 +54,14 @@ $(VERSION_FILE):
 	@( printf '#endif\n' ) >> $@.tmp
 	@cmp -s $@ $@.tmp && rm -f $@.tmp || mv -f $@.tmp $@
 
-%defconfig:
-	$(Q)$(SCRIPTS_DIR)/kconfig/defconfig.py configs/$@ 2>&1 > /dev/null
-
 menuconfig:
 	$(Q)$(SCRIPTS_DIR)/kconfig/menuconfig.py
+
+savedefconfig:
+	$(Q)$(SCRIPTS_DIR)/kconfig/savedefconfig.py
+
+%defconfig:
+	$(Q)$(SCRIPTS_DIR)/kconfig/defconfig.py configs/$@ 2>&1 > /dev/null
 
 # Detect if the .config is newer than auto.conf, update autoconf.h accordingly
 -include $(INC_DIR)/config/auto.conf

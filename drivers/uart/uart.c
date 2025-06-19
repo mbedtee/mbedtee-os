@@ -220,16 +220,18 @@ static void uart_remove(struct device *dev)
  */
 static void uart_poll_timer_event(struct tevent *t)
 {
-	ssize_t rdbytes = 0;
-	struct uart_port *p = t->data;
-	struct timespec ts = {0, 30000000};
+	if (IS_ENABLED(CONFIG_UART_POLL)) {
+		ssize_t rdbytes = 0;
+		struct uart_port *p = t->data;
+		struct timespec ts = {0, 30000000};
 
-	rdbytes = p->ops->poll_rx(p);
+		rdbytes = p->ops->poll_rx(p);
 
-	tevent_start(&p->tevent, &ts);
+		tevent_start(&p->tevent, &ts);
 
-	if (rdbytes)
-		wakeup(&p->wait_queue);
+		if (rdbytes)
+			wakeup(&p->wait_queue);
+	}
 }
 
 /*
@@ -240,7 +242,7 @@ static void uart_setup_poll_timer(struct uart_port *p)
 {
 	struct timespec ts = {0, 30000000};
 
-	if (p->ops->poll_rx) {
+	if (IS_ENABLED(CONFIG_UART_POLL) && p->ops->poll_rx) {
 		tevent_init(&p->tevent, uart_poll_timer_event, p);
 		tevent_start(&p->tevent, &ts);
 	}

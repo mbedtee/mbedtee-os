@@ -3,12 +3,6 @@
 
 if AARCH64
 
-config ARMV8_GENERIC_TIMER
-	bool "Enable armv8 generic timer"
-	default y
-	help
-		Say Y here to enable support AArch64@ARMV8-A generic timer.
-
 config CFLAGS
 	string "AARCH64_CFLAGS"
 	default "-march=armv8-a"
@@ -22,7 +16,7 @@ config PIC_CFLAGS
 		Define the default compile PIC FLAGS.
 
 config VA_BITS
-	int
+	int "VA Bits"
 	default 39
 
 endif

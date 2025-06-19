@@ -21,9 +21,7 @@
  * Software Generated Interrupt (SGI)
  * For RISCV, Softint source is 1 or 3
  */
-#define RISCV_SOFTINT_SOURCE (IS_ENABLED(CONFIG_RISCV_S_MODE) ? 1 : 3)
-
-#define RISCV_SOFTINT_MAX SOFTINT_MAX
+#define RISCV_SOFTINT_SOURCE (IS_ENABLED(CONFIG_RISCV_S_MODE) ? SSIE : MSIE)
 
 struct riscv_desc {
 	bool sswi_exist;
@@ -93,7 +91,7 @@ static const struct irq_controller_ops riscv_irq_ops = {
  */
 static void __init riscv_intc_init(struct device_node *dn)
 {
-	int regidx = 0, forward = 0;
+	int regidx = 0;
 	struct riscv_desc *d = NULL;
 	struct irq_controller *ic = NULL;
 
@@ -105,23 +103,17 @@ static void __init riscv_intc_init(struct device_node *dn)
 
 	/* base register for Softint */
 	d->base = of_iomap(dn, regidx);
-	if (d->base) {
-#if defined(CONFIG_RISCV_S_MODE)
-		d->sswi_exist = is_io_readable(d->base);
-		forward = !d->sswi_exist;
-		if (forward)
+
+	if (IS_ENABLED(CONFIG_RISCV_S_MODE)) {
+		d->sswi_exist = d->base ? is_io_readable(d->base) : 0;
+		/* get the mswi base for S-Mode forwarding the swi to M-Mode */
+		if (!d->sswi_exist) {
 			iounmap(d->base);
-#endif
-	} else {
-		forward = regidx;
-	}
+			of_parse_io_resource(dn, 0, (unsigned long *)&d->base, NULL);
+		}
 
-	if (IS_ENABLED(CONFIG_RISCV_S_MODE))
 		IMSG("sswi_exist: %d\n", d->sswi_exist);
-
-	/* get the mswi base for S-Mode forwarding the swi to M-Mode */
-	if (forward)
-		of_parse_io_resource(dn, 0, (unsigned long *)&d->base, NULL);
+	}
 
 	/* create interrupt controller, this is the root, no parent */
 	ic = irq_create_percpu_controller(dn, 16, &riscv_irq_ops, d);
@@ -132,7 +124,7 @@ static void __init riscv_intc_init(struct device_node *dn)
 	 * provides one SGI source for softint framework
 	 * if the imsic present, imsic provides the SGI instead clint.
 	 */
-	if (!of_find_compatible_node(NULL, "riscv,imsic"))
+	if (!of_find_compatible_node(NULL, "riscv,imsic") && d->base)
 		softint_init(ic, &(unsigned int){RISCV_SOFTINT_SOURCE}, 1);
 }
 IRQ_CONTROLLER(riscv, "riscv,aclint", riscv_intc_init);
