@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
  * RPC Callee (REE->TEE)
  * (triggerred by hw-ipi, similar as the functionality of ARM SMC)
  */

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
  * CA15x4 or CA7x4 QEMU virt ARM - Secondary CPUs PowerUp/PowerDown
  */
 

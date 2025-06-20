@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
  * tasklets for handling the bottom half of the interrupts serialized,
  * with interrupt enabled and critical priority
  */

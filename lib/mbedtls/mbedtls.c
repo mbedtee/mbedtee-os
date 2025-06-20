@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
  *
  * Additional APIs for mbedtee which are not privoded by Mbed TLS
  * e.g. AES-CTS (CBC-CS3), e-GCD, DSA and partially cipher update

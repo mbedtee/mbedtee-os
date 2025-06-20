@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
  * Retarget the Newlib locking, Newlib allows the
  * target specific locking on different target platforms.
  */
