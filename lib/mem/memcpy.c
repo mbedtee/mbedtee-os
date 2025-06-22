@@ -16,7 +16,14 @@ __weak_symbol void *memcpy(void *dst,
 	const int llen = sizeof(long);
 	const int lmask = sizeof(long) - 1;
 
-	if ((n >= 16) && !((long)s & lmask) && !((long)d & lmask)) {
+	if (n >= (llen << 2) && !(((long)s ^ (long)d) & lmask)) {
+		while ((long)d & lmask) {
+			*(unsigned char *)d = *(unsigned char *)s;
+			d = (void *)d + 1;
+			s = (void *)s + 1;
+			n--;
+		}
+
 		while (n >= llen << 2) {
 			*d++ = *s++;
 			*d++ = *s++;

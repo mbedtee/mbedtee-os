@@ -7,7 +7,12 @@
 #ifndef _RBTREE_H
 #define _RBTREE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <defs.h>
+#include <sys/cdefs.h>
 
 struct rb_node {
 	unsigned long parent_color;
@@ -18,7 +23,7 @@ struct rb_node {
 #define rb_parent(n) ((struct rb_node *)((n)->parent_color & ~1ul))
 
 #define rb_entry(ptr, type, member)	({   \
-	void *__p = (void *)(ptr);                             \
+	void *__p = (ptr);                             \
 	__p ? (type *)(__p - offsetof(type, member)) : NULL; })
 
 /* faster version of rb_entry, assume ptr is non-null */
@@ -46,9 +51,9 @@ static __always_inline void rb_node_init(struct rb_node *n)
 static __always_inline void rb_link_parent(struct rb_node *n,
 	struct rb_node **lnk, struct rb_node *parent)
 {
-	(n)->left = (n)->right = NULL;
-	(n)->parent_color = (unsigned long)(parent);
-	*(lnk) = (n);
+	n->left = n->right = NULL;
+	n->parent_color = (unsigned long)parent;
+	*lnk = n;
 }
 
 static __always_inline struct rb_node *rb_first(const struct rb_node *n)
@@ -93,7 +98,7 @@ static __always_inline struct rb_node *rb_find(
 
 static __always_inline struct rb_node *rb_find_first(
 	const void *key, struct rb_node *root,
-	intptr_t (*cmp)(const void *key, struct rb_node *n))
+	intptr_t (*cmp)(const void *key, const struct rb_node *n))
 {
 	struct rb_node *first = NULL;
 
@@ -111,31 +116,13 @@ static __always_inline struct rb_node *rb_find_first(
 	return first;
 }
 
-static __always_inline struct rb_node *rb_find_less(
-	const void *key, struct rb_node *root,
-	intptr_t (*cmp)(const void *key, const struct rb_node *n))
-{
-	while (root) {
-		intptr_t result = cmp(key, root);
-
-		if (result <= 0)
-			break;
-		else if (result < 0)
-			root = root->left;
-		else
-			root = root->right;
-	}
-
-	return root;
-}
-
 extern void rb_insert(struct rb_node *node, struct rb_node **root);
 
 static __always_inline void rb_add(
 	struct rb_node *n, struct rb_node **root,
 	intptr_t (*cmp)(const struct rb_node *, const struct rb_node *))
 {
-	intptr_t result = 0;
+	intptr_t result;
 	struct rb_node **ppn = root, *parent = NULL;
 
 	while (*ppn) {
@@ -156,7 +143,7 @@ static __always_inline struct rb_node *rb_add_unique(
 	struct rb_node *n, struct rb_node **root,
 	intptr_t (*cmp)(const struct rb_node *, const struct rb_node *))
 {
-	intptr_t result = 0;
+	intptr_t result;
 	struct rb_node **ppn = root, *parent = NULL;
 
 	while (*ppn) {
@@ -209,7 +196,8 @@ struct rb_node *rb_next_postorder(const struct rb_node *n);
 
 #define rb_for_each_entry_safe(pos, n, root, member) \
 	for ((pos) = rb_first_entry(root, typeof(*(pos)), member), \
-		(n) = (pos) ? rb_next_entry(pos, member) : NULL; (pos); (pos) = (n), \
+		(n) = (pos) ? rb_next_entry(pos, member) : NULL; \
+		(pos); (pos) = (n), \
 		(n) = (n) ? rb_next_entry(n, member) : NULL)
 
 #define rb_for_each_entry_reverse(pos, root, member) \
@@ -222,6 +210,11 @@ struct rb_node *rb_next_postorder(const struct rb_node *n);
 
 #define rb_for_each_entry_safe_postorder(pos, n, root, member) \
 	for ((pos) = rb_first_entry_postorder(root, typeof(*(pos)), member), \
-		(n) = (pos) ? rb_next_entry_postorder(pos, member) : NULL; (pos); (pos) = (n), \
+		(n) = (pos) ? rb_next_entry_postorder(pos, member) : NULL; \
+		(pos); (pos) = (n), \
 		(n) = (n) ? rb_next_entry_postorder(n, member) : NULL)
+
+#ifdef __cplusplus
+}
+#endif
 #endif

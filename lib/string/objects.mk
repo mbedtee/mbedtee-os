@@ -3,8 +3,4 @@
 
 lib-string-cflags-y +=
 
-lib-string-y += strmisc.o
-
-ifneq ($(CONFIG_KERN_NEWLIB),y)
-lib-string-y += string.o
-endif
+lib-string-y += strmisc.o string.o

@@ -4,9 +4,7 @@
  * red-black-tree
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
+#include <stddef.h>
 
 #include "rbtree.h"
 
@@ -71,6 +69,7 @@ static void rb_rotate_right(struct rb_node *node, struct rb_node **root)
 void rb_insert(struct rb_node *node, struct rb_node **root)
 {
 	struct rb_node *parent = NULL, *grandparent = NULL;
+	struct rb_node *uncle = NULL;
 
 	rb_set_red(node);
 
@@ -86,7 +85,7 @@ void rb_insert(struct rb_node *node, struct rb_node **root)
 			break;
 
 		grandparent = rb_parent(parent);
-		struct rb_node *uncle = grandparent->left;
+		uncle = grandparent->left;
 
 		if (uncle != parent) {
 			if (uncle && rb_is_red(uncle)) {
@@ -128,59 +127,57 @@ static void rb_del_fixup(struct rb_node *parent,
 	struct rb_node *sibling = NULL;
 	struct rb_node *rchild = NULL;
 	struct rb_node *lchild = NULL;
-	bool recursion = false;
 
-	if (parent->right != node) {
-		sibling = parent->right;
-
-		if (rb_is_red(sibling)) {
-			rb_rotate_left(parent, root);
+	for (;;) {
+		if (parent->right != node) {
 			sibling = parent->right;
-		}
 
-		rchild = sibling->right;
-		lchild = sibling->left;
-		if (rchild && rb_is_red(rchild)) {
-			rb_set_black(rchild);
-			rb_rotate_left(parent, root);
-		} else if (lchild && rb_is_red(lchild)) {
-			rb_rotate_right(sibling, root);
-			rb_rotate_left(parent, root);
-			rb_set_black(sibling);
+			if (rb_is_red(sibling)) {
+				rb_rotate_left(parent, root);
+				sibling = parent->right;
+			}
+
+			rchild = sibling->right;
+			lchild = sibling->left;
+			if (rchild && rb_is_red(rchild)) {
+				rb_set_black(rchild);
+				rb_rotate_left(parent, root);
+				break;
+			} else if (lchild && rb_is_red(lchild)) {
+				rb_rotate_right(sibling, root);
+				rb_rotate_left(parent, root);
+				rb_set_black(sibling);
+				break;
+			}
 		} else {
-			recursion = true;
-		}
-	} else {
-		sibling = parent->left;
-
-		if (rb_is_red(sibling)) {
-			rb_rotate_right(parent, root);
 			sibling = parent->left;
+
+			if (rb_is_red(sibling)) {
+				rb_rotate_right(parent, root);
+				sibling = parent->left;
+			}
+
+			lchild = sibling->left;
+			rchild = sibling->right;
+			if (lchild && rb_is_red(lchild)) {
+				rb_set_black(lchild);
+				rb_rotate_right(parent, root);
+				break;
+			} else if (rchild && rb_is_red(rchild)) {
+				rb_rotate_left(sibling, root);
+				rb_rotate_right(parent, root);
+				rb_set_black(sibling);
+				break;
+			}
 		}
 
-		lchild = sibling->left;
-		rchild = sibling->right;
-		if (lchild && rb_is_red(lchild)) {
-			rb_set_black(lchild);
-			rb_rotate_right(parent, root);
-		} else if (rchild && rb_is_red(rchild)) {
-			rb_rotate_left(sibling, root);
-			rb_rotate_right(parent, root);
-			rb_set_black(sibling);
-		} else {
-			recursion = true;
-		}
-	}
-
-	if (recursion) {
 		rb_set_red(sibling);
-
-		struct rb_node *grandparent = rb_parent(parent);
-
-		if (grandparent && rb_is_black(parent))
-			rb_del_fixup(grandparent, parent, root);
-		else
-			rb_set_black(parent);
+		node = parent;
+		parent = rb_parent(parent);
+		if (!parent || rb_is_red(node)) {
+			rb_set_black(node);
+			break;
+		}
 	}
 }
 
@@ -248,7 +245,6 @@ void rb_del(struct rb_node *node, struct rb_node **root)
 	rb_node_init(node);
 }
 
-
 struct rb_node *rb_prev(const struct rb_node *n)
 {
 	struct rb_node *parent = NULL;
@@ -315,13 +311,11 @@ static struct rb_node *left_deepest_node(const struct rb_node *n)
 
 struct rb_node *rb_next_postorder(const struct rb_node *n)
 {
-	struct rb_node *parent = NULL;
+	struct rb_node *parent = rb_parent(n);
 
-	parent = rb_parent(n);
 	if (parent && (n == parent->left) && parent->right)
 		return left_deepest_node(parent->right);
-	else
-		return parent;
+	return parent;
 }
 
 struct rb_node *rb_first_postorder(const struct rb_node *root)

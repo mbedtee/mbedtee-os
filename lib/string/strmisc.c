@@ -14,22 +14,37 @@
 #include <printk.h>
 #include <strmisc.h>
 
-char *basename(const char *path)
+char *basename(char *path)
 {
-	char *p = (char *)path;
+	char *p = path;
+	char *end = NULL;
+	char *base = NULL;
 
-	if (path == NULL || *path == 0)
-		return NULL;
+	if (!path || *path == 0)
+		return "/";
 
 	while (*p)
 		p++;
 
-	while ((p >= path) && (*p != '/'))
-		p--;
+	end = p;
 
-	p = ((p < path) || (*p == '/')) ? p + 1 : p;
+	/* Skip trailing slashes */
+	while (end > path && *(end - 1) == '/')
+		end--;
 
-	return *p ? p : "/";
+	/* All slashes -> root */
+	if (end == path)
+		return "/";
+
+	/* NUL-terminate to strip trailing slashes */
+	*end = '\0';
+
+	/* Walk back to find start of basename */
+	base = end;
+	while (base > path && *(base - 1) != '/')
+		base--;
+
+	return base;
 }
 
 /*
@@ -37,31 +52,36 @@ char *basename(const char *path)
  * including the terminal null '\0'.
  *
  * trim the duplicated '/' and '\'
- * trim the leading / trailing space and tab
+ * trim the leading and trailing space and tab
  */
 void strncpy_trim(char *d, const char *s, size_t n)
 {
 	const char *p1 = s;
 	char *p2 = d, c = 0;
 
+	if (!d || !s)
+		return;
+
 	while (*p1 == ' ' || *p1 == '\t')
 		p1++;
 
-	while (((c = *p1) != '\0') && (p2 - d  < n)) {
+	while (((c = *p1) != '\0') && ((size_t)(p2 - d) < n)) {
 		if (c == '\\')
 			c = '/';
+
 		if (c == '/' && (*(p1 + 1) == '/' ||
-			*(p1 + 1) == '\\'))
+			*(p1 + 1) == '\\')) {
 			p1++;
-		else {
-			*p2++ = *p1++;
+		} else {
+			*p2++ = c;
+			p1++;
 		}
 	}
 
-	*p2-- = '\0';
+	*p2 = '\0';
 
-	while (*p2 == ' ' || *p2 == '\t')
-		*p2-- = '\0';
+	while (p2 > d && (*(p2 - 1) == ' ' || *(p2 - 1) == '\t'))
+		*--p2 = '\0';
 }
 
 /*
@@ -73,46 +93,57 @@ void strtrim_unused(char *s)
 {
 	char *p1 = s, *p2 = s, c = 0;
 
+	if (!s || *s == '\0')
+		return;
+
 	while (*p1 == ' ' || *p1 == '\t')
 		p1++;
 
 	while ((c = *p1) != '\0') {
 		if (c == '\\')
 			c = '/';
+
 		if (c == '/' && (*(p1 + 1) == '/' ||
-			*(p1 + 1) == '\\'))
+			*(p1 + 1) == '\\')) {
 			p1++;
-		else {
-			*p2++ = *p1++;
+		} else {
+			*p2++ = c;
+			p1++;
 		}
 	}
 
-	*p2-- = '\0';
+	*p2 = '\0';
 
-	while (*p2 == ' ' || *p2 == '\t')
-		*p2-- = '\0';
+	/* Trim trailing spaces safely */
+	while (p2 > s && (*(p2 - 1) == ' ' || *(p2 - 1) == '\t'))
+		*--p2 = '\0';
 }
 
 /*
- * check if 's2' is substring of 's1' with delimiter
+ * check if 's2' is a token of 's1' with delimiter
+ * strict match, no suffix/prefix matching allowed.
  */
-int strstr_delimiter(const char *s1, const char *s2,
+int strstr_token(const char *s1, const char *s2,
 	int delimiter)
 {
-	size_t l1 = 0, l2 = 0;
+	size_t len = 0;
+	const char *start = s1;
 
 	if (!s1 || !s2)
 		return false;
 
-	l2 = strlen(s2);
-	l1 = strlen(s1);
+	len = strlen(s2);
 
-	while (l1 >= l2) {
-		l1--;
-		if (!memcmp(s1, s2, l2) && ((s1[l2] == 0) ||
-			(s1[l2] == delimiter)))
-			return true;
-		s1++;
+	while ((s1 = strstr(s1, s2)) != NULL) {
+		/* check start boundary */
+		if (s1 == start || s1[-1] == delimiter) {
+			/* check end boundary */
+			if (s1[len] == delimiter || s1[len] == '\0')
+				return true;
+		}
+		s1 += len;
 	}
+
 	return false;
 }
+

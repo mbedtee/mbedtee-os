@@ -11,14 +11,14 @@
 __weak_symbol void *memset(void *dst, int c, size_t n)
 {
 	unsigned long val = c & 0xff;
-	unsigned long *d = (unsigned long *)dst;
+	unsigned long *d = dst;
 	const int llen = sizeof(long);
 	const int lmask = sizeof(long) - 1;
 
 	while ((long)d & lmask)	{
 		if (n == 0)
 			return dst;
-		*(unsigned char *)d = (unsigned char)c;
+		*(unsigned char *)d = c;
 		d = (void *)d + 1;
 		n--;
 	}
@@ -52,7 +52,7 @@ __weak_symbol void *memset(void *dst, int c, size_t n)
 	}
 
 	while (n--) {
-		*(unsigned char *)d = (unsigned char)c;
+		*(unsigned char *)d = c;
 		d = (void *)d + 1;
 	}
 
