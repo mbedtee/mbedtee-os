@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2025 Xing Loong <xing.xl.loong@gmail.com>
+
+config USER_MBEDCRYPTO
+	bool "Support the user mbedcrypto library"
+	depends on USER
+	default y
+	help
+		Say Y here to enable user mbedcrypto library.
+
+		Default algorithms (always built):
+		  Hash:      MD5, SHA-1, SHA-224, SHA-256, SHA-384, SHA-512
+		  Cipher:    AES (ECB/CBC/CTR/CTS/XTS), DES/3DES (ECB/CBC/CTS)
+		  AEAD:      AES-GCM, AES-CCM
+		  MAC:       HMAC, AES-CMAC, AES/DES/3DES-CBC-MAC
+		  Asymmetric: RSA (PKCS#1 v1.5, PSS, OAEP), DSA, ECDSA, ECDH, DH
+		  KDF:       HKDF
+		  Curves:    SECP192/256/384/521R1, BP256/384/512R1
+
+		Optional algorithms (enable via sub-options below):
+		  ChaCha20-Poly1305, SHA-3, SM3, SM4, SM2, PBKDF2,
+		  Curve25519/Ed25519/X25519, Curve448/Ed448/X448, AES-SIV
+
+config KERNEL_MBEDCRYPTO
+	bool "Support the kernel mbedcrypto library"
+	default y
+	help
+		Say Y here to enable kernel mbedcrypto library.
+
+		Kernel subset (always built):
+		  Hash:   SHA-256
+		  Cipher: AES (ECB/CBC/CTR)
+		  AEAD:   AES-GCM
+		  KDF:    HKDF
+
+if USER_MBEDCRYPTO
+
+config MBEDCRYPTO_CHACHA20
+	bool "ChaCha20-Poly1305 AEAD cipher"
+	default n
+	help
+		Say Y here to enable ChaCha20-Poly1305 AEAD cipher
+		(RFC 7539).
+
+config MBEDCRYPTO_SHA3
+	bool "SHA-3 hash family (SHA3-224/256/384/512)"
+	default n
+	help
+		Say Y here to enable SHA-3 hash algorithms
+		(FIPS 202).
+
+config MBEDCRYPTO_SM3
+	bool "SM3 cryptographic hash (GB/T 32905-2016)"
+	default n
+	help
+		Say Y here to enable the SM3 hash algorithm.
+
+config MBEDCRYPTO_SM4
+	bool "SM4 block cipher (GB/T 32907-2016)"
+	default n
+	help
+		Say Y here to enable the SM4 block cipher.
+
+config MBEDCRYPTO_SM4_TTABLE
+	bool "SM4 T-table acceleration"
+	depends on MBEDCRYPTO_SM4
+	default n
+	help
+		Say Y here to use a 1KB precomputed T-table for SM4
+		round function acceleration. Trades read-only memory
+		for faster encryption/decryption.
+
+config MBEDCRYPTO_SM2
+	bool "SM2 digital signature and public key encryption"
+	depends on MBEDCRYPTO_SM3
+	default n
+	help
+		Say Y here to enable SM2 algorithms (SM2DSA and
+		SM2PKE). Requires SM3.
+
+config MBEDCRYPTO_PBKDF2
+	bool "PBKDF2 key derivation"
+	default n
+	help
+		Say Y here to enable PBKDF2 password-based key
+		derivation (RFC 2898).
+
+config MBEDCRYPTO_CURVE25519
+	bool "Curve25519 / Ed25519 / X25519"
+	default n
+	help
+		Say Y here to enable Curve25519-based algorithms:
+		Ed25519 signature and X25519 key agreement.
+
+config MBEDCRYPTO_ED25519_BTABLE
+	bool "Curve25519 B-table acceleration"
+	depends on MBEDCRYPTO_CURVE25519
+	default n
+	help
+   		Say Y here to enable Curve25519 precomputed basepoint table.
+		Built once at first use. 16 x 160 bytes = 2.5 KB BSS.
+
+config MBEDCRYPTO_CURVE448
+	bool "Curve448 / Ed448 / X448"
+	default n
+	help
+		Say Y here to enable Curve448-based algorithms:
+		Ed448 signature and X448 key agreement.
+
+config MBEDCRYPTO_DES_TABLE
+	bool "DES SP-table acceleration"
+	default y
+	help
+		Say Y here to use precomputed SP lookup tables (2048 bytes)
+		for DES/3DES round function. Provides faster encryption at
+		the cost of additional read-only memory.
+		If N, uses factored S-box + P-permutation tables (1024 bytes)
+		with two-level lookups per S-box.
+
+config MBEDCRYPTO_AES_SIV
+	bool "AES-SIV deterministic AEAD"
+	default n
+	help
+		Say Y here to enable AES-SIV (RFC 5297)
+		deterministic authenticated encryption.
+
+endif # USER_MBEDCRYPTO

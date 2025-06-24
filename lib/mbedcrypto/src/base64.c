@@ -1,0 +1,100 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * Base64 decoding (RFC 4648).
+ */
+
+#include <mbedcrypto/base64.h>
+#include <errno.h>
+#include <string.h>
+
+/* Decoding table: maps ASCII value to 6-bit value, 0xFF = invalid */
+static const uint8_t base64_dec[128] = {
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0x3E, 0xFF, 0xFF, 0xFF, 0x3F, /* +, / */
+	0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, /* 0-7 */
+	0x3C, 0x3D, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, /* 8-9 */
+	0xFF, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, /* A-G */
+	0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, /* H-O */
+	0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, /* P-W */
+	0x17, 0x18, 0x19, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, /* X-Z */
+	0xFF, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, /* a-g */
+	0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, /* h-o */
+	0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30, /* p-w */
+	0x31, 0x32, 0x33, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, /* x-z */
+};
+
+int mbedcrypto_base64_decode(uint8_t *dst, size_t dlen, size_t *olen,
+		const uint8_t *src, size_t slen)
+{
+	size_t i = 0, n = 0;
+	uint32_t j = 0, pad = 0;
+	uint32_t acc = 0;
+
+	/* Skip trailing whitespace */
+	while (slen > 0 && (src[slen - 1] == '\n' || src[slen - 1] == '\r' ||
+			    src[slen - 1] == ' ' || src[slen - 1] == '\t'))
+		slen--;
+
+	/* Count padding */
+	pad = 0;
+	if (slen > 0 && src[slen - 1] == '=') { pad++; slen--; }
+	if (slen > 0 && src[slen - 1] == '=') { pad++; slen--; }
+
+	/* Count valid base64 characters */
+	n = 0;
+	for (i = 0; i < slen; i++) {
+		if (src[i] == '\n' || src[i] == '\r' ||
+		    src[i] == ' '  || src[i] == '\t')
+			continue;
+		if (src[i] > 127 || base64_dec[src[i]] == 0xFF)
+			return -EINVAL;
+		n++;
+	}
+
+	/* Compute output length */
+	*olen = ((n + pad) / 4) * 3 - pad;
+
+	if (!dst)
+		return 0;
+
+	if (*olen > dlen)
+		return -ERANGE;
+
+	/* Decode */
+	j = 0;
+	acc = 0;
+	n = 0;
+	for (i = 0; i < slen; i++) {
+		if (src[i] == '\n' || src[i] == '\r' ||
+		    src[i] == ' '  || src[i] == '\t')
+			continue;
+
+		acc = (acc << 6) | base64_dec[src[i]];
+		j++;
+
+		if (j == 4) {
+			dst[n++] = acc >> 16;
+			dst[n++] = acc >> 8;
+			dst[n++] = acc;
+			j = 0;
+			acc = 0;
+		}
+	}
+
+	/* Handle remaining bits */
+	if (j == 3) {
+		acc <<= 6;
+		dst[n++] = acc >> 16;
+		dst[n++] = acc >> 8;
+	} else if (j == 2) {
+		acc <<= 12;
+		dst[n++] = acc >> 16;
+	}
+
+	return 0;
+}
