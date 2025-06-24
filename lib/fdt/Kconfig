@@ -1,8 +1,0 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
-
-config FDT_LIB
-	bool "Enable the FDT library"
-	default y
-	help
-		Say Y here to enable support the FDT library.
