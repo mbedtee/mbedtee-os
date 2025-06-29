@@ -11,4 +11,12 @@
 #include <tee_api_types.h>
 #include <tee_api_defines.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

@@ -20,7 +20,17 @@
 #include <tee_api_types.h>
 #include <tee_api_defines.h>
 
-TEE_Result TEE_OpenTASession(TEE_UUID *destination,
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+TEE_Result TEE_OpenTASession(const TEE_UUID *destination,
+	uint32_t cancellationRequestTimeout,
+	uint32_t paramTypes, TEE_Param params[4],
+	TEE_TASessionHandle *session, uint32_t *returnOrigin);
+
+TEE_Result TEE_OpenRemoteTASession(const char *remoteTEE,
+	const TEE_UUID *destination,
 	uint32_t cancellationRequestTimeout,
 	uint32_t paramTypes, TEE_Param params[4],
 	TEE_TASessionHandle *session, uint32_t *returnOrigin);
@@ -52,17 +62,17 @@ bool TEE_UnmaskCancellation(void);
 
 bool TEE_MaskCancellation(void);
 
+TEE_Result TEE_MaskPanics(bool mask);
+
 void TEE_PanicCleanup(void);
 
-#define TEE_Panic(ret)											\
-	do {														\
-		EMSG("TEE_Panic - 0x%x (%d)\n", (int)ret, (int)ret);	\
-		TEE_PanicCleanup();										\
-		exit(-ESRCH);											\
-	} while (0)
+void __TEE_Panic(int panicCode,
+	const char *func, int line) __attribute__((noreturn));
+
+#define TEE_Panic(code) __TEE_Panic((code), __func__, __LINE__)
 
 TEE_Result TEE_CheckMemoryAccessRights(
-	uint32_t accessFlags, void *buffer, size_t size);
+	uint32_t accessFlags, const void *buffer, size_t size);
 
 void TEE_SetInstanceData(void *instanceData);
 
@@ -74,13 +84,15 @@ void *TEE_Realloc(void *buffer, size_t newSize);
 
 void TEE_Free(void *buffer);
 
-void TEE_MemMove(void *dest, void *src, size_t size);
+void TEE_MemMove(void *dest, const void *src, size_t size);
 
-int32_t TEE_MemCompare(void *buffer1, void *buffer2, size_t size);
+int32_t TEE_MemCompare(const void *buffer1, const void *buffer2, size_t size);
 
 void TEE_MemFill(void *buffer, uint8_t x, size_t size);
 
 void TEE_GetSystemTime(TEE_Time *time);
+
+TEE_Result TEE_GetSystemTime_PS(TEE_Time *time);
 
 TEE_Result TEE_Wait(uint32_t timeout);
 
@@ -90,30 +102,36 @@ TEE_Result TEE_GetTAPersistentTime(TEE_Time *time);
 
 void TEE_GetREETime(TEE_Time *time);
 
+TEE_Result TEE_GetREETime_PS(TEE_Time *time);
+
 TEE_Result TEE_GetPropertyAsString(
 	TEE_PropSetHandle propsetOrEnumerator,
-	char *name, char *valueBuffer, size_t *valueBufferLen);
+	const char *name, char *valueBuffer, size_t *valueBufferLen);
 
 TEE_Result TEE_GetPropertyAsBool(
 	TEE_PropSetHandle propsetOrEnumerator,
-	char *name, bool *value);
+	const char *name, bool *value);
 
 TEE_Result TEE_GetPropertyAsU32(
 	TEE_PropSetHandle propsetOrEnumerator,
-	char *name, uint32_t *value);
+	const char *name, uint32_t *value);
+
+TEE_Result TEE_GetPropertyAsU64(
+	TEE_PropSetHandle propsetOrEnumerator,
+	const char *name, uint64_t *value);
 
 TEE_Result TEE_GetPropertyAsBinaryBlock(
 	TEE_PropSetHandle propsetOrEnumerator,
-	char *name, void *valueBuffer,
+	const char *name, void *valueBuffer,
 	size_t *valueBufferLen);
 
 TEE_Result TEE_GetPropertyAsUUID(
 	TEE_PropSetHandle propsetOrEnumerator,
-	char *name, TEE_UUID *value);
+	const char *name, TEE_UUID *value);
 
 TEE_Result TEE_GetPropertyAsIdentity(
 	TEE_PropSetHandle propsetOrEnumerator,
-	char *name, TEE_Identity *value);
+	const char *name, TEE_Identity *value);
 
 TEE_Result TEE_AllocatePropertyEnumerator(
 	TEE_PropSetHandle *enumerator);
@@ -234,7 +252,7 @@ TEE_Result TEE_TruncateObjectData(
 	TEE_ObjectHandle object, size_t size);
 
 TEE_Result TEE_SeekObjectData(TEE_ObjectHandle object,
-	size_t offset, TEE_Whence whence);
+	intmax_t offset, TEE_Whence whence);
 
 TEE_Result TEE_AllocateOperation(
 	TEE_OperationHandle *operation,
@@ -254,6 +272,8 @@ TEE_Result TEE_GetOperationInfoMultiple(
 
 void TEE_ResetOperation(TEE_OperationHandle operation);
 
+TEE_Result TEE_ResetOperation_PS(TEE_OperationHandle operation);
+
 TEE_Result TEE_SetOperationKey(
 	TEE_OperationHandle operation,
 	TEE_ObjectHandle key);
@@ -267,6 +287,10 @@ void TEE_CopyOperation(
 	TEE_OperationHandle dstOperation,
 	TEE_OperationHandle srcOperation);
 
+TEE_Result TEE_CopyOperation_PS(
+	TEE_OperationHandle dstOperation,
+	TEE_OperationHandle srcOperation);
+
 TEE_Result TEE_IsAlgorithmSupported(
 	uint32_t algId, uint32_t element);
 
@@ -276,10 +300,18 @@ TEE_Result TEE_GenerateKey(TEE_ObjectHandle object,
 void TEE_DigestUpdate(TEE_OperationHandle operation,
 	void *chunk, size_t chunkSize);
 
+TEE_Result TEE_DigestUpdate_PS(TEE_OperationHandle operation,
+	void *chunk, size_t chunkSize);
+
 TEE_Result TEE_DigestDoFinal(TEE_OperationHandle operation,
 	void *chunk, size_t chunkLen, void *hash, size_t *hashLen);
 
+TEE_Result TEE_DigestExtract(TEE_OperationHandle operation,
+	void *hash, size_t *hashLen);
+
 void TEE_CipherInit(TEE_OperationHandle operation, void *IV, size_t IVLen);
+
+TEE_Result TEE_CipherInit_PS(TEE_OperationHandle operation, void *IV, size_t IVLen);
 
 TEE_Result TEE_CipherUpdate(TEE_OperationHandle operation,
 	void *srcData, size_t srcLen, void *destData, size_t *destLen);
@@ -289,7 +321,11 @@ TEE_Result TEE_CipherDoFinal(TEE_OperationHandle operation,
 
 void TEE_MACInit(TEE_OperationHandle operation, void *IV, size_t IVLen);
 
+TEE_Result TEE_MACInit_PS(TEE_OperationHandle operation, void *IV, size_t IVLen);
+
 void TEE_MACUpdate(TEE_OperationHandle operation, void *chunk, size_t chunkSize);
+
+TEE_Result TEE_MACUpdate_PS(TEE_OperationHandle operation, void *chunk, size_t chunkSize);
 
 TEE_Result TEE_MACComputeFinal(TEE_OperationHandle operation,
 	void *message, size_t messageLen, void *mac, size_t *macLen);
@@ -302,6 +338,9 @@ TEE_Result TEE_AEInit(TEE_OperationHandle operation,
 	uint32_t AADLen, uint32_t payloadLen);
 
 void TEE_AEUpdateAAD(TEE_OperationHandle operation,
+	void *AADdata, size_t AADdataLen);
+
+TEE_Result TEE_AEUpdateAAD_PS(TEE_OperationHandle operation,
 	void *AADdata, size_t AADdataLen);
 
 TEE_Result TEE_AEUpdate(TEE_OperationHandle operation, void *srcData,
@@ -334,7 +373,22 @@ TEE_Result TEE_AsymmetricVerifyDigest(TEE_OperationHandle operation,
 void TEE_DeriveKey(TEE_OperationHandle operation, TEE_Attribute *params,
 	uint32_t paramCount, TEE_ObjectHandle derivedKey);
 
+TEE_Result TEE_DeriveKey_PS(TEE_OperationHandle operation, TEE_Attribute *params,
+	uint32_t paramCount, TEE_ObjectHandle derivedKey);
+
+TEE_Result TEE_EncapsulateKey(TEE_OperationHandle operation,
+	uint32_t keySize, const TEE_Attribute *params,
+	uint32_t paramCount, void *outputBuffer,
+	size_t *bufferLen, TEE_ObjectHandle sessionKey);
+
+TEE_Result TEE_DecapsulateKey(TEE_OperationHandle operation,
+	uint32_t keySize, const TEE_Attribute *params,
+	uint32_t paramCount, const void *encapsulatedKey,
+	size_t bufferLen, TEE_ObjectHandle sessionKey);
+
 void TEE_GenerateRandom(void *randomBuffer, size_t randomBufferLen);
+
+TEE_Result TEE_GenerateRandom_PS(void *randomBuffer, size_t randomBufferLen);
 
 size_t TEE_BigIntFMMSizeInU32(size_t modulusSizeInBits);
 
@@ -428,5 +482,9 @@ void TEE_BigIntConvertFromFMM(TEE_BigInt *dest,
 void TEE_BigIntComputeFMM(TEE_BigIntFMM *dest,
 	TEE_BigIntFMM *op1, TEE_BigIntFMM *op2,
 	TEE_BigInt *n, TEE_BigIntFMMContext *context);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

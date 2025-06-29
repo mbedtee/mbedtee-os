@@ -56,17 +56,17 @@
 
 #define strong_alias(ori, aliasname) extern typeof(aliasname) aliasname __attribute__ ((alias(#ori)))
 
-#define bswap16(_x) ((unsigned short)(((_x) >> 8) | (((_x) << 8) & 0xff00)))
-#define bswap32(_x) ((unsigned int)(((_x) >> 24) | (((_x) >> 8) & 0xff00) | \
-	    (((_x) << 8) & 0xff0000) | (((_x) << 24) & 0xff000000)))
-
 #define __nosprot __attribute__((constructor, optimize("-fno-stack-protector")))
 
 #define __printf(fmt, args) __attribute__((format(printf, fmt, args)))
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
 
 #include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define U(x)  (x##U)
 #define UL(x) (x##UL)
@@ -86,12 +86,68 @@ static inline long IS_ERR_PTR(void *ptr)
 	unsigned long p = PTR_ERR(ptr);
 
 	/*
-	 * kernel always reject the pointer
-	 * address which is less than 64KiB
+	 * The kernel always rejects pointer addresses
+	 * below 64 KiB.
 	 */
 	return (p <= (unsigned long)UINT16_MAX) ||
 		(p >= (unsigned long)(-2000UL));
 }
+
+static inline uint8_t load8h(void *x)
+{
+	return *(volatile uint8_t *)x;
+}
+
+static inline uint16_t load16h(void *x)
+{
+	uint16_t c = load8h(x + 1);
+
+	return (c << 8) | load8h(x);
+}
+
+static inline uint32_t load32h(void *x)
+{
+	uint32_t c = load16h(x + 2);
+
+	return (c << 16) | load16h(x);
+}
+
+static inline void store8h(uint8_t c, void *x)
+{
+	*(volatile uint8_t *)x = c;
+}
+
+static inline void store16h(uint16_t c, void *x)
+{
+	store8h(c, x);
+	store8h(c >> 8, x + 1);
+}
+
+static inline void store32h(uint32_t c, void *x)
+{
+	store16h(c, x);
+	store16h(c >> 16, x + 2);
+}
+
+static inline uint16_t bswap16(uint16_t val)
+{
+	return ((val >> 8) | ((val << 8) & 0xff00));
+}
+
+static inline uint32_t bswap32(uint32_t val)
+{
+	return ((val >> 24) | ((val >> 8) & 0xff00) | \
+	    ((val << 8) & 0xff0000) | ((val << 24) & 0xff000000));
+}
+
+#define cpu_to_be16(x) bswap16(x)
+#define cpu_to_be32(x) bswap32(x)
+#define be16_to_cpu(x) bswap16(x)
+#define be32_to_cpu(x) bswap32(x)
+
+#ifdef __cplusplus
+}
+#endif
 
 #else
 

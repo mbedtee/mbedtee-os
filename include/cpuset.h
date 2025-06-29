@@ -10,6 +10,10 @@
 #include <stdbool.h>
 #include <string.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define CPUSET_DEFAULT_CPUS (512)
 #define CPUSET_MAX_CPUS (2048)
 
@@ -78,5 +82,9 @@ static inline void CPU_FILL(cpu_set_t *dst)
 {
 	memset(dst, 0xff, sizeof(cpu_set_t));
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

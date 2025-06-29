@@ -10,6 +10,10 @@
 #include <defs.h>
 #include <sys/cdefs.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct list_head {
 	struct list_head *next, *prev;
 };
@@ -202,5 +206,9 @@ static inline void list_bulk_move_tail(struct list_head *h,
 #define list_for_each_entry_safe_continue_reverse(p, n, h, m) \
 	for (p = list_prev_entry(p, m), n = list_prev_entry(p, m); \
 	     &(p)->m != (h); p = n, n = list_prev_entry(n, m))
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

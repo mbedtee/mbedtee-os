@@ -9,6 +9,10 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct __TEE_TASessionHandle *TEE_TASessionHandle;
 
 typedef uint32_t TEE_Result;
@@ -109,5 +113,9 @@ typedef struct {
 typedef uint32_t TEE_BigInt;
 typedef uint32_t TEE_BigIntFMM;
 typedef uint32_t TEE_BigIntFMMContext;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

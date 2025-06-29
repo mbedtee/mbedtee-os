@@ -7,6 +7,19 @@
 #ifndef _TEE_API_DEFINES_H
 #define _TEE_API_DEFINES_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* TEE Internal Core API version (v1.4.0) */
+#define TEE_CORE_API_MAJOR_VERSION             (1)
+#define TEE_CORE_API_MINOR_VERSION             (4)
+#define TEE_CORE_API_MAINTENANCE_VERSION       (0)
+#define TEE_CORE_API_VERSION                   (((TEE_CORE_API_MAJOR_VERSION) << 24) | \
+					       ((TEE_CORE_API_MINOR_VERSION) << 16) | \
+					       ((TEE_CORE_API_MAINTENANCE_VERSION) << 8))
+#define TEE_CORE_API_1_4
+
 /* API Error Codes */
 #define TEE_SUCCESS                          0x00000000
 #define TEE_ERROR_CORRUPT_OBJECT             0xF0100001
@@ -14,6 +27,8 @@
 #define TEE_ERROR_STORAGE_NOT_AVAILABLE      0xF0100003
 #define TEE_ERROR_STORAGE_NOT_AVAILABLE_2    0xF0100004
 #define TEE_ERROR_CIPHERTEXT_INVALID         0xF0100006
+#define TEE_ERROR_INVALID_PUBLIC_KEY         0xF0100007
+#define TEE_ERROR_DATA_TO_WRITE              0xF0100008
 #define TEE_ERROR_GENERIC                    0xFFFF0000
 #define TEE_ERROR_ACCESS_DENIED              0xFFFF0001
 #define TEE_ERROR_CANCEL                     0xFFFF0002
@@ -37,6 +52,30 @@
 #define TEE_ERROR_STORAGE_NO_SPACE           0xFFFF3041
 #define TEE_ERROR_MAC_INVALID                0xFFFF3071
 #define TEE_ERROR_SIGNATURE_INVALID          0xFFFF3072
+#define TEE_ERROR_PANIC                      0xFFFF3301
+
+/* TEE_MaskPanics panic-state return codes (GP v1.4 Table 3-3) */
+#define TEE_PANIC_ALREADY_OPEN               0xF010FF01
+#define TEE_PANIC_BAD_AAD_LENGTH             0xF010FF02
+#define TEE_PANIC_BAD_CIPHERTEXT             0xF010FF03
+#define TEE_PANIC_BAD_ID                     0xF010FF04
+#define TEE_PANIC_BAD_INPUT_LENGTH           0xF010FF05
+#define TEE_PANIC_BAD_IV                     0xF010FF06
+#define TEE_PANIC_BAD_PARAMETERS             0xF010FF07
+#define TEE_PANIC_CRYPTO_FAILURE             0xF010FF08
+#define TEE_PANIC_HARDWARE_FAILURE           0xF010FF09
+#define TEE_PANIC_INSUFFICIENT_ENTROPY       0xF010FF0A
+#define TEE_PANIC_INVALID_ALG                0xF010FF0B
+#define TEE_PANIC_INVALID_ALG_2              0xF010FF0C
+#define TEE_PANIC_INVALID_MEMORY             0xF010FF0D
+#define TEE_PANIC_INVALID_MODE               0xF010FF0E
+#define TEE_PANIC_INVALID_MODE_2             0xF010FF0F
+#define TEE_PANIC_INVALID_SIZE               0xF010FF10
+#define TEE_PANIC_INVALID_SIZE_2             0xF010FF11
+#define TEE_PANIC_MISSING_PARAMETER          0xF010FF12
+#define TEE_PANIC_NOT_DISJOINT               0xF010FF13
+#define TEE_PANIC_NO_SHARE                   0xF010FF14
+#define TEE_PANIC_NULL_SOURCE                0xF010FF15
 #define TEE_ERROR_TIME_NOT_SET               0xFFFF5000
 #define TEE_ERROR_TIME_NEEDS_RESET           0xFFFF5001
 
@@ -85,8 +124,11 @@
 #define TEE_MEMORY_ACCESS_NONSECURE             0x10000000
 #define TEE_MEMORY_ACCESS_SECURE                0x20000000
 
-/* Memory Management Constant */
+/* Memory Management Constants */
 #define TEE_MALLOC_FILL_ZERO                    0x00000000
+#define TEE_MALLOC_NO_FILL                      0x00000001
+#define TEE_MALLOC_NO_SHARE                     0x00000002
+#define TEE_MAX_RETAINED_DATA                   0
 
 /* Other constants */
 #define TEE_STORAGE_PRIVATE                     0x00000001
@@ -110,12 +152,14 @@
 #define TEE_USAGE_DERIVE                        0x00000040
 
 #define TEE_DATA_MAX_POSITION                   0xFFFFFFFF
+#define TEE_DATA_MAX_POSITION_LONG              0xFFFFFFFF
 #define TEE_OBJECT_ID_MAX_LEN                   64
 
 #define TEE_HANDLE_FLAG_PERSISTENT              0x00010000
 #define TEE_HANDLE_FLAG_INITIALIZED             0x00020000
 #define TEE_HANDLE_FLAG_KEY_SET                 0x00040000
 #define TEE_HANDLE_FLAG_EXPECT_TWO_KEYS         0x00080000
+#define TEE_HANDLE_FLAG_EXTRACTING              0x00100000
 
 #define TEE_OPERATION_CIPHER                    1
 #define TEE_OPERATION_MAC                       3
@@ -127,6 +171,7 @@
 
 #define TEE_OPERATION_STATE_INITIAL             0x00000000
 #define TEE_OPERATION_STATE_ACTIVE              0x00000001
+#define TEE_OPERATION_STATE_EXTRACTING          0x00000002
 
 #define TEE_MODE_ENCRYPT                        0x00000000
 #define TEE_MODE_DECRYPT                        0x00000001
@@ -137,8 +182,10 @@
 #define TEE_MODE_DERIVE                         0x00000006
 #define TEE_MODE_ILLEGAL_VALUE                  0x7FFFFFFF
 
+#define TEE_ALG_NONE                            0x10000000
 #define TEE_ALG_AES_ECB_NOPAD                   0x10000010
 #define TEE_ALG_AES_CBC_NOPAD                   0x10000110
+#define TEE_ALG_AES_CBC_PKCS5                   0x10000112
 #define TEE_ALG_AES_CTR                         0x10000210
 #define TEE_ALG_AES_CTS                         0x10000310
 #define TEE_ALG_AES_XTS                         0x10000410
@@ -147,35 +194,56 @@
 #define TEE_ALG_AES_CMAC                        0x30000610
 #define TEE_ALG_AES_CCM                         0x40000710
 #define TEE_ALG_AES_GCM                         0x40000810
+#define TEE_ALG_CHACHA20                        0x10000016
+#define TEE_ALG_CHACHA20_POLY1305               0x10000017
 #define TEE_ALG_DES_ECB_NOPAD                   0x10000011
 #define TEE_ALG_DES_CBC_NOPAD                   0x10000111
+#define TEE_ALG_DES_CBC_PKCS5                   0x10000118
 #define TEE_ALG_DES_CBC_MAC_NOPAD               0x30000111
 #define TEE_ALG_DES_CBC_MAC_PKCS5               0x30000511
 #define TEE_ALG_DES3_ECB_NOPAD                  0x10000013
 #define TEE_ALG_DES3_CBC_NOPAD                  0x10000113
+#define TEE_ALG_DES3_CBC_PKCS5                  0x10000119
 #define TEE_ALG_DES3_CBC_MAC_NOPAD              0x30000113
 #define TEE_ALG_DES3_CBC_MAC_PKCS5              0x30000513
+#define TEE_ALG_POLY1305                        0x30000020
 #define TEE_ALG_RSASSA_PKCS1_V1_5_MD5           0x70001830
 #define TEE_ALG_RSASSA_PKCS1_V1_5_SHA1          0x70002830
 #define TEE_ALG_RSASSA_PKCS1_V1_5_SHA224        0x70003830
 #define TEE_ALG_RSASSA_PKCS1_V1_5_SHA256        0x70004830
 #define TEE_ALG_RSASSA_PKCS1_V1_5_SHA384        0x70005830
 #define TEE_ALG_RSASSA_PKCS1_V1_5_SHA512        0x70006830
+#define TEE_ALG_RSASSA_PKCS1_V1_5_SHA3_224      0x70008830
+#define TEE_ALG_RSASSA_PKCS1_V1_5_SHA3_256      0x70009830
+#define TEE_ALG_RSASSA_PKCS1_V1_5_SHA3_384      0x7000A830
+#define TEE_ALG_RSASSA_PKCS1_V1_5_SHA3_512      0x7000B830
 #define TEE_ALG_RSASSA_PKCS1_PSS_MGF1_SHA1      0x70212930
 #define TEE_ALG_RSASSA_PKCS1_PSS_MGF1_SHA224    0x70313930
 #define TEE_ALG_RSASSA_PKCS1_PSS_MGF1_SHA256    0x70414930
 #define TEE_ALG_RSASSA_PKCS1_PSS_MGF1_SHA384    0x70515930
 #define TEE_ALG_RSASSA_PKCS1_PSS_MGF1_SHA512    0x70616930
+#define TEE_ALG_RSASSA_PKCS1_PSS_MGF1_SHA3_224  0x70818930
+#define TEE_ALG_RSASSA_PKCS1_PSS_MGF1_SHA3_256  0x70919930
+#define TEE_ALG_RSASSA_PKCS1_PSS_MGF1_SHA3_384  0x70A1A930
+#define TEE_ALG_RSASSA_PKCS1_PSS_MGF1_SHA3_512  0x70B1B930
 #define TEE_ALG_RSAES_PKCS1_V1_5                0x60000130
 #define TEE_ALG_RSAES_PKCS1_OAEP_MGF1_SHA1      0x60210230
 #define TEE_ALG_RSAES_PKCS1_OAEP_MGF1_SHA224    0x60310230
 #define TEE_ALG_RSAES_PKCS1_OAEP_MGF1_SHA256    0x60410230
 #define TEE_ALG_RSAES_PKCS1_OAEP_MGF1_SHA384    0x60510230
 #define TEE_ALG_RSAES_PKCS1_OAEP_MGF1_SHA512    0x60610230
+#define TEE_ALG_RSAES_PKCS1_OAEP_MGF1_SHA3_224  0x60810230
+#define TEE_ALG_RSAES_PKCS1_OAEP_MGF1_SHA3_256  0x60910230
+#define TEE_ALG_RSAES_PKCS1_OAEP_MGF1_SHA3_384  0x60A10230
+#define TEE_ALG_RSAES_PKCS1_OAEP_MGF1_SHA3_512  0x60B10230
 #define TEE_ALG_RSA_NOPAD                       0x60000030
 #define TEE_ALG_DSA_SHA1                        0x70002131
 #define TEE_ALG_DSA_SHA224                      0x70003131
 #define TEE_ALG_DSA_SHA256                      0x70004131
+#define TEE_ALG_DSA_SHA3_224                    0x70008131
+#define TEE_ALG_DSA_SHA3_256                    0x70009131
+#define TEE_ALG_DSA_SHA3_384                    0x7000A131
+#define TEE_ALG_DSA_SHA3_512                    0x7000B131
 #define TEE_ALG_DH_DERIVE_SHARED_SECRET         0x80000032
 #define TEE_ALG_MD5                             0x50000001
 #define TEE_ALG_SHA1                            0x50000002
@@ -184,6 +252,11 @@
 #define TEE_ALG_SHA384                          0x50000005
 #define TEE_ALG_SHA512                          0x50000006
 #define TEE_ALG_SM3                             0x50000007
+#define TEE_ALG_SHA3_224                        0x50000008
+#define TEE_ALG_SHA3_256                        0x50000009
+#define TEE_ALG_SHA3_384                        0x5000000A
+#define TEE_ALG_SHA3_512                        0x5000000B
+#define TEE_ALG_SHA256_192                      0x5000000C
 #define TEE_ALG_HMAC_MD5                        0x30000001
 #define TEE_ALG_HMAC_SHA1                       0x30000002
 #define TEE_ALG_HMAC_SHA224                     0x30000003
@@ -191,26 +264,45 @@
 #define TEE_ALG_HMAC_SHA384                     0x30000005
 #define TEE_ALG_HMAC_SHA512                     0x30000006
 #define TEE_ALG_HMAC_SM3                        0x30000007
+#define TEE_ALG_HMAC_SHA3_224                   0x30000008
+#define TEE_ALG_HMAC_SHA3_256                   0x30000009
+#define TEE_ALG_HMAC_SHA3_384                   0x3000000A
+#define TEE_ALG_HMAC_SHA3_512                   0x3000000B
 #define TEE_ALG_ECDSA_SHA1                      0x70001042
 #define TEE_ALG_ECDSA_SHA224                    0x70002042
 #define TEE_ALG_ECDSA_SHA256                    0x70003042
 #define TEE_ALG_ECDSA_SHA384                    0x70004042
 #define TEE_ALG_ECDSA_SHA512                    0x70005042
+#define TEE_ALG_ECDSA_SHA3_224                  0x70006042
+#define TEE_ALG_ECDSA_SHA3_256                  0x70007042
+#define TEE_ALG_ECDSA_SHA3_384                  0x70008042
+#define TEE_ALG_ECDSA_SHA3_512                  0x70009042
 #define TEE_ALG_ED25519                         0x70006043
+#define TEE_ALG_ED448                           0x70006044
 #define TEE_ALG_ECDH_DERIVE_SHARED_SECRET       0x80000042
 #define TEE_ALG_X25519                          0x80000044
+#define TEE_ALG_X448                            0x80000045
 #define TEE_ALG_SM2_DSA_SM3                     0x70006045
 #define TEE_ALG_SM2_KEP                         0x60000045
-#define TEE_ALG_SM2_PKE                         0x80000045
+#define TEE_ALG_SM2_PKE                         0x80000046
+#define TEE_ALG_HKDF                            0x80000047
 #define TEE_ALG_SM4_ECB_NOPAD                   0x10000014
+#define TEE_ALG_SM4_ECB_PKCS5                   0x10000015
 #define TEE_ALG_SM4_CBC_NOPAD                   0x10000114
+#define TEE_ALG_SM4_CBC_PKCS5                   0x10000115
 #define TEE_ALG_SM4_CTR                         0x10000214
+#define TEE_ALG_SM4_GCM                         0x40000814
+#define TEE_ALG_SM4_CCM                         0x40000714
 #define TEE_ALG_ILLEGAL_VALUE                   0xEFFFFFFF
 
 
 #define TEE_TYPE_AES                            0xA0000010
 #define TEE_TYPE_DES                            0xA0000011
 #define TEE_TYPE_DES3                           0xA0000013
+#define TEE_TYPE_SM4                            0xA0000014
+#define TEE_TYPE_CHACHA20                       0xA0000015
+#define TEE_TYPE_POLY1305                       0xA0000020
+#define TEE_TYPE_GENERIC_SECRET                 0xA0000000
 #define TEE_TYPE_HMAC_MD5                       0xA0000001
 #define TEE_TYPE_HMAC_SHA1                      0xA0000002
 #define TEE_TYPE_HMAC_SHA224                    0xA0000003
@@ -218,6 +310,10 @@
 #define TEE_TYPE_HMAC_SHA384                    0xA0000005
 #define TEE_TYPE_HMAC_SHA512                    0xA0000006
 #define TEE_TYPE_HMAC_SM3                       0xA0000007
+#define TEE_TYPE_HMAC_SHA3_224                  0xA0000008
+#define TEE_TYPE_HMAC_SHA3_256                  0xA0000009
+#define TEE_TYPE_HMAC_SHA3_384                  0xA000000A
+#define TEE_TYPE_HMAC_SHA3_512                  0xA000000B
 #define TEE_TYPE_RSA_PUBLIC_KEY                 0xA0000030
 #define TEE_TYPE_RSA_KEYPAIR                    0xA1000030
 #define TEE_TYPE_DSA_PUBLIC_KEY                 0xA0000031
@@ -237,8 +333,11 @@
 #define TEE_TYPE_SM2_KEP_KEYPAIR                0xA1000046
 #define TEE_TYPE_SM2_PKE_PUBLIC_KEY             0xA0000047
 #define TEE_TYPE_SM2_PKE_KEYPAIR                0xA1000047
-#define TEE_TYPE_SM4                            0xA0000014
-#define TEE_TYPE_GENERIC_SECRET                 0xA0000000
+#define TEE_TYPE_ED448_PUBLIC_KEY               0xA0000048
+#define TEE_TYPE_ED448_KEYPAIR                  0xA1000048
+#define TEE_TYPE_X448_PUBLIC_KEY                0xA0000049
+#define TEE_TYPE_X448_KEYPAIR                   0xA1000049
+#define TEE_TYPE_HKDF                           0xA000004A
 #define TEE_TYPE_CORRUPTED_OBJECT               0xA00000BE
 #define TEE_TYPE_DATA                           0xA00000BF
 #define TEE_TYPE_ILLEGAL_VALUE                  0xEFFFFFFF
@@ -265,14 +364,42 @@
 #define TEE_ATTR_DH_PUBLIC_VALUE                0xD0000132
 #define TEE_ATTR_DH_PRIVATE_VALUE               0xC0000232
 #define TEE_ATTR_RSA_OAEP_LABEL                 0xD0000930
+#define TEE_ATTR_RSA_OAEP_MGF_HASH              0xF0000931
 #define TEE_ATTR_RSA_PSS_SALT_LENGTH            0xF0000A30
 #define TEE_ATTR_ECC_PUBLIC_VALUE_X             0xD0000141
 #define TEE_ATTR_ECC_PUBLIC_VALUE_Y             0xD0000241
+#define TEE_ATTR_ECC_EPHEMERAL_PUBLIC_VALUE_X   0xD0000146
+#define TEE_ATTR_ECC_EPHEMERAL_PUBLIC_VALUE_Y   0xD0000246
 #define TEE_ATTR_ECC_PRIVATE_VALUE              0xC0000341
 #define TEE_ATTR_ECC_CURVE                      0xF0000441
+#define TEE_ATTR_EDDSA_CTX                      0xD0000643
+#define TEE_ATTR_ED25519_PUBLIC_VALUE           0xD0000743
+#define TEE_ATTR_ED25519_PRIVATE_VALUE          0xC0000843
+#define TEE_ATTR_X25519_PUBLIC_VALUE            0xD0000944
+#define TEE_ATTR_X25519_PRIVATE_VALUE           0xC0000A44
+#define TEE_ATTR_EDDSA_PREHASH                  0xF0000004
+#define TEE_ATTR_ED448_PUBLIC_VALUE             0xD0000002
+#define TEE_ATTR_ED448_PRIVATE_VALUE            0xC0000003
+#define TEE_ATTR_X448_PUBLIC_VALUE              0xD0000A45
+#define TEE_ATTR_X448_PRIVATE_VALUE             0xC0000A46
+#define TEE_ATTR_SM2_ID_INITIATOR               0xD0000446
+#define TEE_ATTR_SM2_ID_RESPONDER               0xD0000546
+#define TEE_ATTR_SM2_KEP_USER                   0xF0000646
+#define TEE_ATTR_SM2_KEP_CONFIRMATION_IN        0xD0000746
+#define TEE_ATTR_SM2_KEP_CONFIRMATION_OUT       0xD0000846
+#define TEE_ATTR_HKDF_SALT                      0xD0000946
+#define TEE_ATTR_HKDF_INFO                      0xD0000A46
+#define TEE_ATTR_HKDF_HASH_ALGORITHM            0xF0000B46
+#define TEE_ATTR_KDF_KEY_SIZE                   0xF0000C46
+#define TEE_ATTR_HASH_TYPE                      0xF0000D01
+#define TEE_ATTR_OPTIMIZATION                   0xF0000D02
 
 #define TEE_ATTR_FLAG_VALUE                     0x20000000
 #define TEE_ATTR_FLAG_PUBLIC                    0x10000000
+
+#define TEE_ATTR_ILLEGAL_PRIVATE_REF            0xCEFFFFFF
+#define TEE_ATTR_ILLEGAL_PUBLIC_REF             0xDEFFFFFF
+#define TEE_ATTR_ILLEGAL_VALUE                  0xFEFFFFFF
 
 #define TEE_CRYPTO_ELEMENT_NONE                 0x00000000
 #define TEE_ECC_CURVE_NIST_P192                 0x00000001
@@ -295,7 +422,9 @@
 #define TEE_ECC_CURVE_BSI_P384t1                0x00000206
 #define TEE_ECC_CURVE_BSI_P512t1                0x00000207
 #define TEE_ECC_CURVE_25519                     0x00000300
-#define TEE_ECC_CURVE_SM2                       0x00000300
+#define TEE_ECC_CURVE_448                       0x00000301
+#define TEE_ECC_CURVE_SM2                       0x00000400
+#define TEE_ECC_CURVE_SEC_P256k1                0x00000504
 
 /*
  * The macro TEE_PARAM_TYPES can be used to construct a value that you can
@@ -326,5 +455,9 @@
 #define TEE_BigIntSizeInU32(n) ((((n) + 31) / 32)  + 2)
 
 #define TA_EXPORT __used
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

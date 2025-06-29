@@ -10,6 +10,10 @@
 #include <tee_api_defines.h>
 #include <tee_api_types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct globalplatform_open_session {
 	TEE_UUID *uid;    /* dst's uuid */
 	uint32_t timeout; /* microseconds */
@@ -37,5 +41,9 @@ struct globalplatform_memacc {
 #define GLOBALPLATFORM_CMD_CLOSE_SESSION   0xdeff03
 #define GLOBALPLATFORM_CMD_GET_REETIME     0xdeff04
 #define GLOBALPLATFORM_CMD_CHECK_MEMACC    0xdeff05
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

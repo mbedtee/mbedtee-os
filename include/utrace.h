@@ -7,6 +7,10 @@
 #ifndef _UTRACE_H
 #define _UTRACE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define TRACE_LEVEL_IGNORE 0
 #define TRACE_LEVEL_ERROR  1
 #define TRACE_LEVEL_WARN   2
@@ -43,5 +47,9 @@ void utrace(const char *func, int line, int level, const char *fmt, ...);
 			printf("\n"); \
 	} \
 } while (0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
