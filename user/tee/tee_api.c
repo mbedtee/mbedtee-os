@@ -20,6 +20,7 @@
 #include <pthread_mutexdep.h>
 
 #include <tee_internal_api.h>
+#include "tee_api_priv.h"
 
 static void *ta_instance_data;
 
@@ -28,6 +29,7 @@ static DECLARE_DEFAULT_PTHREAD_MUTEX(sess_lock);
 struct sess_node { intptr_t sess; struct list_head node; };
 static intptr_t globalplatform_fd = -1;
 static bool tee_api_panicked;
+static bool tee_api_mask_panics;
 
 static void TEE_APIDeInit(int code, void *arg)
 {
@@ -83,7 +85,7 @@ void TEE_PanicCleanup(void)
 }
 
 TEE_Result TEE_OpenTASession(
-	TEE_UUID *destination,
+	const TEE_UUID *destination,
 	uint32_t cancellationRequestTimeout,
 	uint32_t paramTypes, TEE_Param params[4],
 	TEE_TASessionHandle	*session,
@@ -92,28 +94,22 @@ TEE_Result TEE_OpenTASession(
 	intptr_t ret = -1;
 	uint32_t org = TEE_ORIGIN_TEE;
 	struct globalplatform_open_session sess = {
-		.uid = destination,
+		.uid = (TEE_UUID *)destination,
 		.timeout = TEE_TIMEOUT_INFINITE,
 		.type = paramTypes,
 		.param = params
 	};
 	struct sess_node *n = NULL;
 
-	if (session == NULL) {
+	if (!session)
 		TEE_Panic(EFAULT);
-		return ret;
-	}
 
-	if (destination == NULL) {
+	if (!destination)
 		TEE_Panic(EFAULT);
-		return ret;
-	}
 
 	n = malloc(sizeof(struct sess_node));
-	if (n == NULL) {
+	if (!n)
 		TEE_Panic(ENOMEM);
-		return ret;
-	}
 
 	__pthread_mutex_lock(&sess_lock);
 
@@ -158,9 +154,33 @@ out:
 	return ret;
 }
 
+TEE_Result TEE_OpenRemoteTASession(const char *remoteTEE,
+	const TEE_UUID *destination,
+	uint32_t cancellationRequestTimeout,
+	uint32_t paramTypes, TEE_Param params[4],
+	TEE_TASessionHandle *session,
+	uint32_t *returnOrigin)
+{
+	if (remoteTEE && remoteTEE[0] != 0) {
+		if (session)
+			*session = TEE_HANDLE_NULL;
+		if (returnOrigin)
+			*returnOrigin = TEE_ORIGIN_TEE;
+		return TEE_ERROR_NOT_IMPLEMENTED;
+	}
+
+	return TEE_OpenTASession(destination,
+		cancellationRequestTimeout,
+		paramTypes, params,
+		session, returnOrigin);
+}
+
 void TEE_CloseTASession(TEE_TASessionHandle	session)
 {
 	struct sess_node *n = NULL;
+
+	if (session == TEE_HANDLE_NULL)
+		return;
 
 	__pthread_mutex_lock(&sess_lock);
 	list_for_each_entry(n, &sess_list, node) {
@@ -226,12 +246,62 @@ bool TEE_MaskCancellation(void)
 	return pthread_session_cancel_mask();
 }
 
+TEE_Result TEE_MaskPanics(bool mask)
+{
+	tee_api_mask_panics = mask;
+	return TEE_SUCCESS;
+}
+
+bool __TEE_ArePanicsMasked(void)
+{
+	return tee_api_mask_panics;
+}
+
+void __TEE_Panic(int panicCode, const char *func, int line)
+{
+	/* Normalize negative errno values to their positive form */
+	if (panicCode < 0 && panicCode > -__ELASTERROR)
+		panicCode = -panicCode;
+
+	utrace(func, line, TRACE_LEVEL_ERROR,
+		"TEE_Panic - 0x%x\n", panicCode);
+
+	if (tee_api_mask_panics)
+		WMSG("TEE_Panic called while panic masking is enabled\n");
+
+	TEE_PanicCleanup();
+
+	exit(-ESRCH);
+}
+
+/*
+ * For non-_PS TEE_Result functions: return panic_code if panics are masked,
+ * otherwise panic unconditionally at the original caller site.
+ */
+TEE_Result __TEE_PanicOrReturnImpl(TEE_Result panic_code,
+	const char *func, int line)
+{
+	if (__TEE_ArePanicsMasked())
+		return panic_code;
+
+	__TEE_Panic(panic_code, func, line);
+}
+
+TEE_Result __TEE_PanicOrDieImpl(TEE_Result ret, TEE_Result panic_code,
+	const char *func, int line)
+{
+	if (panic_code)
+		return __TEE_PanicOrReturnImpl(panic_code, func, line);
+
+	__TEE_Panic(ret, func, line);
+}
+
 TEE_Result TEE_CheckMemoryAccessRights(
-	uint32_t accessFlags, void *buffer, size_t size)
+	uint32_t accessFlags, const void *buffer, size_t size)
 {
 	TEE_Result ret = TEE_ERROR_ACCESS_DENIED;
 	struct globalplatform_memacc acc = {
-		.va = buffer,
+		.va = (void *)buffer,
 		.size = size,
 		.flags = accessFlags
 	};
@@ -258,18 +328,33 @@ void *TEE_Malloc(size_t size, uint32_t hint)
 {
 	void *buffer = NULL;
 
-	buffer = malloc(size);
-	if (buffer == NULL)
+	if (hint & ~(TEE_MALLOC_NO_FILL | TEE_MALLOC_NO_SHARE))
+		TEE_Panic(EINVAL);
+
+	if ((hint & TEE_MALLOC_NO_FILL) && !(hint & TEE_MALLOC_NO_SHARE))
+		TEE_Panic(EINVAL);
+
+	/* Spec: TEE_Malloc(0) returns a non-NULL non-dereferenceable value */
+	buffer = malloc(size ? size : 1);
+	if (!buffer)
 		return NULL;
 
-	if (hint == TEE_MALLOC_FILL_ZERO)
-		memset(buffer, 0, size);
+	if (!(hint & TEE_MALLOC_NO_FILL))
+		memset(buffer, 0, size ? size : 1);
 
 	return buffer;
 }
 
 void *TEE_Realloc(void *buffer, size_t newSize)
 {
+	if (!buffer)
+		return TEE_Malloc(newSize, TEE_MALLOC_FILL_ZERO);
+
+	if (newSize == 0) {
+		free(buffer);
+		return TEE_Malloc(0, TEE_MALLOC_FILL_ZERO);
+	}
+
 	return realloc(buffer, newSize);
 }
 
@@ -278,14 +363,34 @@ void TEE_Free(void *buffer)
 	free(buffer);
 }
 
-void TEE_MemMove(void *dest, void *src, size_t size)
+void TEE_MemMove(void *dest, const void *src, size_t size)
 {
 	memmove(dest, src, size);
 }
 
-int32_t TEE_MemCompare(void *buffer1, void *buffer2, size_t size)
+int32_t TEE_MemCompare(const void *buffer1, const void *buffer2, size_t size)
 {
-	return memcmp(buffer1, buffer2, size);
+	const volatile unsigned char *p1 = buffer1;
+	const volatile unsigned char *p2 = buffer2;
+	volatile int32_t result = 0;
+	volatile unsigned int found = 0;
+	unsigned int xor_val = 0;
+	unsigned int neq = 0;
+	unsigned int is_first = 0;
+	size_t i = 0;
+
+	for (i = 0; i < size; i++) {
+		xor_val = p1[i] ^ p2[i];
+		/* neq: all-ones if bytes differ, zero if same */
+		neq = 0u - ((xor_val | (0u - xor_val)) >> 31);
+		/* is_first: all-ones only at the first differing byte */
+		is_first = neq & ~found;
+
+		result |= (p1[i] - p2[i]) & is_first;
+		found |= neq;
+	}
+
+	return result;
 }
 
 void TEE_MemFill(void *buffer, uint8_t x, size_t size)
@@ -298,7 +403,7 @@ void TEE_GetSystemTime(TEE_Time *time)
 	int ret = 0;
 	struct timeval t;
 
-	if (time == NULL)
+	if (!time)
 		TEE_Panic(EINVAL);
 
 	ret = gettimeofday(&t, NULL);
@@ -309,15 +414,53 @@ void TEE_GetSystemTime(TEE_Time *time)
 		TEE_Panic(errno);
 }
 
+TEE_Result TEE_GetSystemTime_PS(TEE_Time *time)
+{
+	struct timeval t;
+	int err = 0;
+
+	if (!time)
+		TEE_Panic(EINVAL);
+
+	if (gettimeofday(&t, NULL) != 0) {
+		err = errno;
+		if (err == ENOMEM)
+			return TEE_ERROR_OUT_OF_MEMORY;
+		if (err == EOVERFLOW)
+			return TEE_ERROR_OVERFLOW;
+		if (err == ENOENT || err == ENODATA)
+			return TEE_ERROR_TIME_NOT_SET;
+		TEE_Panic(err);
+	}
+
+	if ((uint64_t)t.tv_sec > UINT32_MAX) {
+		/* Required by v1.4: return overflow with truncated seconds. */
+		time->seconds = (uint32_t)t.tv_sec;
+		time->millis = t.tv_usec / 1000;
+		return TEE_ERROR_OVERFLOW;
+	}
+
+	time->seconds = t.tv_sec;
+	time->millis = t.tv_usec / 1000;
+	return TEE_SUCCESS;
+}
+
 TEE_Result TEE_Wait(uint32_t timeout)
 {
-	int remain = 0;
+	if (timeout == TEE_TIMEOUT_INFINITE) {
+		while (1) {
+			usleep(1000000);
+			if (TEE_GetCancellationFlag())
+				return TEE_ERROR_CANCEL;
+		}
+	}
 
-	remain = usleep((useconds_t)timeout * 1000UL);
-
-	if (remain > 512) {
-		EMSG("%ld remain %d\n", (long)timeout * 1000UL, remain);
-		return TEE_ERROR_CANCEL;
+	while (timeout > 0) {
+		uint32_t step = (timeout > 1000) ? 1000 : timeout;
+		usleep(step * 1000);
+		if (TEE_GetCancellationFlag())
+			return TEE_ERROR_CANCEL;
+		timeout -= step;
 	}
 
 	return TEE_SUCCESS;
@@ -329,30 +472,33 @@ static TEE_Result __TEE_TAPersistentTime(
 	FILE *fp = NULL;
 	size_t len = 0;
 	TEE_Result ret = TEE_ERROR_TIME_NEEDS_RESET;
+	struct __ta_persistent_time {
+		struct timespec sys;
+		struct timespec ta;
+	} pt;
 
 	fp = fopen("/ree/time", (flag == O_RDONLY) ? "r" : "w+");
-	if (fp == NULL)
+	if (!fp)
 		return TEE_ERROR_TIME_NOT_SET;
 
 	if (flag == O_RDONLY) {
-		len = fread(sys, 1, sizeof(*sys), fp);
-		if (len != sizeof(*sys))
+		len = fread(&pt, 1, sizeof(pt), fp);
+		if (len != sizeof(pt))
 			goto out;
-		len = fread(ta, 1, sizeof(*ta), fp);
-		if (len != sizeof(*ta))
-			goto out;
+		*sys = pt.sys;
+		*ta = pt.ta;
 	} else {
-		len = fwrite(sys, 1, sizeof(*sys), fp);
-		if (len != sizeof(*sys))
-			goto out;
-		len = fwrite(ta, 1, sizeof(*ta), fp);
-		if (len != sizeof(*ta))
+		pt.sys = *sys;
+		pt.ta = *ta;
+		len = fwrite(&pt, 1, sizeof(pt), fp);
+		if (len != sizeof(pt))
 			goto out;
 	}
 
-	ret = fclose(fp);
+	ret = 0;
 
 out:
+	fclose(fp);
 	return ret;
 }
 
@@ -362,27 +508,28 @@ TEE_Result TEE_GetTAPersistentTime(TEE_Time *time)
 	struct timespec sys, nsys;
 	struct timespec ta, nta, diff;
 
-	if (time == NULL)
+	if (!time)
 		TEE_Panic(EINVAL);
 
 	ret = __TEE_TAPersistentTime(&sys, &ta, O_RDONLY);
-	if (ret != TEE_SUCCESS)
+	if (ret != TEE_SUCCESS) {
+		/* For all non-overflow errors, time output must be zeroed. */
+		time->seconds = 0;
+		time->millis = 0;
 		return ret;
+	}
 
 	clock_gettime(CLOCK_REALTIME, &nsys);
 
 	timespecsub(&nsys, &sys, &diff);
 	timespecadd(&ta, &diff, &nta);
 
-	DMSG("ta %llu.%09uns, nta %llu.%09uns\n",
-		ta.tv_sec, ta.tv_nsec,
-		nta.tv_sec, nta.tv_nsec);
-
 	if ((nta.tv_sec < ta.tv_sec) ||
-		((int64_t)diff.tv_sec < 0) ||
+		(diff.tv_sec < 0) ||
 		(nta.tv_sec > UINT32_MAX)) {
-		time->seconds = 0;
-		time->millis = 0;
+		/* Required by v1.4: return overflow with truncated seconds. */
+		time->seconds = (uint32_t)nta.tv_sec;
+		time->millis = nta.tv_nsec / 1000000;
 		return TEE_ERROR_OVERFLOW;
 	}
 
@@ -398,18 +545,15 @@ TEE_Result TEE_SetTAPersistentTime(TEE_Time *time)
 	struct timespec sys, nsys, diff = {0};
 	struct timespec ta, nta;
 
-	if (time == NULL)
+	if (!time)
 		TEE_Panic(EINVAL);
 
 	ret = __TEE_TAPersistentTime(&sys, &ta, O_RDONLY);
 	clock_gettime(CLOCK_REALTIME, &nsys);
 	if (ret == TEE_SUCCESS) {
-		DMSG("sys %llu.%09uns, nsys %llu.%09uns\n",
-			sys.tv_sec, sys.tv_nsec,
-			nsys.tv_sec, nsys.tv_nsec);
 		timespecsub(&nsys, &sys, &diff);
-		if (((int64_t)diff.tv_sec < 0))
-			TEE_Panic(TEE_ERROR_GENERIC);
+		if (diff.tv_sec < 0)
+			return TEE_ERROR_TIME_NEEDS_RESET;
 	}
 
 	nta.tv_sec = time->seconds;
@@ -429,7 +573,7 @@ void TEE_GetREETime(TEE_Time *time)
 	struct timespec t;
 	int ret = -1;
 
-	if (time == NULL)
+	if (!time)
 		TEE_Panic(EINVAL);
 
 	ret = globalplatform_ioctl(GLOBALPLATFORM_CMD_GET_REETIME, &t);
@@ -439,4 +583,37 @@ void TEE_GetREETime(TEE_Time *time)
 		time->millis = t.tv_nsec / 1000000;
 	} else
 		TEE_Panic(ret);
+}
+
+TEE_Result TEE_GetREETime_PS(TEE_Time *time)
+{
+	struct timespec t;
+	int ret = 0;
+	int err = 0;
+
+	if (!time)
+		TEE_Panic(EINVAL);
+
+	ret = globalplatform_ioctl(GLOBALPLATFORM_CMD_GET_REETIME, &t);
+	if (ret != 0) {
+		err = (ret < 0) ? -ret : ret;
+		if (err == ENOMEM)
+			return TEE_ERROR_OUT_OF_MEMORY;
+		if (err == EOVERFLOW)
+			return TEE_ERROR_OVERFLOW;
+		if (err == ENOENT || err == ENODATA)
+			return TEE_ERROR_TIME_NOT_SET;
+		TEE_Panic(ret);
+	}
+
+	if ((uint64_t)t.tv_sec > UINT32_MAX) {
+		/* Required by v1.4: return overflow with truncated seconds. */
+		time->seconds = (uint32_t)t.tv_sec;
+		time->millis = t.tv_nsec / 1000000;
+		return TEE_ERROR_OVERFLOW;
+	}
+
+	time->seconds = t.tv_sec;
+	time->millis = t.tv_nsec / 1000000;
+	return TEE_SUCCESS;
 }

@@ -14,6 +14,14 @@ struct bignum {
 	uint32_t n;
 };
 
+static void __TEE_BigIntCheck(const TEE_BigInt *bigInt)
+{
+	struct bignum *b = (struct bignum *)bigInt;
+
+	if ((b->s != 1 && b->s != -1) || (b->n > 2048))
+		TEE_Panic(TEE_ERROR_BAD_PARAMETERS);
+}
+
 size_t TEE_BigIntFMMSizeInU32(size_t modulusSizeInBits)
 {
 	return (((modulusSizeInBits) + 32 - 1) / 4);
@@ -28,11 +36,13 @@ void TEE_BigIntInit(TEE_BigInt *bigInt, size_t len)
 {
 	struct bignum *b = (struct bignum *)bigInt;
 
+	if (len < 2)
+		TEE_Panic(0);
+
 	memset(bigInt, 0, len * sizeof(uint32_t));
 
 	b->s = 1;
 	b->n = len - (sizeof(struct bignum) / sizeof(uint32_t));
-	udump("b", b, ((*(int *)((char *)b + 4)) * 4) + 8);
 }
 
 void TEE_BigIntInitFMM(TEE_BigIntFMM *bigInt, size_t len)
@@ -53,34 +63,36 @@ TEE_Result TEE_BigIntInitFMMContext1(
 	return TEE_ERROR_NOT_SUPPORTED;
 }
 
-static TEE_Result __TEE_MPI2BigInt(const mbedtls_mpi *X,
+static TEE_Result __TEE_BN2BigInt(const struct mbedcrypto_bignum *X,
 	TEE_BigInt *bigInt)
 {
 	int ret = -1;
 	struct bignum *b = (struct bignum *)bigInt;
 
-	ret = mbedtls_mpi_write_binary_le(X, (void *)(b + 1),
+	__TEE_BigIntCheck(bigInt);
+
+	ret = mbedcrypto_bn_to_binary_le(X, (void *)(b + 1),
 			b->n * sizeof(uint32_t));
-	if (ret == MBEDTLS_ERR_MPI_BUFFER_TOO_SMALL)
+	if (ret == -EINVAL)
 		return TEE_ERROR_OVERFLOW;
-/*
- *	b->n = X->n * (sizeof(mbedtls_mpi_uint) / sizeof(uint32_t));
- */
-	b->s = X->s;
+
+	b->s = X->neg ? -1 : 1;
 
 	return ret;
 }
 
-static TEE_Result __TEE_BigInt2MPI(mbedtls_mpi *X,
+static TEE_Result __TEE_BigInt2BN(struct mbedcrypto_bignum *X,
 	const TEE_BigInt *bigInt)
 {
 	int ret = -1;
 	struct bignum *b = (struct bignum *)bigInt;
 
-	ret = mbedtls_mpi_read_binary_le(X, (void *)(b + 1),
+	__TEE_BigIntCheck(bigInt);
+
+	ret = mbedcrypto_bn_from_binary_le(X, (void *)(b + 1),
 			b->n * sizeof(uint32_t));
 
-	X->s = b->s;
+	X->neg = (b->s < 0);
 
 	return ret;
 }
@@ -89,26 +101,23 @@ TEE_Result TEE_BigIntConvertFromOctetString(
 	TEE_BigInt *dest, uint8_t *buffer,
 	size_t bufferLen, int32_t sign)
 {
-	mbedtls_mpi X;
+	struct mbedcrypto_bignum X;
 	TEE_Result ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&X);
+	mbedcrypto_bn_init(&X);
 
-	udump("buffer", buffer, bufferLen);
-
-	if (mbedtls_mpi_read_binary(&X, buffer, bufferLen)) {
-		ret = ENOMEM;
+	if (mbedcrypto_bn_from_binary(&X, buffer, bufferLen)) {
+		ret = TEE_ERROR_OUT_OF_MEMORY;
 		goto out;
 	}
 
 	if (sign < 0)
-		X.s = -1;
+		X.neg = 1;
 
-	ret = __TEE_MPI2BigInt(&X, dest);
-	udump("dest", dest, ((*(int *)((char *)dest + 4)) * 4) + 8);
+	ret = __TEE_BN2BigInt(&X, dest);
 
 out:
-	mbedtls_mpi_free(&X);
+	mbedcrypto_bn_cleanup(&X);
 	if (ret != TEE_SUCCESS &&
 		ret != TEE_ERROR_OVERFLOW)
 		TEE_Panic(ret);
@@ -118,31 +127,31 @@ out:
 TEE_Result TEE_BigIntConvertToOctetString(void *buffer,
 	size_t *bufferLen, TEE_BigInt *bigInt)
 {
-	mbedtls_mpi X;
+	struct mbedcrypto_bignum X;
 	size_t len = 0;
 	TEE_Result ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&X);
+	mbedcrypto_bn_init(&X);
 
-	ret = __TEE_BigInt2MPI(&X, bigInt);
+	ret = __TEE_BigInt2BN(&X, bigInt);
 	if (ret != 0)
 		goto out;
 
-	len = mbedtls_mpi_size(&X);
+	len = mbedcrypto_bn_byte_count(&X);
 
 	if (*bufferLen < len) {
 		ret = TEE_ERROR_SHORT_BUFFER;
 		goto out;
 	}
 
-	if (mbedtls_mpi_write_binary(&X, buffer, len)) {
+	if (mbedcrypto_bn_to_binary(&X, buffer, len)) {
 		ret = TEE_ERROR_SHORT_BUFFER;
 		goto out;
 	}
 
 	*bufferLen = len;
 out:
-	mbedtls_mpi_free(&X);
+	mbedcrypto_bn_cleanup(&X);
 	if (ret != TEE_SUCCESS &&
 		ret != TEE_ERROR_SHORT_BUFFER)
 		TEE_Panic(ret);
@@ -153,17 +162,20 @@ out:
 void TEE_BigIntConvertFromS32(TEE_BigInt *dest, int32_t shortVal)
 {
 	int sign = 1;
+	uint32_t abs_val = 0;
 	TEE_Result ret = TEE_ERROR_GENERIC;
 
 	if (shortVal < 0) {
-		shortVal = -shortVal;
+		abs_val = -(uint32_t)shortVal;
 		sign = -1;
+	} else {
+		abs_val = shortVal;
 	}
 
-	shortVal = __builtin_bswap32(shortVal);
+	abs_val = bswap32(abs_val);
 
-	ret = TEE_BigIntConvertFromOctetString(dest, (uint8_t *)&shortVal,
-			sizeof(int32_t), sign);
+	ret = TEE_BigIntConvertFromOctetString(dest, (uint8_t *)&abs_val,
+			sizeof(uint32_t), sign);
 	if (ret != 0)
 		TEE_Panic(ret);
 }
@@ -171,31 +183,31 @@ void TEE_BigIntConvertFromS32(TEE_BigInt *dest, int32_t shortVal)
 TEE_Result TEE_BigIntConvertToS32(int32_t *dest, TEE_BigInt *src)
 {
 	int32_t val = 0;
-	mbedtls_mpi X;
+	struct mbedcrypto_bignum X;
 	size_t len = 0;
 	TEE_Result ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&X);
+	mbedcrypto_bn_init(&X);
 
-	ret = __TEE_BigInt2MPI(&X, src);
+	ret = __TEE_BigInt2BN(&X, src);
 	if (ret != 0)
 		goto out;
 
-	len = mbedtls_mpi_size(&X);
+	len = mbedcrypto_bn_byte_count(&X);
 	if (len > sizeof(val)) {
 		ret = TEE_ERROR_OVERFLOW;
 		goto out;
 	}
 
-	if (mbedtls_mpi_write_binary(&X, (void *)&val, len)) {
+	if (mbedcrypto_bn_to_binary(&X, (void *)&val, len)) {
 		ret = TEE_ERROR_OVERFLOW;
 		goto out;
 	}
 
-	val = __builtin_bswap32(val);
+	val = bswap32(val);
 
-	if ((val < 0 && X.s != -1) ||
-		(val >= 0 && X.s != 1)) {
+	if ((val < 0 && !X.neg) ||
+		(val >= 0 && X.neg)) {
 		ret = TEE_ERROR_OVERFLOW;
 		goto out;
 	}
@@ -203,7 +215,7 @@ TEE_Result TEE_BigIntConvertToS32(int32_t *dest, TEE_BigInt *src)
 	*dest = val;
 
 out:
-	mbedtls_mpi_free(&X);
+	mbedcrypto_bn_cleanup(&X);
 	if (ret != TEE_SUCCESS &&
 		ret != TEE_ERROR_OVERFLOW)
 		TEE_Panic(ret);
@@ -213,121 +225,126 @@ out:
 
 int32_t TEE_BigIntCmp(TEE_BigInt *op1, TEE_BigInt *op2)
 {
-	mbedtls_mpi X1, X2;
+	struct mbedcrypto_bignum X1, X2;
 	int32_t ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&X1);
-	mbedtls_mpi_init(&X2);
+	mbedcrypto_bn_init(&X1);
+	mbedcrypto_bn_init(&X2);
 
-	ret = __TEE_BigInt2MPI(&X1, op1);
-	ret |= __TEE_BigInt2MPI(&X2, op2);
+	ret = __TEE_BigInt2BN(&X1, op1);
+	if (ret == 0)
+		ret = __TEE_BigInt2BN(&X2, op2);
 	if (ret != 0)
 		TEE_Panic(ret);
 
-	ret = mbedtls_mpi_cmp_mpi(&X1, &X2);
+	ret = mbedcrypto_bn_cmp(&X1, &X2);
 
-	mbedtls_mpi_free(&X1);
-	mbedtls_mpi_free(&X2);
+	mbedcrypto_bn_cleanup(&X1);
+	mbedcrypto_bn_cleanup(&X2);
 
 	return ret;
 }
 
 int32_t TEE_BigIntCmpS32(TEE_BigInt *op, int32_t shortVal)
 {
-	mbedtls_mpi X;
+	struct mbedcrypto_bignum X;
 	int32_t ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&X);
+	mbedcrypto_bn_init(&X);
 
-	ret = __TEE_BigInt2MPI(&X, op);
+	ret = __TEE_BigInt2BN(&X, op);
 	if (ret != 0)
 		TEE_Panic(ret);
 
-	ret = mbedtls_mpi_cmp_int(&X, shortVal);
+	ret = mbedcrypto_bn_cmp_word(&X, shortVal);
 
-	mbedtls_mpi_free(&X);
+	mbedcrypto_bn_cleanup(&X);
 
 	return ret;
 }
 
 void TEE_BigIntShiftRight(TEE_BigInt *dest, TEE_BigInt *op, size_t bits)
 {
-	mbedtls_mpi X;
+	struct mbedcrypto_bignum X;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&X);
+	mbedcrypto_bn_init(&X);
 
-	ret = __TEE_BigInt2MPI(&X, op);
+	ret = __TEE_BigInt2BN(&X, op);
 	if (ret != 0)
 		TEE_Panic(ret);
 
-	ret = mbedtls_mpi_shift_r(&X, bits);
+	ret = mbedcrypto_bn_rshift(&X, bits);
 	if (ret != 0)
 		TEE_Panic(ret);
 
-	ret = __TEE_MPI2BigInt(&X, dest);
+	ret = __TEE_BN2BigInt(&X, dest);
 	if (ret != 0)
 		TEE_Panic(ret);
 
-	mbedtls_mpi_free(&X);
+	mbedcrypto_bn_cleanup(&X);
 }
 
 bool TEE_BigIntGetBit(TEE_BigInt *src, uint32_t bitIndex)
 {
-	mbedtls_mpi X;
+	struct mbedcrypto_bignum X;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&X);
+	mbedcrypto_bn_init(&X);
 
-	ret = __TEE_BigInt2MPI(&X, src);
+	ret = __TEE_BigInt2BN(&X, src);
 	if (ret != 0)
 		TEE_Panic(ret);
 
-	ret = mbedtls_mpi_get_bit(&X, bitIndex);
+	ret = mbedcrypto_bn_test_bit(&X, bitIndex);
 
-	mbedtls_mpi_free(&X);
+	mbedcrypto_bn_cleanup(&X);
 
 	return ret;
 }
 
 uint32_t TEE_BigIntGetBitCount(TEE_BigInt *src)
 {
-	mbedtls_mpi X;
+	struct mbedcrypto_bignum X;
 	uint32_t ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&X);
+	mbedcrypto_bn_init(&X);
 
-	ret = __TEE_BigInt2MPI(&X, src);
+	ret = __TEE_BigInt2BN(&X, src);
 	if (ret != 0)
 		TEE_Panic(ret);
 
-	ret = mbedtls_mpi_bitlen(&X);
+	ret = mbedcrypto_bn_bit_count(&X);
 
-	mbedtls_mpi_free(&X);
+	mbedcrypto_bn_cleanup(&X);
 
 	return ret;
 }
 
 TEE_Result TEE_BigIntSetBit(TEE_BigInt *op, uint32_t bitIndex, bool value)
 {
-	mbedtls_mpi X;
+	struct mbedcrypto_bignum X;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&X);
+	mbedcrypto_bn_init(&X);
 
-	ret = __TEE_BigInt2MPI(&X, op);
+	ret = __TEE_BigInt2BN(&X, op);
 	if (ret != 0)
 		TEE_Panic(ret);
 
-	if (X.n * 32 <= bitIndex) {
+	if (X.used * 32 <= bitIndex) {
 		ret = TEE_ERROR_OVERFLOW;
 		goto out;
 	}
 
-	ret = mbedtls_mpi_set_bit(&X, bitIndex, value);
+	ret = mbedcrypto_bn_assign_bit(&X, bitIndex, value);
+	if (ret != 0)
+		goto out;
+
+	ret = __TEE_BN2BigInt(&X, op);
 
 out:
-	mbedtls_mpi_free(&X);
+	mbedcrypto_bn_cleanup(&X);
 	if (ret != TEE_SUCCESS &&
 		ret != TEE_ERROR_OVERFLOW)
 		TEE_Panic(ret);
@@ -336,25 +353,16 @@ out:
 
 TEE_Result TEE_BigIntAssign(TEE_BigInt *dest, TEE_BigInt *src)
 {
-	mbedtls_mpi S, D;
+	struct mbedcrypto_bignum S;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&S);
-	mbedtls_mpi_init(&D);
+	mbedcrypto_bn_init(&S);
 
-	ret = __TEE_BigInt2MPI(&S, src);
-	if (ret != 0)
-		goto out;
+	ret = __TEE_BigInt2BN(&S, src);
+	if (ret == 0)
+		ret = __TEE_BN2BigInt(&S, dest);
 
-	ret = mbedtls_mpi_copy(&D, &S);
-	if (ret != 0)
-		goto out;
-
-	ret = __TEE_MPI2BigInt(&D, dest);
-
-out:
-	mbedtls_mpi_free(&S);
-	mbedtls_mpi_free(&D);
+	mbedcrypto_bn_cleanup(&S);
 	if (ret != TEE_SUCCESS &&
 		ret != TEE_ERROR_OVERFLOW)
 		TEE_Panic(ret);
@@ -363,233 +371,202 @@ out:
 
 TEE_Result TEE_BigIntAbs(TEE_BigInt *dest, TEE_BigInt *src)
 {
-	mbedtls_mpi S, D;
+	struct mbedcrypto_bignum S;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&S);
-	mbedtls_mpi_init(&D);
+	mbedcrypto_bn_init(&S);
 
-	ret = __TEE_BigInt2MPI(&S, src);
-	if (ret != 0)
-		goto out;
+	ret = __TEE_BigInt2BN(&S, src);
+	if (ret == 0) {
+		S.neg = 0;
+		ret = __TEE_BN2BigInt(&S, dest);
+	}
 
-	ret = mbedtls_mpi_copy(&D, &S);
-	if (ret != 0)
-		goto out;
-
-	D.s = 1;
-	ret = __TEE_MPI2BigInt(&D, dest);
-
-out:
-	mbedtls_mpi_free(&S);
-	mbedtls_mpi_free(&D);
+	mbedcrypto_bn_cleanup(&S);
 	if (ret != TEE_SUCCESS &&
 		ret != TEE_ERROR_OVERFLOW)
 		TEE_Panic(ret);
 	return ret;
 }
 
-void TEE_BigIntAdd(TEE_BigInt *dest, TEE_BigInt *op1, TEE_BigInt *op2)
+typedef int (*bn_binop_t)(struct mbedcrypto_bignum *,
+	const struct mbedcrypto_bignum *, const struct mbedcrypto_bignum *);
+
+static void __TEE_BigIntBinOp(TEE_BigInt *dest, TEE_BigInt *op1,
+	TEE_BigInt *op2, bn_binop_t op_fn)
 {
-	mbedtls_mpi S1, S2, D;
+	struct mbedcrypto_bignum S1, S2, D;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&S1);
-	mbedtls_mpi_init(&S2);
-	mbedtls_mpi_init(&D);
+	mbedcrypto_bn_init(&S1);
+	mbedcrypto_bn_init(&S2);
+	mbedcrypto_bn_init(&D);
 
-	ret = __TEE_BigInt2MPI(&S1, op1);
-	ret |= __TEE_BigInt2MPI(&S2, op2);
+	ret = __TEE_BigInt2BN(&S1, op1);
+	if (ret == 0)
+		ret = __TEE_BigInt2BN(&S2, op2);
 	if (ret != 0)
 		goto out;
 
-	ret = mbedtls_mpi_add_mpi(&D, &S1, &S2);
+	ret = op_fn(&D, &S1, &S2);
 	if (ret != 0)
 		goto out;
 
-	ret = __TEE_MPI2BigInt(&D, dest);
+	ret = __TEE_BN2BigInt(&D, dest);
 
 out:
-	mbedtls_mpi_free(&S1);
-	mbedtls_mpi_free(&S2);
-	mbedtls_mpi_free(&D);
+	mbedcrypto_bn_cleanup(&S1);
+	mbedcrypto_bn_cleanup(&S2);
+	mbedcrypto_bn_cleanup(&D);
 	if (ret != TEE_SUCCESS)
 		TEE_Panic(ret);
+}
+
+static void __TEE_BigIntBinOpMod(TEE_BigInt *dest, TEE_BigInt *op1,
+	TEE_BigInt *op2, TEE_BigInt *n, bn_binop_t op_fn)
+{
+	struct mbedcrypto_bignum S1, S2, D, N;
+	int ret = TEE_ERROR_GENERIC;
+
+	mbedcrypto_bn_init(&S1);
+	mbedcrypto_bn_init(&S2);
+	mbedcrypto_bn_init(&D);
+	mbedcrypto_bn_init(&N);
+
+	ret = __TEE_BigInt2BN(&S1, op1);
+	if (ret == 0)
+		ret = __TEE_BigInt2BN(&S2, op2);
+	if (ret == 0)
+		ret = __TEE_BigInt2BN(&N, n);
+	if (ret != 0)
+		goto out;
+
+	if (mbedcrypto_bn_cmp_word(&N, 2) < 0) {
+		ret = TEE_ERROR_BAD_PARAMETERS;
+		goto out;
+	}
+
+	ret = op_fn(&S1, &S1, &S2);
+	if (ret != 0)
+		goto out;
+
+	ret = mbedcrypto_bn_mod(&D, &S1, &N);
+	if (ret != 0)
+		goto out;
+
+	ret = __TEE_BN2BigInt(&D, dest);
+
+out:
+	mbedcrypto_bn_cleanup(&S1);
+	mbedcrypto_bn_cleanup(&S2);
+	mbedcrypto_bn_cleanup(&D);
+	mbedcrypto_bn_cleanup(&N);
+	if (ret != TEE_SUCCESS)
+		TEE_Panic(ret);
+}
+
+void TEE_BigIntAdd(TEE_BigInt *dest, TEE_BigInt *op1, TEE_BigInt *op2)
+{
+	__TEE_BigIntBinOp(dest, op1, op2, mbedcrypto_bn_add);
 }
 
 void TEE_BigIntSub(TEE_BigInt *dest, TEE_BigInt *op1, TEE_BigInt *op2)
 {
-	mbedtls_mpi S1, S2, D;
-	int ret = TEE_ERROR_GENERIC;
-
-	mbedtls_mpi_init(&S1);
-	mbedtls_mpi_init(&S2);
-	mbedtls_mpi_init(&D);
-
-	ret = __TEE_BigInt2MPI(&S1, op1);
-	ret |= __TEE_BigInt2MPI(&S2, op2);
-	if (ret != 0)
-		goto out;
-
-	ret = mbedtls_mpi_sub_mpi(&D, &S1, &S2);
-	if (ret != 0)
-		goto out;
-
-	ret = __TEE_MPI2BigInt(&D, dest);
-
-out:
-	mbedtls_mpi_free(&S1);
-	mbedtls_mpi_free(&S2);
-	mbedtls_mpi_free(&D);
-	if (ret != TEE_SUCCESS)
-		TEE_Panic(ret);
+	__TEE_BigIntBinOp(dest, op1, op2, mbedcrypto_bn_sub);
 }
 
 void TEE_BigIntNeg(TEE_BigInt *dest, TEE_BigInt *op)
 {
-	mbedtls_mpi S, D;
+	struct mbedcrypto_bignum S;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&S);
-	mbedtls_mpi_init(&D);
+	mbedcrypto_bn_init(&S);
 
-	ret = __TEE_BigInt2MPI(&S, op);
-	if (ret != 0)
-		goto out;
+	ret = __TEE_BigInt2BN(&S, op);
+	if (ret == 0) {
+		S.neg = !S.neg;
+		ret = __TEE_BN2BigInt(&S, dest);
+	}
 
-	S.s = -S.s;
-	ret = mbedtls_mpi_copy(&D, &S);
-	if (ret != 0)
-		goto out;
-
-	ret = __TEE_MPI2BigInt(&D, dest);
-
-out:
-	mbedtls_mpi_free(&S);
-	mbedtls_mpi_free(&D);
+	mbedcrypto_bn_cleanup(&S);
 	if (ret != TEE_SUCCESS)
 		TEE_Panic(ret);
 }
 
 void TEE_BigIntMul(TEE_BigInt *dest, TEE_BigInt *op1, TEE_BigInt *op2)
 {
-	mbedtls_mpi S1, S2, D;
-	int ret = TEE_ERROR_GENERIC;
-
-	mbedtls_mpi_init(&S1);
-	mbedtls_mpi_init(&S2);
-	mbedtls_mpi_init(&D);
-
-	ret = __TEE_BigInt2MPI(&S1, op1);
-	ret |= __TEE_BigInt2MPI(&S2, op2);
-	if (ret != 0)
-		goto out;
-
-	ret = mbedtls_mpi_mul_mpi(&D, &S1, &S2);
-	if (ret != 0)
-		goto out;
-
-	ret = __TEE_MPI2BigInt(&D, dest);
-
-out:
-	mbedtls_mpi_free(&S1);
-	mbedtls_mpi_free(&S2);
-	mbedtls_mpi_free(&D);
-	if (ret != TEE_SUCCESS)
-		TEE_Panic(ret);
+	__TEE_BigIntBinOp(dest, op1, op2, mbedcrypto_bn_mul);
 }
 
 void TEE_BigIntSquare(TEE_BigInt *dest, TEE_BigInt *op)
 {
-	mbedtls_mpi S, D;
-	int ret = TEE_ERROR_GENERIC;
-
-	mbedtls_mpi_init(&S);
-	mbedtls_mpi_init(&D);
-
-	ret = __TEE_BigInt2MPI(&S, op);
-	if (ret != 0)
-		goto out;
-
-	ret = mbedtls_mpi_mul_mpi(&D, &S, &S);
-	if (ret != 0)
-		goto out;
-
-	ret = __TEE_MPI2BigInt(&D, dest);
-
-out:
-	mbedtls_mpi_free(&S);
-	mbedtls_mpi_free(&D);
-	if (ret != TEE_SUCCESS)
-		TEE_Panic(ret);
+	TEE_BigIntMul(dest, op, op);
 }
 
 void TEE_BigIntDiv(TEE_BigInt *dest_q, TEE_BigInt *dest_r,
 	TEE_BigInt *op1, TEE_BigInt *op2)
 {
-	mbedtls_mpi S1, S2, Q, R;
+	struct mbedcrypto_bignum S1, S2, Q, R;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&S1);
-	mbedtls_mpi_init(&S2);
-	mbedtls_mpi_init(&Q);
-	mbedtls_mpi_init(&R);
+	mbedcrypto_bn_init(&S1);
+	mbedcrypto_bn_init(&S2);
+	mbedcrypto_bn_init(&Q);
+	mbedcrypto_bn_init(&R);
 
-	ret = __TEE_BigInt2MPI(&S1, op1);
-	ret |= __TEE_BigInt2MPI(&S2, op2);
+	ret = __TEE_BigInt2BN(&S1, op1);
+	if (ret == 0)
+		ret = __TEE_BigInt2BN(&S2, op2);
 	if (ret != 0)
 		goto out;
 
-	ret = mbedtls_mpi_div_mpi(&Q, &R, &S1, &S2);
+	ret = mbedcrypto_bn_div(&Q, &R, &S1, &S2);
 	if (ret != 0)
 		goto out;
 
-	ret = __TEE_MPI2BigInt(&Q, dest_q);
-	ret |= __TEE_MPI2BigInt(&R, dest_r);
+	ret = __TEE_BN2BigInt(&Q, dest_q);
+	if (ret == 0)
+		ret = __TEE_BN2BigInt(&R, dest_r);
 
 out:
-	mbedtls_mpi_free(&S1);
-	mbedtls_mpi_free(&S2);
-	mbedtls_mpi_free(&Q);
-	mbedtls_mpi_free(&R);
+	mbedcrypto_bn_cleanup(&S1);
+	mbedcrypto_bn_cleanup(&S2);
+	mbedcrypto_bn_cleanup(&Q);
+	mbedcrypto_bn_cleanup(&R);
 	if (ret != TEE_SUCCESS)
 		TEE_Panic(ret);
 }
 
 void TEE_BigIntMod(TEE_BigInt *dest, TEE_BigInt *op, TEE_BigInt *n)
 {
-	mbedtls_mpi S, D, N;
+	struct mbedcrypto_bignum S, D, N;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&S);
-	mbedtls_mpi_init(&D);
-	mbedtls_mpi_init(&N);
+	mbedcrypto_bn_init(&S);
+	mbedcrypto_bn_init(&D);
+	mbedcrypto_bn_init(&N);
 
-	ret = __TEE_BigInt2MPI(&S, op);
-	ret |= __TEE_BigInt2MPI(&N, n);
+	ret = __TEE_BigInt2BN(&S, op);
+	if (ret == 0)
+		ret = __TEE_BigInt2BN(&N, n);
 	if (ret != 0)
 		goto out;
 
-	udump("op", op, ((*(int *)((char *)op + 4)) * 4) + 8);
-	udump("n", n, ((*(int *)((char *)n + 4)) * 4) + 8);
-
-	if (mbedtls_mpi_cmp_int(&N, 2) < 0) {
-		ret = EINVAL;
+	if (mbedcrypto_bn_cmp_word(&N, 2) < 0) {
+		ret = TEE_ERROR_BAD_PARAMETERS;
 		goto out;
 	}
 
-	ret = mbedtls_mpi_mod_mpi(&D, &S, &N);
+	ret = mbedcrypto_bn_mod(&D, &S, &N);
 	if (ret != 0)
 		goto out;
 
-	ret = __TEE_MPI2BigInt(&D, dest);
-
-	udump("dest", dest, ((*(int *)((char *)dest + 4)) * 4) + 8);
+	ret = __TEE_BN2BigInt(&D, dest);
 
 out:
-	mbedtls_mpi_free(&S);
-	mbedtls_mpi_free(&D);
-	mbedtls_mpi_free(&N);
+	mbedcrypto_bn_cleanup(&S);
+	mbedcrypto_bn_cleanup(&D);
+	mbedcrypto_bn_cleanup(&N);
 	if (ret != TEE_SUCCESS)
 		TEE_Panic(ret);
 }
@@ -597,199 +574,57 @@ out:
 void TEE_BigIntAddMod(TEE_BigInt *dest, TEE_BigInt *op1,
 	TEE_BigInt *op2, TEE_BigInt *n)
 {
-	mbedtls_mpi S1, S2, D, N;
-	int ret = TEE_ERROR_GENERIC;
-
-	mbedtls_mpi_init(&S1);
-	mbedtls_mpi_init(&S2);
-	mbedtls_mpi_init(&D);
-	mbedtls_mpi_init(&N);
-
-	ret = __TEE_BigInt2MPI(&S1, op1);
-	ret |= __TEE_BigInt2MPI(&S2, op2);
-	ret |= __TEE_BigInt2MPI(&N, n);
-	if (ret != 0)
-		goto out;
-
-	if (mbedtls_mpi_cmp_int(&N, 2) < 0) {
-		ret = EINVAL;
-		goto out;
-	}
-
-	ret = mbedtls_mpi_add_mpi(&S1, &S1, &S2);
-	if (ret != 0)
-		goto out;
-
-	ret = mbedtls_mpi_mod_mpi(&D, &S1, &N);
-	if (ret != 0)
-		goto out;
-
-	ret = __TEE_MPI2BigInt(&D, dest);
-
-out:
-	mbedtls_mpi_free(&S1);
-	mbedtls_mpi_free(&S2);
-	mbedtls_mpi_free(&D);
-	mbedtls_mpi_free(&N);
-	if (ret != TEE_SUCCESS)
-		TEE_Panic(ret);
+	__TEE_BigIntBinOpMod(dest, op1, op2, n, mbedcrypto_bn_add);
 }
 
 void TEE_BigIntSubMod(TEE_BigInt *dest, TEE_BigInt *op1,
 	TEE_BigInt *op2, TEE_BigInt *n)
 {
-	mbedtls_mpi S1, S2, D, N;
-	int ret = TEE_ERROR_GENERIC;
-
-	mbedtls_mpi_init(&S1);
-	mbedtls_mpi_init(&S2);
-	mbedtls_mpi_init(&D);
-	mbedtls_mpi_init(&N);
-
-	ret = __TEE_BigInt2MPI(&S1, op1);
-	ret |= __TEE_BigInt2MPI(&S2, op2);
-	ret |= __TEE_BigInt2MPI(&N, n);
-	if (ret != 0)
-		goto out;
-
-	if (mbedtls_mpi_cmp_int(&N, 2) < 0) {
-		ret = EINVAL;
-		goto out;
-	}
-
-	ret = mbedtls_mpi_sub_mpi(&S1, &S1, &S2);
-	if (ret != 0)
-		goto out;
-
-	ret = mbedtls_mpi_mod_mpi(&D, &S1, &N);
-	if (ret != 0)
-		goto out;
-
-	ret = __TEE_MPI2BigInt(&D, dest);
-
-out:
-	mbedtls_mpi_free(&S1);
-	mbedtls_mpi_free(&S2);
-	mbedtls_mpi_free(&D);
-	mbedtls_mpi_free(&N);
-	if (ret != TEE_SUCCESS)
-		TEE_Panic(ret);
+	__TEE_BigIntBinOpMod(dest, op1, op2, n, mbedcrypto_bn_sub);
 }
 
 void TEE_BigIntMulMod(TEE_BigInt *dest, TEE_BigInt *op1,
 	TEE_BigInt *op2, TEE_BigInt *n)
 {
-	mbedtls_mpi S1, S2, D, N;
-	int ret = TEE_ERROR_GENERIC;
-
-	mbedtls_mpi_init(&S1);
-	mbedtls_mpi_init(&S2);
-	mbedtls_mpi_init(&D);
-	mbedtls_mpi_init(&N);
-
-	ret = __TEE_BigInt2MPI(&S1, op1);
-	ret |= __TEE_BigInt2MPI(&S2, op2);
-	ret |= __TEE_BigInt2MPI(&N, n);
-	if (ret != 0)
-		goto out;
-
-	udump("op1", op1, ((*(int *)((char *)op1 + 4)) * 4) + 8);
-	udump("op2", op2, ((*(int *)((char *)op2 + 4)) * 4) + 8);
-	udump("n", n, ((*(int *)((char *)n + 4)) * 4) + 8);
-
-	if (mbedtls_mpi_cmp_int(&N, 2) < 0) {
-		ret = EINVAL;
-		goto out;
-	}
-
-	ret = mbedtls_mpi_mul_mpi(&S1, &S1, &S2);
-	if (ret != 0)
-		goto out;
-
-	ret = mbedtls_mpi_mod_mpi(&D, &S1, &N);
-	if (ret != 0)
-		goto out;
-
-	ret = __TEE_MPI2BigInt(&D, dest);
-
-	udump("dest", dest, ((*(int *)((char *)dest + 4)) * 4) + 8);
-
-out:
-	mbedtls_mpi_free(&S1);
-	mbedtls_mpi_free(&S2);
-	mbedtls_mpi_free(&D);
-	mbedtls_mpi_free(&N);
-	if (ret != TEE_SUCCESS)
-		TEE_Panic(ret);
+	__TEE_BigIntBinOpMod(dest, op1, op2, n, mbedcrypto_bn_mul);
 }
 
 void TEE_BigIntSquareMod(TEE_BigInt *dest, TEE_BigInt *op, TEE_BigInt *n)
 {
-	mbedtls_mpi S, D, N;
-	int ret = TEE_ERROR_GENERIC;
-
-	mbedtls_mpi_init(&S);
-	mbedtls_mpi_init(&D);
-	mbedtls_mpi_init(&N);
-
-	ret = __TEE_BigInt2MPI(&S, op);
-	ret |= __TEE_BigInt2MPI(&N, n);
-	if (ret != 0)
-		goto out;
-
-	if (mbedtls_mpi_cmp_int(&N, 2) < 0) {
-		ret = EINVAL;
-		goto out;
-	}
-
-	ret = mbedtls_mpi_mul_mpi(&S, &S, &S);
-	if (ret != 0)
-		goto out;
-
-	ret = mbedtls_mpi_mod_mpi(&D, &S, &N);
-	if (ret != 0)
-		goto out;
-
-	ret = __TEE_MPI2BigInt(&D, dest);
-
-out:
-	mbedtls_mpi_free(&S);
-	mbedtls_mpi_free(&D);
-	mbedtls_mpi_free(&N);
-	if (ret != TEE_SUCCESS)
-		TEE_Panic(ret);
+	TEE_BigIntMulMod(dest, op, op, n);
 }
 
 void TEE_BigIntInvMod(TEE_BigInt *dest, TEE_BigInt *op, TEE_BigInt *n)
 {
-	mbedtls_mpi S, D, N;
+	struct mbedcrypto_bignum S, D, N;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&S);
-	mbedtls_mpi_init(&D);
-	mbedtls_mpi_init(&N);
+	mbedcrypto_bn_init(&S);
+	mbedcrypto_bn_init(&D);
+	mbedcrypto_bn_init(&N);
 
-	ret = __TEE_BigInt2MPI(&S, op);
-	ret |= __TEE_BigInt2MPI(&N, n);
+	ret = __TEE_BigInt2BN(&S, op);
+	if (ret == 0)
+		ret = __TEE_BigInt2BN(&N, n);
 	if (ret != 0)
 		goto out;
 
-	if ((mbedtls_mpi_cmp_int(&S, 0) == 0) ||
-		(mbedtls_mpi_cmp_int(&N, 2) < 0)) {
-		ret = EINVAL;
+	if ((mbedcrypto_bn_cmp_word(&S, 0) == 0) ||
+		(mbedcrypto_bn_cmp_word(&N, 2) < 0)) {
+		ret = TEE_ERROR_BAD_PARAMETERS;
 		goto out;
 	}
 
-	ret = mbedtls_mpi_inv_mod(&D, &S, &N);
+	ret = mbedcrypto_bn_modinv(&D, &S, &N);
 	if (ret != 0)
 		goto out;
 
-	ret = __TEE_MPI2BigInt(&D, dest);
+	ret = __TEE_BN2BigInt(&D, dest);
 
 out:
-	mbedtls_mpi_free(&S);
-	mbedtls_mpi_free(&D);
-	mbedtls_mpi_free(&N);
+	mbedcrypto_bn_cleanup(&S);
+	mbedcrypto_bn_cleanup(&D);
+	mbedcrypto_bn_cleanup(&N);
 	if (ret != TEE_SUCCESS)
 		TEE_Panic(ret);
 }
@@ -797,41 +632,43 @@ out:
 TEE_Result TEE_BigIntExpMod(TEE_BigInt *dest, TEE_BigInt *op1,
 	TEE_BigInt *op2, TEE_BigInt *n, TEE_BigIntFMMContext *context)
 {
-	mbedtls_mpi S1, S2, D, N;
+	struct mbedcrypto_bignum S1, S2, D, N;
 	TEE_Result ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&S1);
-	mbedtls_mpi_init(&S2);
-	mbedtls_mpi_init(&D);
-	mbedtls_mpi_init(&N);
+	mbedcrypto_bn_init(&S1);
+	mbedcrypto_bn_init(&S2);
+	mbedcrypto_bn_init(&D);
+	mbedcrypto_bn_init(&N);
 
-	ret = __TEE_BigInt2MPI(&S1, op1);
-	ret |= __TEE_BigInt2MPI(&S2, op2);
-	ret |= __TEE_BigInt2MPI(&N, n);
+	ret = __TEE_BigInt2BN(&S1, op1);
+	if (ret == 0)
+		ret = __TEE_BigInt2BN(&S2, op2);
+	if (ret == 0)
+		ret = __TEE_BigInt2BN(&N, n);
 	if (ret != 0)
 		goto out;
 
-	if (mbedtls_mpi_cmp_int(&N, 2) <= 0) {
-		ret = EINVAL;
+	if (mbedcrypto_bn_cmp_word(&N, 2) <= 0) {
+		ret = TEE_ERROR_BAD_PARAMETERS;
 		goto out;
 	}
 
-	if (mbedtls_mpi_get_bit(&N, 0) == 0) {
+	if (mbedcrypto_bn_test_bit(&N, 0) == 0) {
 		ret = TEE_ERROR_NOT_SUPPORTED;
 		goto out;
 	}
 
-	ret = mbedtls_mpi_exp_mod(&D, &S1, &S2, &N, NULL);
+	ret = mbedcrypto_bn_modpow(&D, &S1, &S2, &N, NULL);
 	if (ret != 0)
 		goto out;
 
-	ret = __TEE_MPI2BigInt(&D, dest);
+	ret = __TEE_BN2BigInt(&D, dest);
 
 out:
-	mbedtls_mpi_free(&S1);
-	mbedtls_mpi_free(&S2);
-	mbedtls_mpi_free(&D);
-	mbedtls_mpi_free(&N);
+	mbedcrypto_bn_cleanup(&S1);
+	mbedcrypto_bn_cleanup(&S2);
+	mbedcrypto_bn_cleanup(&D);
+	mbedcrypto_bn_cleanup(&N);
 	if (ret != TEE_SUCCESS &&
 		ret != TEE_ERROR_NOT_SUPPORTED)
 		TEE_Panic(ret);
@@ -840,70 +677,76 @@ out:
 
 bool TEE_BigIntRelativePrime(TEE_BigInt *op1, TEE_BigInt *op2)
 {
-	mbedtls_mpi S1, S2, D;
+	struct mbedcrypto_bignum S1, S2, D;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&S1);
-	mbedtls_mpi_init(&S2);
-	mbedtls_mpi_init(&D);
+	mbedcrypto_bn_init(&S1);
+	mbedcrypto_bn_init(&S2);
+	mbedcrypto_bn_init(&D);
 
-	ret = __TEE_BigInt2MPI(&S1, op1);
-	ret |= __TEE_BigInt2MPI(&S2, op2);
+	ret = __TEE_BigInt2BN(&S1, op1);
+	if (ret == 0)
+		ret = __TEE_BigInt2BN(&S2, op2);
 	if (ret != 0)
 		goto out;
 
-	ret = mbedtls_mpi_gcd(&D, &S1, &S2);
+	ret = mbedcrypto_bn_gcd(&D, &S1, &S2);
 	if (ret != 0)
 		goto out;
 
-	ret = mbedtls_mpi_cmp_int(&D, 1);
+	ret = mbedcrypto_bn_cmp_word(&D, 1);
 
 out:
-	mbedtls_mpi_free(&S1);
-	mbedtls_mpi_free(&S2);
-	mbedtls_mpi_free(&D);
-	return ret ? 0 : 1;
+	mbedcrypto_bn_cleanup(&S1);
+	mbedcrypto_bn_cleanup(&S2);
+	mbedcrypto_bn_cleanup(&D);
+	if (ret == 0)
+		return 1;
+	if (ret > 0)
+		return 0;
+	TEE_Panic(ret);
 }
 
 void TEE_BigIntComputeExtendedGcd(TEE_BigInt *gcd, TEE_BigInt *u,
 	TEE_BigInt *v, TEE_BigInt *op1, TEE_BigInt *op2)
 {
-	mbedtls_mpi S1, S2, U, V, GCD;
+	struct mbedcrypto_bignum S1, S2, U, V, GCD;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&S1);
-	mbedtls_mpi_init(&S2);
-	mbedtls_mpi_init(&GCD);
-	mbedtls_mpi_init(&V);
-	mbedtls_mpi_init(&U);
+	mbedcrypto_bn_init(&S1);
+	mbedcrypto_bn_init(&S2);
+	mbedcrypto_bn_init(&GCD);
+	mbedcrypto_bn_init(&V);
+	mbedcrypto_bn_init(&U);
 
-	ret = __TEE_BigInt2MPI(&S1, op1);
-	ret |= __TEE_BigInt2MPI(&S2, op2);
+	ret = __TEE_BigInt2BN(&S1, op1);
+	if (ret == 0)
+		ret = __TEE_BigInt2BN(&S2, op2);
 	if (ret != 0)
 		goto out;
 
-	if (mbedtls_mpi_cmp_int(&S1, 0) == 0 &&
-		mbedtls_mpi_cmp_int(&S2, 0) == 0) {
-		ret = EINVAL;
+	if (mbedcrypto_bn_cmp_word(&S1, 0) == 0 &&
+		mbedcrypto_bn_cmp_word(&S2, 0) == 0) {
+		ret = TEE_ERROR_BAD_PARAMETERS;
 		goto out;
 	}
 
-	ret = mbedtls_mpi_egcd(&GCD, &U, &V, &S1, &S2);
+	ret = mbedcrypto_bn_egcd(&GCD, &U, &V, &S1, &S2);
 	if (ret != 0)
 		goto out;
 
-	ret = __TEE_MPI2BigInt(&GCD, gcd);
-	if (u != NULL)
-		ret |= __TEE_MPI2BigInt(&U, u);
-	if (v != NULL)
-		ret |= __TEE_MPI2BigInt(&V, v);
+	ret = __TEE_BN2BigInt(&GCD, gcd);
+	if (ret == 0 && u)
+		ret = __TEE_BN2BigInt(&U, u);
+	if (ret == 0 && v)
+		ret = __TEE_BN2BigInt(&V, v);
 
 out:
-	mbedtls_mpi_free(&S1);
-	mbedtls_mpi_free(&S2);
-	mbedtls_mpi_free(&GCD);
-	mbedtls_mpi_free(&U);
-	mbedtls_mpi_free(&V);
+	mbedcrypto_bn_cleanup(&S1);
+	mbedcrypto_bn_cleanup(&S2);
+	mbedcrypto_bn_cleanup(&GCD);
+	mbedcrypto_bn_cleanup(&U);
+	mbedcrypto_bn_cleanup(&V);
 	if (ret != TEE_SUCCESS)
 		TEE_Panic(ret);
 }
@@ -911,21 +754,25 @@ out:
 int32_t TEE_BigIntIsProbablePrime(TEE_BigInt *op,
 	uint32_t confidenceLevel)
 {
-	mbedtls_mpi S;
+	struct mbedcrypto_bignum S;
 	int ret = TEE_ERROR_GENERIC;
 
-	mbedtls_mpi_init(&S);
+	mbedcrypto_bn_init(&S);
 
-	ret = __TEE_BigInt2MPI(&S, op);
+	ret = __TEE_BigInt2BN(&S, op);
 	if (ret != 0)
 		goto out;
 
-	ret = mbedtls_mpi_is_prime_ext(&S, max(confidenceLevel, (uint32_t)80),
+	ret = mbedcrypto_bn_test_prime(&S, max(confidenceLevel, (uint32_t)80),
 			tee_prng, NULL);
 
 out:
-	mbedtls_mpi_free(&S);
-	return ret ? 0 : 1;
+	mbedcrypto_bn_cleanup(&S);
+	if (ret == 0)
+		return 1;
+	if (ret == -EINVAL)
+		return 0;
+	TEE_Panic(ret);
 }
 
 void TEE_BigIntConvertToFMM(TEE_BigIntFMM *dest,

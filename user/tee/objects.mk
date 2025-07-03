@@ -5,6 +5,7 @@ user-tee-cflags-y +=
 
 user-tee-uobjs-$(CONFIG_TEE_API) += \
 	tee_api.o \
+	tee_gp.o \
 	tee_property.o \
 	tee_object.o \
 	tee_crypto.o \
