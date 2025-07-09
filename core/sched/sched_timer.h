@@ -7,6 +7,10 @@
 #ifndef _SCHED_TIMER_H
 #define _SCHED_TIMER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <timer.h>
 #include <tevent.h>
 
@@ -29,4 +33,7 @@ static inline void sched_timer_stop(struct sched *s)
 	tevent_stop(&s->tevent);
 }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

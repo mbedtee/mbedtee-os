@@ -16,11 +16,11 @@ int sched_inherit_prio(void *s, pid_t id)
 	struct sched *src = s;
 	int src_prio = 0;
 
-	if (src == NULL)
+	if (!src)
 		return -EINVAL;
 
 	dst = sched_get_lock(id, &flags);
-	if (dst == NULL)
+	if (!dst)
 		return -ESRCH;
 
 	src_prio = src->prio;
@@ -52,7 +52,7 @@ int sched_resume_prio(pid_t id)
 	struct sched_priv *sp = NULL;
 	struct sched *dst = sched_get_lock(id, &flags);
 
-	if (dst == NULL)
+	if (!dst)
 		return -ESRCH;
 
 	if (dst->policy != SCHED_OTHER) {

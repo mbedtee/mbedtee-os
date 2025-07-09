@@ -7,6 +7,10 @@
 #ifndef _SCHED_RECORD_H
 #define _SCHED_RECORD_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "sched_list.h"
 
 /*
@@ -35,4 +39,7 @@ static inline void sched_record_next(struct sched *nxt)
 	nxt->stamp = read_cycles();
 }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

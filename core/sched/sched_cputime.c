@@ -27,7 +27,7 @@ int sched_thread_cputime(pid_t tid, struct timespec *tval)
 
 	tval->tv_sec = tval->tv_nsec = 0;
 
-	if (dst == NULL)
+	if (!dst)
 		return -ESRCH;
 
 	sp = dst->sp;
@@ -55,13 +55,22 @@ int sched_process_cputime(pid_t tid, struct timespec *tval)
 
 	tval->tv_sec = tval->tv_nsec = 0;
 
-	if (proc == NULL)
+	if (!proc)
 		return -ESRCH;
 
 	spin_lock_irqsave(&proc->slock, flags);
 	list_for_each_entry(thd, &proc->threads, node) {
 		sval.tv_sec = sval.tv_nsec = 0;
-		sched_thread_cputime(thd->id, &sval);
+		if (sched_thread_cputime(thd->id, &sval) != 0) {
+			/*
+			 * Thread is exiting but still in the process list:
+			 * refcount already dropped to 0 in __sched_put()
+			 * before pthread_del() moved its time into
+			 * proc->runtime. Read overall cycles directly to
+			 * avoid losing the thread's CPU contribution.
+			 */
+			__sched_thread_cputime(thd, &sval);
+		}
 		timespecadd(&sval, tval, tval);
 	}
 	timespecadd(tval, &proc->runtime, tval);

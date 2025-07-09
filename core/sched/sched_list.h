@@ -7,6 +7,10 @@
 #ifndef _SCHED_LIST_H
 #define _SCHED_LIST_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <trace.h>
 #include <limits.h>
 #include "sched_priv.h"
@@ -190,7 +194,7 @@ static inline void sched_change_prio(
 	int curr_prio = s->prio;
 	struct list_head *lists = sp->prio_lists;
 
-	/* update the kernelspace current priority */
+	/* update the kernel space current priority */
 	s->prio = dst_prio;
 
 	if (!list_empty(&s->ready_node)) {
@@ -221,6 +225,10 @@ static inline void sched_compensate_prio(
 		return;
 
 	if (s->runtime > (SCHED_WEIGHT_PERLEVEL >> 2))
+		return;
+
+	/* already at or above base priority, no compensation needed */
+	if (s->prio >= s->priority)
 		return;
 
 	step = max(s->priority >> 3, 1);
@@ -315,16 +323,9 @@ static inline struct sched *sched_pick_next
 	if (s && idx < SCHED_PRIO_MAX - 1)
 		return s;
 
-	/*
-	 * To enhance the performance, we will not
-	 * use list_first_entry().
-	 * Because:
-	 * 1. .next is impossible to be NULL.
-	 * 2. the type is sure correct, no need to check.
-	 * 3. offsetof(struct sched, node) is zero.
-	 */
 	if (likely(idx >= 0))
-		return (struct sched *)sp->prio_lists[idx].next;
+		return list_first_entry(&sp->prio_lists[idx],
+				struct sched, ready_node);
 
 	return sp->idle;
 }
@@ -344,6 +345,12 @@ static inline struct sched *sched_pick_global(
 	spin_lock(&gd->lock);
 	spin_lock(&currsp->lock);
 
+	/* Skip stealing if local entity arrived during the lock gap */
+	if (currsp->ready_num > 0) {
+		spin_unlock(&gd->lock);
+		return NULL;
+	}
+
 	/* pick a most busy cpu */
 	list_for_each_entry(_sp, &gd->cpus, node) {
 		ready_num = _sp->ready_num;
@@ -352,7 +359,7 @@ static inline struct sched *sched_pick_global(
 			sp = _sp;
 		}
 	}
-	if (sp == currsp || sp == NULL) {
+	if (sp == currsp || !sp) {
 		spin_unlock(&gd->lock);
 		return NULL;
 	}
@@ -393,7 +400,7 @@ static inline struct sched_priv *__sched_pick_mostidle_cpu(
 
 	sp = list_first_entry_or_null(&gd->idle_cpus,
 				struct sched_priv, idle_node);
-	if (sp != NULL)
+	if (sp)
 		return sp;
 
 	list_for_each_entry(sp, &gd->cpus, node) {
@@ -434,7 +441,7 @@ static inline struct sched_priv *__sched_pick_affinity_cpu(
 	unsigned int busy_factor = INT_MAX;
 
 	sp = sched_pick_affinity_idle_cpu(s, gd);
-	if (sp != NULL)
+	if (sp)
 		return sp;
 
 	list_for_each_entry(sp, &gd->cpus, node) {
@@ -450,7 +457,7 @@ static inline struct sched_priv *__sched_pick_affinity_cpu(
 #else
 	ret = sched_pick_affinity_idle_cpu(s, gd);
 
-	if (ret == NULL) {
+	if (!ret) {
 		list_for_each_entry(sp, &gd->cpus, node) {
 			if (cpu_affinity_isset(s->affinity, sp->pc->id)) {
 				list_move_tail(&sp->node, &gd->cpus);
@@ -479,7 +486,7 @@ static inline struct sched_priv *sched_pick_cpu(
 
 	if (ret->ready_num != 0) {
 		ret = __sched_pick_affinity_cpu(s, gd);
-		if (ret == NULL)
+		if (!ret)
 			ret = __sched_pick_mostidle_cpu(gd);
 	}
 #endif
@@ -487,4 +494,7 @@ static inline struct sched_priv *sched_pick_cpu(
 	return ret;
 }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

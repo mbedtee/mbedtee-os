@@ -7,6 +7,10 @@
 #ifndef _SCHED_PRIV_H
 #define _SCHED_PRIV_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <ctx.h>
 #include <ipi.h>
 #include <wait.h>
@@ -36,7 +40,7 @@
 	(((_x_) >= SCHED_ID_START) && ((_x_) < SCHED_ID_END))
 
 /*
- * Define the state constants
+ * Define the state constants (regular scheduling states)
  */
 #define SCHED_SUSPEND	(0x00)
 #define SCHED_EXIT		(0x01)
@@ -47,15 +51,17 @@
 #define SCHED_STAT_MAX	(0x06)
 
 /*
+ * Pending scheduling requests - set before schedule(),
+ * consumed by sched_exec() in IRQ context.
+ */
+#define SCHED_PEND_ABORT	(1) /* exception abort in progress */
+#define SCHED_PEND_SUSPEND	(2) /* voluntary suspend pending */
+#define SCHED_PEND_EXIT		(3) /* voluntary exit pending */
+
+/*
  * thread specific scheduler information
  */
 struct sched {
-	/*
-	 * ready-node in scheduler prior_list
-	 * DO NOT MOVE, 'node' shall be the first
-	 * variable to enhance the scheduling performance,
-	 * offsetof(struct sched, node) can be skiped
-	 */
 	struct list_head ready_node;
 
 	/* node in percpu sched entities list */
@@ -68,7 +74,7 @@ struct sched {
 	pid_t id;
 
 	/* reference counter */
-	int refc;
+	struct atomic_num refc;
 
 	/* scheduler priority */
 	int8_t priority;
@@ -81,12 +87,8 @@ struct sched {
 	bool bind;
 	/* regular states: SCHED_RUNNING and SCHED_WAITING etc.. */
 	uint8_t state;
-
-	/* special states: abort state, intermediate state of suspend/exit */
-#define SCHED_ABORT 1
-#define SCHED_SUSPENDING 2
-#define SCHED_EXITING 3
-	uint8_t s_stat;
+	/* pending scheduling request: SCHED_PEND_ABORT/SUSPEND/EXIT */
+	uint8_t pending;
 
 	struct cpu_affinity affinity[1];
 
@@ -107,9 +109,6 @@ struct sched {
 	/* start cyclestamp of current counting */
 	uint64_t stamp;
 
-	/* Registers of the thread */
-	struct thread_ctx regs;
-
 	/*
 	 * consumed priority (in cycles)
 	 * SCHED_OTHER policy will auto-decrease the
@@ -118,6 +117,9 @@ struct sched {
 	 * priority will be decreased.
 	 */
 	uint32_t prio_consumed;
+
+	/* Registers of the thread */
+	struct thread_ctx regs;
 
 	/* magic num for stack overflow checking */
 	uint32_t magic;
@@ -268,7 +270,7 @@ struct sched *sched_get(pid_t id);
  */
 void sched_put(struct sched *s);
 
-void __sched_exec(struct sched_priv *sp, struct thread_ctx *regs);
+void __sched_exec(struct sched_priv *sp, struct thread_ctx *regs, bool yield);
 
 void __sched_exec_specified(struct sched_priv *sp,
 	struct sched *next, struct thread_ctx *regs);
@@ -304,7 +306,7 @@ void sched_dequeue(struct sched *s, int state);
 
 #define sched_of(t) ((struct sched *)((struct thread *)t + 1))
 
-#define sched_uregs(t) ((struct thread_ctx *)((t)->kstack - sizeof(struct thread_ctx)))
+#define sched_uregs(t) ((struct thread_ctx *)((t)->kstack - GPR_CTX_SIZE))
 
 #define is_thread_ksp(t, addr) (((unsigned long)(addr) > (unsigned long)(t)) && \
 	((unsigned long)(addr) < (unsigned long)(t)->kstack))
@@ -363,4 +365,7 @@ static inline void sched_put_all(struct sched_gd *gd,
 	spin_unlock_irqrestore(&gd->lock, flags);
 }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

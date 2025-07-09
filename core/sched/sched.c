@@ -28,12 +28,10 @@
 #include "sched_list.h"
 #include "sched_timer.h"
 
-struct sched_gd __sched_gd
-	__section(".bss") = {0};
+struct sched_gd __sched_gd __section(".bss");
 
 struct sched_priv __sched_priv[CONFIG_NR_CPUS]
-	__section(".bss")
-	__aligned(64) = {NULL};
+	__section(".bss") __aligned(64);
 
 /* Background scheduler tick interval */
 #define SCHED_INTERVAL_USEC (8192UL) /* Microseconds */
@@ -68,6 +66,8 @@ static void __sched_uninstall(struct sched *s)
 	if (!list_empty(&s->ready_node))
 		WMSG("%s - %s\n", t->name, sched_state(s->state));
 
+	assert(list_empty(&s->ready_node));
+
 	/* reject new joiners */
 	t->join_q.condi = -(INT_MAX >> 1);
 
@@ -96,13 +96,18 @@ void sched_uninstall(void *sched_t)
 	if (sched_t) {
 		struct sched *s = sched_t;
 		struct sched_gd *gd = sched_gd();
+		struct thread *t = s->thread;
 		unsigned long flags = 0;
 
 		spin_lock_irqsave(&gd->lock, flags);
 
 		_sched_uninstall(s);
 
-		s->thread->sched = NULL;
+		t->sched = NULL;
+
+		/* avoid proc->id double free */
+		if (s->id == t->proc->id)
+			t->proc->id = 0;
 
 		spin_unlock_irqrestore(&gd->lock, flags);
 
@@ -159,7 +164,7 @@ static int __sched_switch_affinity_cpu(
 		return 0;
 
 	dst = __sched_pick_affinity_cpu(s, gd);
-	if (dst == NULL)
+	if (!dst)
 		return -EINVAL;
 
 	__sched_sp_del(ori, s);
@@ -258,9 +263,14 @@ void sched_dequeue(struct sched *s, int state)
 	struct sched_priv *sp = NULL;
 
 	/*
-	 * Global lock to ensure the s->sp is atomic
+	 * Self-dequeue only: the calling thread always dequeues
+	 * itself, so s->sp is stable - no gd->lock needed.
+	 * SCHED_EXIT modifies global data, so gd->lock is required.
 	 */
-	spin_lock_irq(&gd->lock);
+	local_irq_disable();
+
+	if (state == SCHED_EXIT)
+		spin_lock(&gd->lock);
 
 	sp = s->sp;
 
@@ -284,15 +294,14 @@ void sched_dequeue(struct sched *s, int state)
 
 	spin_unlock(&sp->lock);
 
-	spin_unlock(&gd->lock);
+	if (state == SCHED_EXIT)
+		spin_unlock(&gd->lock);
 
 	/*
-	 * due to the global FIQ is enabled when executing
-	 * the software generated interrupts (SVC syscall),
-	 * so the local_irq_enable function should not be called on
-	 * this critical ctx-swap duration, otherwise the FIQ may
-	 * occur, and the FIQ routine may execute _sched_exec(),
-	 * then this swapped ctx will be disturbed.
+	 * Each thread has its own IRQ or FIQ flag, which will
+	 * be restored when restore the thread's context, so the
+	 * local_irq_enable function should not be called in this
+	 * critical context-swap duration.
 	 *
 	 * local_irq_restore(flags);
 	 */
@@ -312,9 +321,10 @@ void sched_timed_dequeue(struct sched *s,
 	struct sched_priv *sp = NULL;
 
 	/*
-	 * Global lock to ensure the s->sp is atomic
+	 * Self-dequeue only: the calling thread always dequeues
+	 * itself, so s->sp is stable - no gd->lock needed.
 	 */
-	spin_lock_irq(&gd->lock);
+	local_irq_disable();
 
 	sp = s->sp;
 
@@ -330,28 +340,25 @@ void sched_timed_dequeue(struct sched *s,
 
 	spin_unlock(&sp->lock);
 
-	spin_unlock(&gd->lock);
-
 	/*
-	 * due to the global FIQ is enabled when executing
-	 * the software generated interrupts (SVC syscall),
-	 * so the local_irq_enable function should not be called on
-	 * this critical ctx-swap duration, otherwise the FIQ may
-	 * occur, and the FIQ routine may execute _sched_exec(),
-	 * then this swapped ctx will be disturbed.
+	 * Each thread has its own IRQ or FIQ flag, which will
+	 * be restored when restore the thread's context, so the
+	 * local_irq_enable function should not be called in this
+	 * critical context-swap duration.
 	 *
 	 * local_irq_restore(flags);
 	 */
 }
 
 void __sched_exec(struct sched_priv *sp,
-	struct thread_ctx *regs)
+	struct thread_ctx *regs, bool yield)
 {
 	struct sched *curr = NULL;
 	struct sched *next = NULL;
+	bool yielded = false;
 	pid_t affinitylost = 0;
 
-	if (regs == NULL)
+	if (!regs)
 		return;
 
 	spin_lock(&sp->lock);
@@ -362,11 +369,25 @@ void __sched_exec(struct sched_priv *sp,
 
 	sched_update_curr(sp, curr);
 
+	/*
+	 * yield: temporarily hide curr from the prio list
+	 * to guarantee the pick will not select itself.
+	 * After picking, curr is re-added at the tail of
+	 * its priority list so same-priority peers go first.
+	 */
+	if (yield && curr && !list_empty(&curr->ready_node)) {
+		sched_list_del(sp, curr);
+		yielded = true;
+	}
+
 	if (sp->ready_num == 0)
 		next = sched_pick_global(sp);
 
 	if (!next)
 		next = sched_pick_next(sp);
+
+	if (yielded)
+		sched_list_add(sp, curr);
 
 	if (curr != next) {
 		sp->archops->switch_ctx(curr, next, regs);
@@ -429,7 +450,7 @@ void sched_notify_waiter(
 	sp->pc->int_ctx = NULL;
 
 	if (sp->curr == curr)
-		__sched_exec(sp, regs);
+		__sched_exec(sp, regs, false);
 }
 
 /*
@@ -442,25 +463,35 @@ void *sched_exec(struct thread_ctx *regs)
 	struct sched_priv *sp = sched_priv();
 	struct sched *s = sp->curr;
 	struct thread *t = NULL;
-	int s_stat = 0;
+	long notification = 0;
+	int pending = 0;
 
-	if (s && (s->s_stat != 0)) {
-		s_stat = s->s_stat;
-		s->s_stat = 0;
+	if (!s)
+		goto out;
+
+	if (s->pending) {
+		pending = s->pending;
+		s->pending = 0;
 		t = s->thread;
-		if (s_stat == SCHED_SUSPENDING) {
+		notification = t->join_q.notification;
+		if (pending == SCHED_PEND_SUSPEND) {
 			sched_dequeue(s, SCHED_SUSPEND);
-			sched_notify_waiter(sp, s, regs, t->join_q.notification);
+			sched_notify_waiter(sp, s, regs, notification);
 			mutex_unlock(&t->mlock);
-		} else if (s_stat == SCHED_EXITING) {
+		} else if (pending == SCHED_PEND_EXIT) {
 			sched_dequeue(s, SCHED_EXIT);
-			sched_notify_waiter(sp, s, regs, t->join_q.notification);
+			sched_notify_waiter(sp, s, regs, notification);
 			sched_put(s);
 		}
-	} else {
-		__sched_exec(sp, regs);
+		return regs;
 	}
 
+out:
+	/*
+	 * sched_yield(): curr is still in the ready list,
+	 * pick next while guaranteeing curr is not picked.
+	 */
+	__sched_exec(sp, regs, true);
 	return regs;
 }
 
@@ -506,7 +537,7 @@ int sched_install(void *thrd, int policy, int priority)
 	s->policy = policy;
 	s->priority = priority;
 	s->prio = priority; /* sched_average_prio(s) */
-	s->refc = 1;
+	s->refc = ATOMIC_INIT(1);
 
 	/* default set to suspend */
 	s->state = SCHED_SUSPEND;
@@ -532,7 +563,7 @@ bool sched_ready(pid_t id)
 	/*
 	 * sched entity offline
 	 */
-	if (s == NULL)
+	if (!s)
 		return false;
 
 	if (!list_empty(&s->ready_node)) {
@@ -562,8 +593,9 @@ bool sched_ready(pid_t id)
 		regs = currsp->pc->int_ctx;
 		if (regs && (s == sched_pick_next(currsp)))
 			__sched_exec_specified(currsp, s, regs);
-	} else if (s->sp->ready_num < 2)
+	} else if (s->sp->ready_num < 2) {
 		sched_ipi_trigger(s->sp->pc->id);
+	}
 
 	sched_put_lock(s, flags);
 
@@ -614,47 +646,95 @@ struct sched *sched_get(pid_t id)
 	spin_lock_irqsave(&gd->lock, flags);
 
 	s = gd->scheds[id];
-	if (s)
-		s->refc++;
+	if (s) {
+		if (sched_overflow(s)) {
+			EMSG("oops-%s stack overflow %d\n",
+				s->thread->name, atomic_read(&s->refc));
+			s = NULL;
+		} else if (atomic_read(&s->refc) <= 0) {
+			s = NULL;
+		} else {
+			atomic_inc(&s->refc);
+		}
+	}
 
 	spin_unlock_irqrestore(&gd->lock, flags);
 	return s;
 }
 
 /*
- * Put the sched entity,
- * decrease the reference counter.
+ * Common cleanup logic when refcount reaches zero.
+ * Called with gd->lock held, releases it.
  */
-void sched_put(struct sched *s)
+static void __sched_put_zero(struct sched *s, unsigned long flags)
 {
 	int cpu = 0;
-	unsigned long flags = 0;
 	struct sched_gd *gd = sched_gd();
 	struct thread *t = NULL;
 
-	if (s == NULL)
+	if (!list_empty(&s->gd_node))
+		_sched_uninstall(s);
+
+	t = s->thread;
+	t->sched = NULL;
+	cpu = s->sp->pc->id;
+	spin_unlock(&gd->lock);
+	__schedule_highpri_work_on(cpu, &t->destroy);
+	local_irq_restore(flags);
+}
+
+/*
+ * Common put logic: decrement refcount and clean up if zero.
+ * Called with gd->lock held, releases it.
+ */
+static void __sched_put(struct sched *s, unsigned long flags)
+{
+	if (sched_overflow(s))
+		EMSG("oops-%s stack overflow %d\n",
+			s->thread->name, atomic_read(&s->refc));
+
+	assert(atomic_read(&s->refc) >= 1);
+
+	if (atomic_dec_return(&s->refc) == 0) {
+		__sched_put_zero(s, flags);
+	} else {
+		spin_unlock_irqrestore(&sched_gd()->lock, flags);
+	}
+}
+
+/*
+ * Put the sched entity,
+ * decrease the reference counter.
+ * Lock-free fast path when refcount stays above zero.
+ */
+void sched_put(struct sched *s)
+{
+	unsigned long flags = 0;
+
+	if (!s)
 		return;
 
 	if (sched_overflow(s))
-		EMSG("%s stack overflow %d\n", s->thread->name, s->state);
+		EMSG("oops-%s stack overflow %d\n",
+			s->thread->name, atomic_read(&s->refc));
 
-	spin_lock_irqsave(&gd->lock, flags);
+	assert(atomic_read(&s->refc) >= 1);
 
-	assert(s->refc >= 1);
-
-	if (--s->refc == 0) {
-		if (!list_empty(&s->gd_node))
-			_sched_uninstall(s);
-
-		t = s->thread;
-		t->sched = NULL;
-		cpu = s->sp->pc->id;
-		spin_unlock(&gd->lock);
-		__schedule_highpri_work_on(cpu, &t->destroy);
-		local_irq_restore(flags);
-	} else {
-		spin_unlock_irqrestore(&gd->lock, flags);
+	if (atomic_dec_return(&s->refc) == 0) {
+		spin_lock_irqsave(&sched_gd()->lock, flags);
+		__sched_put_zero(s, flags);
 	}
+}
+
+/*
+ * Put the sched entity,
+ * decrease the reference counter.
+ * release the global_desc (gd) lock.
+ */
+void sched_put_lock(struct sched *s, unsigned long flags)
+{
+	if (s)
+		__sched_put(s, flags);
 }
 
 /*
@@ -675,50 +755,21 @@ struct sched *sched_get_lock(pid_t id, unsigned long *flg)
 	spin_lock_irqsave(&gd->lock, flags);
 	s = gd->scheds[id];
 	if (s) {
-		s->refc++;
+		if (sched_overflow(s)) {
+			EMSG("oops-%s stack overflow %d\n",
+				s->thread->name, atomic_read(&s->refc));
+			goto out;
+		}
+		if (atomic_read(&s->refc) <= 0)
+			goto out;
+		atomic_inc(&s->refc);
 		*flg = flags;
-
-		if (sched_overflow(s))
-			EMSG("%s stack overflow %d\n", s->thread->name, s->state);
 		return s;
 	}
+
+out:
 	spin_unlock_irqrestore(&gd->lock, flags);
-
 	return NULL;
-}
-
-/*
- * Put the sched entity,
- * decrease the reference counter.
- * release the global_desc (gd) lock.
- */
-void sched_put_lock(struct sched *s, unsigned long flags)
-{
-	int cpu = 0;
-	struct sched_gd *gd = sched_gd();
-	struct thread *t = NULL;
-
-	if (s == NULL)
-		return;
-
-	if (sched_overflow(s))
-		EMSG("%s stack overflow %d\n", s->thread->name, s->state);
-
-	assert(s->refc >= 1);
-
-	if (--s->refc == 0) {
-		if (!list_empty(&s->gd_node))
-			_sched_uninstall(s);
-
-		t = s->thread;
-		t->sched = NULL;
-		cpu = s->sp->pc->id;
-		spin_unlock(&gd->lock);
-		__schedule_highpri_work_on(cpu, &t->destroy);
-		local_irq_restore(flags);
-	} else {
-		spin_unlock_irqrestore(&gd->lock, flags);
-	}
 }
 
 int sched_entry_init(pid_t id, void *entry,
@@ -748,8 +799,9 @@ int sched_entry_init(pid_t id, void *entry,
 			t->critical = 1;
 			sp->archops->init_ctx(s, entry, func, data, 0);
 			ret = 0;
-		} else
+		} else {
 			ret = -EPERM;
+		}
 
 		spin_unlock(&sp->lock);
 	}
@@ -768,17 +820,26 @@ void sched_suspend(struct thread_ctx *regs)
 	struct thread *t = s->thread;
 	unsigned long lastwords = regs->r[ARG_REG + 1];
 
-	thread_leave_critical(t);
-
 	/*
 	 * has pending signals ? handle signals first
 	 */
-	if (is_sigtpending(t))
-		schedule();
+	if (is_sigtpending(t)) {
+		/*
+		 * Thread is already in its exit path (tuser->exiting=1) but
+		 * has pending signals that will never be dispatched -
+		 * sched_sighandle() skips signal delivery once exiting=1.
+		 * Force exit now to prevent an infinite spin in user-space
+		 * cleanup code (e.g. waiting for refc to reach 0 in usleep()).
+		 */
+		if (t->tuser->exiting)
+			sched_exit(regs);
+		return;
+	}
 
 	mutex_lock(&t->mlock);
 
-	s->s_stat = SCHED_SUSPENDING;
+	thread_leave_critical(t);
+	s->pending = SCHED_PEND_SUSPEND;
 	t->join_q.notification = lastwords;
 	schedule();
 }
@@ -798,7 +859,7 @@ void sched_exit(struct thread_ctx *regs)
 		sighandling(t), !list_empty(&t->wqnodes),
 		!list_empty(&t->join_q.list), !list_empty(&t->join_q.wakelist));
 
-	s->s_stat = SCHED_EXITING;
+	s->pending = SCHED_PEND_EXIT;
 	t->join_q.notification = regs->r[ARG_REG + 1];
 	schedule();
 }
@@ -807,7 +868,7 @@ void sched_wait(void)
 {
 	local_irq_disable();
 
-	assert(in_interrupt() == false);
+	assert(!in_interrupt());
 
 	sched_dequeue(sched_priv()->curr, SCHED_WAITING);
 }
@@ -826,7 +887,7 @@ static void sched_backtrace(void)
 	sp = sched_priv();
 
 	s = sp->curr;
-	if (s != NULL) {
+	if (s) {
 		t = s->thread;
 		if (t->proc == kproc()) {
 			backtrace(); /* backtrace @ kernel */
@@ -835,9 +896,9 @@ static void sched_backtrace(void)
 		} else {
 			struct thread_ctx *uctx = sched_uregs(t);
 			void (*setup_backtrace)(struct thread_ctx *regs, void *tracefn);
+			void *utracefunc = t->proc->wrapper.backtrace;
 
 			setup_backtrace = sp->archops->setup_backtrace;
-			void *utracefunc = t->proc->pself->wrapper.backtrace;
 
 			backtrace(); /* backtrace @ kernel firstly */
 
@@ -845,13 +906,13 @@ static void sched_backtrace(void)
 			sp->pc->thread_ksp = t->kstack = (void *)t + t->kstack_size;
 
 			if (utracefunc) {
-				memcpy(&s->regs, uctx, sizeof(struct thread_ctx));
+				memcpy(&s->regs, uctx, GPR_CTX_SIZE);
 				setup_backtrace(&s->regs, utracefunc);
 			} else {
 				t->critical = 0;
 				t->tuser->critical = 0;
 				sigenqueue(t->id, SIGKILL, SI_QUEUE,
-					(union sigval)((void *)-EFAULT), true);
+					(union sigval)((void *)EFAULT), true);
 			}
 			for (;;) {
 				sched_clear_current(sp);
@@ -875,10 +936,10 @@ static void sched_setup_abort(struct thread_ctx *regs,
 	void *utracefunc = NULL;
 	void *ktracefunc = NULL;
 
-	curr->s_stat = SCHED_ABORT;
+	curr->pending = SCHED_PEND_ABORT;
 
 	setup_backtrace = sp->archops->setup_backtrace;
-	utracefunc = proc->pself->wrapper.backtrace;
+	utracefunc = proc->wrapper.backtrace;
 
 	if (user_addr(regs->pc)) {
 		if (utracefunc)
@@ -886,29 +947,32 @@ static void sched_setup_abort(struct thread_ctx *regs,
 		else
 			back2app = true;
 	} else {
-#ifdef CONFIG_BACKTRACE
-		ktracefunc = sched_backtrace;
-		/*
-		 * enlarge the stack for backtrace(), backtrace uses huge stack,
-		 * current regs->sp is too small that may overflow
-		 */
-		if (t->kstack_size < BACKTRACE_STACK_SIZE)
-			t->brstack = kmalloc(BACKTRACE_STACK_SIZE);
-		void *top = t->brstack ? t->brstack + BACKTRACE_STACK_SIZE
-					: (void *)t + t->kstack_size;
-		long inuse = (uintptr_t)t->kstack - regs->sp;
+		if (IS_ENABLED(CONFIG_BACKTRACE)) {
+			void *top = NULL;
+			long inuse = 0;
 
-		if (t->kstack != top) {
-			memmove(top - inuse, (void *)regs->sp, inuse);
-			sp->pc->thread_ksp = t->kstack = top;
-			regs->sp = (uintptr_t)top - inuse;
+			ktracefunc = sched_backtrace;
+			/*
+			 * enlarge the stack for backtrace(), backtrace uses huge stack,
+			 * current regs->sp is too small that may overflow
+			 */
+			if (t->kstack_size < BACKTRACE_STACK_SIZE)
+				t->brstack = kmalloc(BACKTRACE_STACK_SIZE);
+			top = t->brstack ? t->brstack + BACKTRACE_STACK_SIZE
+						: (void *)t + t->kstack_size;
+			inuse = (uintptr_t)t->kstack - regs->sp;
+
+			if (t->kstack != top) {
+				memmove(top - inuse, (void *)regs->sp, inuse);
+				sp->pc->thread_ksp = t->kstack = top;
+				regs->sp = (uintptr_t)top - inuse;
+			}
 		}
-#endif
-		if (ktracefunc)
+		if (ktracefunc) {
 			setup_backtrace(regs, ktracefunc);
-		else if (proc != kproc()) {
+		} else if (proc != kproc()) {
 			if (utracefunc) {
-				memmove(regs, sched_uregs(t), sizeof(*regs));
+				memmove(regs, sched_uregs(t), GPR_CTX_SIZE);
 				setup_backtrace(regs, utracefunc);
 			} else {
 				back2app = true;
@@ -929,9 +993,9 @@ static void sched_setup_abort(struct thread_ctx *regs,
 	if (back2app) {
 		t->critical = 0;
 		t->tuser->critical = 0;
-		curr->s_stat = SCHED_EXITING;
+		curr->pending = SCHED_PEND_EXIT;
 		sigenqueue(t->id, SIGKILL, SI_QUEUE,
-			(union sigval)((void *)-EFAULT), true);
+			(union sigval)((void *)EFAULT), true);
 	}
 }
 
@@ -945,14 +1009,14 @@ void sched_abort(struct thread_ctx *regs)
 	struct sched *curr = sp->curr;
 
 	/* kernel early aborts ? */
-	if (curr == NULL) {
+	if (!curr) {
 		sp->archops->setup_backtrace(regs, sched_backtrace);
 		return;
 	}
 
 	/* exit immediately for 2nd times aborts */
-	if (curr->s_stat == SCHED_ABORT ||
-		curr->s_stat == SCHED_EXITING) {
+	if (curr->pending == SCHED_PEND_ABORT ||
+		curr->pending == SCHED_PEND_EXIT) {
 		sched_exit(regs);
 	} else {
 		/*
@@ -1043,7 +1107,7 @@ int sched_getscheduler(pid_t id)
 		return -ESRCH;
 
 	s = sched_get(id);
-	if (s == NULL)
+	if (!s)
 		return -ESRCH;
 
 	policy = s->policy;
@@ -1068,7 +1132,7 @@ int sched_setparam(pid_t id,
 		return -ESRCH;
 
 	s = sched_get_lock(id, &flags);
-	if (s == NULL)
+	if (!s)
 		return -ESRCH;
 
 	sp = s->sp;
@@ -1123,7 +1187,7 @@ int sched_setaffinity(pid_t id,
 		return -ESRCH;
 
 	s = sched_get_lock(id, &flags);
-	if (s == NULL)
+	if (!s)
 		return -ESRCH;
 
 	sp = s->sp;
@@ -1170,7 +1234,7 @@ int sched_getaffinity(pid_t id,
 		return -ESRCH;
 
 	s = sched_get_lock(id, &flags);
-	if (s == NULL)
+	if (!s)
 		return -ESRCH;
 
 	sp = s->sp;
@@ -1196,7 +1260,8 @@ static int sched_str_suspend(void *data)
 	sched_record_curr(sp->curr);
 	sched_update_curr(sp, sp->curr);
 	sp->archops->switch_ctx(sp->curr, sp->curr, sp->pc->int_ctx);
-	sched_update_state(sp, sp->curr, NULL);
+	if (sp->curr && (sp->curr->state == SCHED_RUNNING))
+		sp->curr->state = SCHED_READY;
 	sched_clear_current(sp);
 	sp->pc->int_ctx = NULL;
 	spin_unlock(&sp->lock);
@@ -1231,26 +1296,35 @@ static int sched_str_resume(void *data)
 	return 0;
 }
 
+static struct atomic_num sched_ipi_pending[CONFIG_NR_CPUS];
+
 static void sched_ipi_event(void)
 {
 	struct sched_priv *sp = sched_priv();
 
-	__sched_exec(sp, sp->pc->int_ctx);
+	atomic_set(&sched_ipi_pending[percpu_id()], 0);
+
+	__sched_exec(sp, sp->pc->int_ctx, false);
 }
 
 /*
  * ipi call to trigger schedule() (on the specified #cpu)
+ *
+ * Coalescing: skip the IPI if one is already pending
  */
 void sched_ipi_trigger(unsigned int cpu)
 {
-	ipi_call(sched_ipi_event, cpu, NULL, 0);
+	int expected = 0;
+
+	if (atomic_compare_set(&sched_ipi_pending[cpu], &expected, 1))
+		ipi_call(sched_ipi_event, cpu, NULL, 0);
 }
 
 static void sched_event(struct tevent *e)
 {
 	struct sched_priv *sp = sched_priv();
 
-	__sched_exec(sp, sp->pc->int_ctx);
+	__sched_exec(sp, sp->pc->int_ctx, false);
 
 	sched_rotate(sp, SCHED_INTERVAL_USEC);
 }
@@ -1318,6 +1392,16 @@ void sched_init(void)
 		sched_cpu_online();
 
 	sched_rotate(sp, SCHED_INTERVAL_USEC);
+}
+
+int sched_getcpu(void)
+{
+	struct sched *s = current->sched;
+
+	if (s)
+		return s->sp->pc->id;
+
+	return 0;
 }
 
 void sched_cpu_online(void)
@@ -1391,7 +1475,7 @@ void sched_migrating(void)
 				struct sched, node)) != NULL) {
 		dst = __sched_pick_affinity_cpu(s, gd);
 
-		if (dst == NULL)
+		if (!dst)
 			dst = __sched_pick_mostidle_cpu(gd);
 
 		spin_lock(&dst->lock);

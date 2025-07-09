@@ -4,9 +4,10 @@
  * sched_timeout mechanism
  */
 
-#include <tevent.h>
 #include <trace.h>
 #include <sched.h>
+#include <timer.h>
+#include <tevent.h>
 #include <thread.h>
 #include <interrupt.h>
 
@@ -28,7 +29,7 @@ void sched_timeout_event(struct tevent *t)
  * Returns via #time
  * time.tv_sec may be negative if the timeout elapsed
  */
-void sched_timespec(struct timespec *time)
+void sched_timespec(struct timespec *time, int interruptible)
 {
 	struct timespec curr = {0};
 	unsigned long flags = 0;
@@ -39,10 +40,10 @@ void sched_timespec(struct timespec *time)
 
 		s = current->sched;
 
-		assert(in_interrupt() == false);
+		assert(!in_interrupt());
 
 		sched_timed_dequeue(s, SCHED_SLEEPING, time);
-		thread_schedule(current, true);
+		thread_schedule(current, interruptible);
 
 		local_irq_restore(flags);
 
@@ -61,7 +62,7 @@ void sched_timespec(struct timespec *time)
  * remaining msecs if the caller has been
  * waked up before timeout elapsed.
  */
-uint64_t sched_msecs(uint64_t msecs)
+uint64_t sched_msecs(uint64_t msecs, int interruptible)
 {
 	struct timespec time;
 	uint64_t remain = 0;
@@ -69,9 +70,9 @@ uint64_t sched_msecs(uint64_t msecs)
 	if (msecs == 0)
 		return 0;
 
-	usecs_to_time(msecs * 1000ULL, &time);
+	msecs_to_time(msecs, &time);
 
-	sched_timespec(&time);
+	sched_timespec(&time, interruptible);
 
 	if (time.tv_sec >= 0)
 		remain = time_to_usecs(&time) / 1000ULL;
@@ -88,7 +89,7 @@ uint64_t sched_msecs(uint64_t msecs)
  * remaining microseconds if the caller has been
  * waked up before timeout elapsed.
  */
-uint64_t sched_usecs(uint64_t usecs)
+uint64_t sched_usecs(uint64_t usecs, int interruptible)
 {
 	struct timespec time;
 	uint64_t remain = 0;
@@ -98,7 +99,7 @@ uint64_t sched_usecs(uint64_t usecs)
 
 	usecs_to_time(usecs, &time);
 
-	sched_timespec(&time);
+	sched_timespec(&time, interruptible);
 
 	if (time.tv_sec >= 0)
 		remain = time_to_usecs(&time);
@@ -121,10 +122,10 @@ void sched_timespec_locked(struct spinlock *slock,
 	struct timespec curr = {0};
 	struct sched *s = NULL;
 
-	if (!time->tv_sec && !time->tv_nsec)
+	if (time->tv_sec == 0 && time->tv_nsec == 0)
 		return;
 
-	assert(in_interrupt() == false);
+	assert(!in_interrupt());
 
 	s = current->sched;
 	sched_timed_dequeue(s, SCHED_WAITING, time);
@@ -180,10 +181,10 @@ void sched_timespec_mutex_locked(struct mutex *mlock,
 	struct timespec curr = {0};
 	struct sched *s = NULL;
 
-	if (!time->tv_sec && !time->tv_nsec)
+	if (time->tv_sec == 0 && time->tv_nsec == 0)
 		return;
 
-	assert(in_interrupt() == false);
+	assert(!in_interrupt());
 
 	s = current->sched;
 	sched_timed_dequeue(s, SCHED_WAITING, time);

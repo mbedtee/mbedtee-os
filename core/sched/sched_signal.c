@@ -66,10 +66,10 @@ static void *sched_sigstop(struct sched_priv *sp,
 	 */
 	spin_lock(&sp->lock);
 	sp->archops->switch_ctx(curr, NULL, regs);
-	/* change to a safe stack -> common_stack */
+	/* change to a safe stack -> bottom of common_stack */
 	if (is_thread_ksp(t, regs)) {
-		regs = sp->pc->stack - sizeof(*regs);
-		memcpy(regs, &curr->regs, sizeof(*regs));
+		regs = sp->pc->stack - STACK_SIZE;
+		memcpy(regs, &curr->regs, GPR_CTX_SIZE);
 	}
 	spin_unlock(&sp->lock);
 
@@ -94,34 +94,50 @@ void *sched_sighandle(struct thread_ctx *regs)
 	struct sigarguments *sa = NULL;
 	struct thread_ctx *uctx = NULL;
 	int signo = 0;
+	unsigned long usp = 0;
 
-	if (s == NULL)
+	if (!s)
 		return regs;
 
 	t = s->thread;
 	sigt = &t->sigt;
-	sigp = &t->proc->sigp;
 
-	/* no signal is pending */
-	if (atomic_read_x(&sigp->nrqueued) == 0)
+	/*
+	 * current sched-entity has pending abort -> exiting
+	 * or it's not an user thread
+	 */
+	if (s->pending || !t->tuser)
 		goto out;
 
 	LMSG("pc %lx UC %d KC %d I %d exit %d ccnt %d pending %lx\n", regs->pc,
 		t->tuser->critical, t->critical, t->tuser->inited, t->tuser->exiting,
 		sigt->continuouscnt, *(long *)&sigt->pending);
 
-	/* abort -> exiting */
-	if (s->s_stat == SCHED_ABORT)
+	/* userspace not ready or already marked for death */
+	if (!t->tuser->inited || t->tuser->exiting)
 		goto out;
 
-	if ((!t->tuser) || /* not an user thread */
-		(!t->tuser->inited) || /* userspace not ready */
-		(t->tuser->exiting)) /* already marked for death */
+	/* no signal is pending for current sched-entity */
+	if (!is_sigpending(t))
 		goto out;
 
 	/* share cpu timeslice for the original execution */
 	if (sigt->continuouscnt >= 3)
 		goto out;
+
+	sigp = &t->proc->sigp;
+
+	/*
+	 * If it's currently in kernel context and blocked in an
+	 * interruptible wait/sleep, do not dequeue and execute
+	 * regular user signal handler here. (let it return EINTR)
+	 */
+	if (!list_empty(&t->wqnodes)) {
+		if (!((sigt->pending | sigp->pending) &
+			(BIT(SIGKILL) | BIT(SIGSTOP) | BIT(SIGCANCEL)))) {
+			goto out;
+		}
+	}
 
 	sa = &t->tuser->sa;
 	while (SIGEXEC_CONDI(t, regs)) {
@@ -143,8 +159,6 @@ void *sched_sighandle(struct thread_ctx *regs)
 			break;
 		}
 
-		sa->signo = signo;
-
 		if (user_addr(regs->pc)) {
 			uctx = regs;
 			t->kstack -= sizeof(*regs);
@@ -158,13 +172,28 @@ void *sched_sighandle(struct thread_ctx *regs)
 				sigp->nrqueued, signo, t->kstack, regs, uctx->sp);
 		}
 
+		usp = uctx->sp;
+
 		sp->archops->save_sigctx(s, regs);
 
 		sp->archops->init_ctx(s,
-			t->proc->pself->wrapper.signal_entry,
+			t->proc->wrapper.signal_entry,
 			sigp->act[signo].sa_handler,
 			&t->tuser_uva->sa, ((uintptr_t)t->ustack_uva +
-			t->ustack_size) - uctx->sp);
+			t->ustack_size) - usp);
+
+		/*
+		 * If SA_ONSTACK and altstack available and we're not
+		 * already on it, redirect SP to the alternate stack.
+		 */
+		if (sigt->sigaltstack.ss_sp &&
+			(sigp->act[signo].sa_flags & SA_ONSTACK) &&
+		    !(sigt->sigaltstack.ss_flags & SS_ONSTACK)) {
+			sigt->sigaltstack.ss_flags |= SS_ONSTACK;
+			s->regs.sp = (unsigned long)sigt->sigaltstack.ss_sp +
+				sigt->sigaltstack.ss_size;
+			s->regs.sp = s->regs.sp & ~7UL;
+		}
 
 		sp->pc->thread_ksp = t->kstack;
 
@@ -211,13 +240,16 @@ void *sched_sigreturn(struct thread_ctx *regs)
 
 	sigt->mask = sigt->savedmask;
 
+	/* Clear SS_ONSTACK after handler returns from altstack. */
+	sigt->sigaltstack.ss_flags &= ~SS_ONSTACK;
+
 	return regs;
 }
 #else
 
-int sched_sigcheck(struct sched *s)
+pid_t sched_sigcheck(struct sched *s)
 {
-	return false;
+	return 0;
 }
 void *sched_sighandle(struct thread_ctx *regs)
 {

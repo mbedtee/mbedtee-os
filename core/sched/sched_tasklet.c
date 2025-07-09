@@ -77,7 +77,7 @@ void tasklet_schedule(struct tasklet *t)
 		 */
 		if (sp->curr != taskletd) {
 			wakeup(&taskletd->thread->wait_q);
-			if (ctx == NULL)
+			if (!ctx)
 				sched_ipi_trigger(sp->pc->id);
 		}
 
@@ -168,7 +168,7 @@ void sched_tasklet_init(struct sched_priv *sp)
 
 	INIT_LIST_HEAD(&sp->tasklets);
 
-	id = kthread_create_on(sched_tasklet_routine,
+	id = kthread_create_on((void *)sched_tasklet_routine,
 			sp, sp->pc->id, "taskletd");
 	if (id < 0) {
 		EMSG("kthread_create failed %d\n", id);

@@ -28,7 +28,7 @@ void sched_record_runtime(struct sched_priv *sp)
 	curr = read_cycles();
 
 	diff = sub_cycles(curr, sp->stamp);
-	/* SCHED_COUNT_PERIOD * 4 - 256ms */
+	/* SCHED_COUNT_PERIOD * 4 */
 	if (unlikely(diff >= (sp->threshold * 4))) {
 		list_for_each_entry(s, &sp->sl, node) {
 			s->lruntime = s->runtime;
@@ -39,7 +39,7 @@ void sched_record_runtime(struct sched_priv *sp)
 	} else {
 		/* record timeslice window for all threads */
 		diff = sub_cycles(curr, sp->stamp_reward);
-		/* SCHED_COUNT_PERIOD - 64ms */
+		/* SCHED_COUNT_PERIOD */
 		if (unlikely(diff >= sp->threshold)) {
 			list_for_each_entry(s, &sp->sl, node) {
 				sched_compensate_prio(sp, s);

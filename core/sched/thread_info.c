@@ -6,8 +6,26 @@
 
 #include <thread.h>
 #include <process.h>
+#include <sections.h>
 
 #include "sched_priv.h"
+
+/*
+ * Invoke all registered thread cleanup callbacks
+ */
+void thread_cleanup_run(struct thread *t)
+{
+	thread_cleanup_func_t func = NULL;
+	unsigned long ptr = 0;
+	unsigned long start = __thread_cleanup_start();
+	unsigned long end = __thread_cleanup_end();
+
+	for (ptr = start; ptr < end; ptr += sizeof(ptr)) {
+		func = *(thread_cleanup_func_t *)ptr;
+		if (func)
+			func(t);
+	}
+}
 
 /*
  * Get the thread by TID,

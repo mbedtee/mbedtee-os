@@ -36,6 +36,8 @@ static int sched_debugfs_info_read(struct debugfs_file *d)
 
 	read_time(&tmp);
 	cur_cycles = time_to_cycles(&tmp);
+	if (!cur_cycles)
+		cur_cycles = 1;
 
 	list_for_each_entry(dst, &gd->sl, gd_node) {
 		sp = dst->sp;
@@ -46,7 +48,7 @@ static int sched_debugfs_info_read(struct debugfs_file *d)
 				t->proc->id, sp->pc->id);
 
 		/* state */
-		stat = dst->s_stat == SCHED_EXITING ? SCHED_EXIT : dst->state;
+		stat = dst->pending == SCHED_PEND_EXIT ? SCHED_EXIT : dst->state;
 		debugfs_printf(d, "%s\t", sched_state(stat));
 		cnts[stat]++;
 
@@ -62,10 +64,14 @@ static int sched_debugfs_info_read(struct debugfs_file *d)
 			(unsigned long)tmp.tv_sec, tmp.tv_nsec);
 
 		/* overall loading and instantaneous loading */
-		debugfs_printf(d, "%03d.%02d%% %03d.%02d%%\t", (int)(dst->overall * 100 / cur_cycles),
-			(int)((dst->overall * 100 % cur_cycles) * 100 / cur_cycles),
-			(int)((uint64_t)dst->lruntime * 100 / sp->lruntime),
-			(int)((((uint64_t)dst->lruntime * 100) % sp->lruntime) * 100 / sp->lruntime));
+		{
+			uint64_t lrt = sp->lruntime ? sp->lruntime : 1;
+
+			debugfs_printf(d, "%03d.%02d%% %03d.%02d%%\t", (int)(dst->overall * 100 / cur_cycles),
+				(int)((dst->overall * 100 % cur_cycles) * 100 / cur_cycles),
+				(int)((uint64_t)dst->lruntime * 100 / lrt),
+				(int)((((uint64_t)dst->lruntime * 100) % lrt) * 100 / lrt));
+		}
 
 		/* App name */
 		debugfs_printf(d, "%s\n", t->name);
@@ -77,7 +83,7 @@ static int sched_debugfs_info_read(struct debugfs_file *d)
 		debugfs_printf(d, " | %04d %s", cnts[i], sched_state(i));
 	debugfs_printf(d, "\n");
 
-	debugfs_printf(d, "Todo:");
+	debugfs_printf(d, "ReadyNum:");
 	for_each_online_cpu(i) {
 		sp = &__sched_priv[i];
 		debugfs_printf(d, " CPU%d=[%d/%d]", i, sp->ready_num, sp->total_num);
@@ -92,12 +98,16 @@ static int sched_debugfs_info_read(struct debugfs_file *d)
 	for_each_online_cpu(i) {
 		sp = &__sched_priv[i];
 		dst = sp->idle;
-		if (dst == NULL)
+		if (!dst)
 			continue;
 
 		/* CpuLoding = 100 - idle thread's instantaneous loading */
-		percentage = (uint64_t)dst->lruntime * 100 / sp->lruntime;
-		digits = (((uint64_t)dst->lruntime * 100) % sp->lruntime) * 100 / sp->lruntime;
+		{
+			uint64_t lrt = sp->lruntime ? sp->lruntime : 1;
+
+			percentage = (uint64_t)dst->lruntime * 100 / lrt;
+			digits = (((uint64_t)dst->lruntime * 100) % lrt) * 100 / lrt;
+		}
 		if (digits == 0) {
 			percentage = 100 - percentage;
 		} else {
@@ -133,6 +143,28 @@ static int sched_debugfs_info_read(struct debugfs_file *d)
 	debugfs_printf(d, "\n");
 
 	sched_put_all(gd, flags);
+
+	/* check the processes - trigger by the waiting flag */
+	if (d->priv) {
+#if defined(CONFIG_USER)
+		struct thread *thd = NULL;
+		struct process *proc = NULL;
+
+		spin_lock_irqsave(&__plock, flags);
+		list_for_each_entry(proc, &__procs, node) {
+			debugfs_printf(d, "PROC %04d|%04d @ %s refc=%d alive=%d\n",
+				proc->id, proc->parent_id, proc->c->name,
+				proc->refc, atomic_read(&proc->alive));
+			list_for_each_entry(thd, &proc->threads, node) {
+				dst = thd->sched;
+				debugfs_printf(d, "THD %s refc=%d\n", thd->name,
+					atomic_read(&dst->refc));
+			}
+		}
+		spin_unlock_irqrestore(&__plock, flags);
+#endif
+	}
+
 	return 0;
 }
 
