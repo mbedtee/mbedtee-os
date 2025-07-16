@@ -81,11 +81,11 @@ void *vmalloc(size_t size)
 	va = kvma_alloc(size);
 	if (va) {
 		vm->pages = pages_sc_alloc(nr_pages);
-		if (vm->pages == NULL)
+		if (!vm->pages)
 			goto out;
 
 		ret = pages_sc_map(vm->pages, kpt(), va, nr_pages, PG_RW);
-		if (ret)
+		if (ret != 0)
 			goto out1;
 
 		vm->va = va;

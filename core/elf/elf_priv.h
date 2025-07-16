@@ -7,6 +7,10 @@
 #ifndef _ELF_PRIV_H
 #define _ELF_PRIV_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <list.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -15,7 +19,7 @@
 
 #define ELF_ALIGNED_LOAD_SIZE(l)					\
 ({													\
-	Elf_Addr __align = l->align;					\
+	Elf_Addr __align = (l)->align;					\
 	Elf_Addr __start = (l)->addr & ~(__align - 1);	\
 	Elf_Addr __end = (l)->addr + (l)->size;			\
 	Elf_Addr __bias = __end & (__align - 1);		\
@@ -93,12 +97,28 @@ int elf_verify_header(Elf_Ehdr *hdr);
 /*
  * Get the dynamic symbol run address according to the
  * specified dynamic symbol name.
+ * @scope: the object whose maps list contains all DSOs
  */
-void *elf_dynsym(struct elf_obj *obj, const char *name);
+void *elf_dynsym(struct elf_obj *scope, const char *name);
 
 /*
  * relocate the shared or executable object
+ * @scope: the object whose maps list is used for symbol resolution
  */
-int elf_relocate(struct elf_obj *obj, void *l_addr, void *reloc);
+int elf_relocate(struct elf_obj *obj, struct elf_obj *scope,
+	void *l_addr, void *reloc);
 
+/*
+ * Check if offset falls within the mapped ELF range
+ * kva = kvma_alloc(size) - vbase, valid range: [vbase, vbase + size)
+ */
+static inline int elf_reloc_addr_ok(struct elf_obj *obj, Elf_Addr offset)
+{
+	return offset >= obj->vbase &&
+		(offset - obj->vbase) < obj->size;
+}
+
+#ifdef __cplusplus
+}
+#endif
 #endif

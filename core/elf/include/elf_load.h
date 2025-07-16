@@ -7,6 +7,10 @@
 #ifndef _ELF_LOAD_H
 #define _ELF_LOAD_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <list.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -33,12 +37,14 @@ struct elf_obj {
 	bool is_pie;
 	bool is_app;
 	bool is_dso;
+	bool kva_mapped;
+	bool l_addr_mapped;
 	uint8_t nrloads;
 
 	/*
 	 * Reference counter for the DSO
 	 */
-	int refc;
+	short refc;
 	int dynamic_size;
 	int symnum;
 
@@ -63,6 +69,7 @@ struct elf_obj {
 	 */
 	Elf_Sym *dynsym;
 	char *dynstr;
+	size_t dynstr_size;
 	Elf_Word *hash;
 
 	/*
@@ -106,4 +113,7 @@ struct elf_obj *elf_load(const char *objname);
  */
 void elf_unload(struct elf_obj *obj);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

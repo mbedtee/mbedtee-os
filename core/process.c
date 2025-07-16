@@ -16,22 +16,22 @@
 #include <atomic.h>
 #include <vma.h>
 #include <sbrk.h>
-#include <elf_proc.h>
-#include <string.h>
 #include <file.h>
 #include <trace.h>
 #include <timer.h>
 #include <page.h>
 #include <uaccess.h>
+#include <strmisc.h>
 
 #include <__pthread.h>
 #include <sys/pthread.h>
 #include <ksignal.h>
+#include <elf_proc.h>
 
 SPIN_LOCK(__plock);
 LIST_HEAD(__procs);
 
-static void process_cleanup(struct process *p)
+static void process_cleanup_run(struct process *p)
 {
 	cleanup_func_t func = NULL;
 	unsigned long ptr = 0;
@@ -40,7 +40,7 @@ static void process_cleanup(struct process *p)
 
 	for (ptr = start; ptr < end; ptr += sizeof(ptr)) {
 		func = *(cleanup_func_t *)ptr;
-		if (func != NULL)
+		if (func)
 			func(p);
 	}
 }
@@ -88,10 +88,10 @@ static void process_free_argv(struct process *proc)
 
 	proc->argv = NULL;
 
-	if (m != NULL) {
+	if (m) {
 		pgs = m->pages;
 		uva = m->uva;
-		while (pgs[i] != NULL) {
+		while (pgs[i]) {
 			pages_free_continuous(pgs[i]);
 			unmap(proc->pt, uva + (PAGE_SIZE * i), PAGE_SIZE);
 			i++;
@@ -116,11 +116,11 @@ static int process_alloc_argv(struct process *proc,
 	unsigned long *arglens = NULL;
 	int kmgrsize = 0;
 
-	if (argv == NULL || argv[0] == NULL)
+	if (!argv || !argv[0])
 		argv = _argv;
 
 	dst = pages_alloc_continuous(PG_RW | PG_ZERO, 1);
-	if (dst == NULL)
+	if (!dst)
 		return -ENOMEM;
 
 	/* calc the total strlen of all argv */
@@ -146,13 +146,13 @@ static int process_alloc_argv(struct process *proc,
 	kmgrsize = (kmgrsize + 2) * sizeof(char *);
 
 	m = kzalloc(sizeof(*m) + kmgrsize);
-	if (m == NULL) {
+	if (!m) {
 		pages_free_continuous(dst);
 		return -ENOMEM;
 	}
 
 	uva = vma_alloc(proc->vm, MAX_ARGV_SIZE);
-	if (uva == NULL) {
+	if (!uva) {
 		kfree(m);
 		pages_free_continuous(dst);
 		return -ENOMEM;
@@ -188,8 +188,8 @@ static int process_alloc_argv(struct process *proc,
 			/* next page ? */
 			if ((pos & ~PAGE_MASK) == 0) {
 				dst = pages_alloc_continuous(PG_RW | PG_ZERO, 1);
-				if (dst == NULL) {
-					ret = ENOMEM;
+				if (!dst) {
+					ret = -ENOMEM;
 					goto err;
 				}
 				ret = map(proc->pt, virt_to_phys(dst),
@@ -207,8 +207,9 @@ static int process_alloc_argv(struct process *proc,
 					ret = -EFAULT;
 					goto err;
 				}
-			} else
+			} else {
 				memcpy(dst, arg + off, nrbytes);
+			}
 
 			if (len == orilen)
 				uptr[i] = uva + pos;
@@ -227,86 +228,33 @@ err:
 	return ret;
 }
 
-/*
- * allocate/map the __process struct for __proc_self()
- */
-static int process_alloc_pself(struct process *proc)
+static void process_orphan_children(struct process *proc)
 {
-	int ret = -ENOMEM;
-	void *kva = NULL;
-	void *uva = NULL;
-	struct page *p = NULL;
+	unsigned long flags = 0;
+	struct process *child = NULL, *tmp = NULL;
 
-	BUILD_ERROR_ON(sizeof(struct __process) > PAGE_SIZE);
+	spin_lock_irqsave(&__plock, flags);
 
-	p = page_alloc();
-	if (!p)
-		return -ENOMEM;
-
-	kva = page_address(p);
-
-	uva = vma_alloc(proc->vm, PAGE_SIZE);
-	if (!uva) {
-		ret = -ENOMEM;
-		goto out;
+	list_for_each_entry_safe(child, tmp, &proc->children, sibling) {
+		list_del(&child->sibling);
+		child->parent_id = 0;
 	}
 
-	ret = page_map(p, proc->pt, uva, PG_RW | PG_ZERO);
-	if (ret) {
-		vma_free(proc->vm, uva);
-		goto out;
-	}
-
-	proc->pself_page = p;
-	proc->pself_uva = uva;
-	proc->pself = kva;
-
-	return 0;
-
-out:
-	page_free(p);
-	return ret;
+	spin_unlock_irqrestore(&__plock, flags);
 }
 
-/*
- * unmap/free the __process struct for __proc_self()
- */
-static void process_free_pself(struct process *proc)
-{
-	if (!proc || !proc->pself)
-		return;
-
-	page_unmap(proc->pself_page, proc->pt, proc->pself_uva);
-	vma_free(proc->vm, proc->pself_uva);
-	page_free(proc->pself_page);
-
-	proc->pself = NULL;
-}
-
-/*
- * initialize the kern part of the
- * __process struct for __proc_self()
- */
-static void process_init_pself(struct process *proc)
-{
-	struct __process *pself = proc->pself;
-
-	pself->id = proc->id;
-}
-
-static void process_destroy(struct process *proc)
+static void __process_destroy(struct process *proc)
 {
 	/* set alive to negative */
 	atomic_set(&proc->alive, -(INT_MAX >> 1));
 
 	process_free_argv(proc);
-	process_free_pself(proc);
 
 	sigp_free(proc);
 
 	elf_unload_proc(proc);
 
-	process_cleanup(proc);
+	process_cleanup_run(proc);
 
 	vma_destroy(proc->vm);
 	vma_destroy(proc->vm4ree);
@@ -322,6 +270,13 @@ static void process_destroy(struct process *proc)
 
 	mutex_destroy(&proc->mlock);
 
+	/*
+	 * Before releasing the PID, orphan all children to prevent
+	 * PID-reuse from causing a new process (with same PID) to
+	 * inherit these children.
+	 */
+	process_orphan_children(proc);
+
 	sched_free_id(proc->id);
 	kfree(proc);
 }
@@ -336,7 +291,7 @@ struct process *__process_get(struct process_config *c)
 	unsigned long flags = 0;
 	struct process *proc = NULL, *ret = NULL;
 
-	if ((c == NULL) || (!c->single_instance))
+	if (!c || (!c->single_instance))
 		return NULL;
 
 	spin_lock_irqsave(&__plock, flags);
@@ -349,6 +304,24 @@ struct process *__process_get(struct process_config *c)
 	}
 	spin_unlock_irqrestore(&__plock, flags);
 	return ret;
+}
+
+/*
+ * Find process by ID without acquiring __plock (caller must hold it).
+ * Does NOT increment reference counter.
+ */
+static struct process *process_get_locked(pid_t id)
+{
+	struct process *proc = NULL;
+
+	if (id <= 0)
+		return NULL;
+
+	list_for_each_entry(proc, &__procs, node) {
+		if (proc->id == id)
+			return proc;
+	}
+	return NULL;
 }
 
 /*
@@ -395,40 +368,82 @@ void process_put(struct process *proc)
 {
 	unsigned long flags = 0;
 
-	if (proc == NULL)
+	if (!proc)
 		return;
 
 	spin_lock_irqsave(&__plock, flags);
 	assert(proc->refc > 0);
 	if (--proc->refc == 0) {
 		list_del(&proc->node);
+		/* Remove from parent's children list if still linked */
+		list_del(&proc->sibling);
 		spin_unlock_irqrestore(&__plock, flags);
-		process_destroy(proc);
+		__process_destroy(proc);
 	} else {
 		spin_unlock_irqrestore(&__plock, flags);
 	}
 }
 
 /*
- * Add to global list
+ * Cleanup a just created process. (which never run)
+ */
+void process_destroy(struct process *proc)
+{
+	struct thread *t = thread_get(proc->id);
+
+	if (t) {
+		thread_put(t);
+		pthread_destroy(t);
+	}
+	assert(proc->refc == 1);
+	process_put(proc);
+}
+
+/*
+ * Add to global list and link to parent's children list
  */
 static inline void process_add(struct process *proc)
 {
 	unsigned long flags = 0;
+	struct process *parent = NULL;
 
 	spin_lock_irqsave(&__plock, flags);
 	list_add_tail(&proc->node, &__procs);
+	/* Link to parent's children list */
+	if (proc->parent_id > 0) {
+		parent = process_get_locked(proc->parent_id);
+		if (parent)
+			list_add_tail(&proc->sibling, &parent->children);
+	}
 	spin_unlock_irqrestore(&__plock, flags);
 }
 
-static int __process_create(const TEE_UUID *uuid, char * const *argv)
+static int process_ipc_security_check(struct process_config *c)
+{
+	struct process *proc = current->proc;
+
+	if (proc->c->privilege)
+		return 0;
+
+	/*
+	 * check if current process has permission
+	 * to access the target process
+	 */
+	if (!strstr_token(proc->c->ipc_acl, c->name, ',')) {
+		EMSG("ipc_acl: %s target: %s\n", proc->c->ipc_acl, c->name);
+		return -EACCES;
+	}
+
+	return 0;
+}
+
+int __process_create(struct process_config *c, char * const *argv)
 {
 	int ret = -1, id = -1;
 	struct process *proc = NULL;
-	struct process_config *c = process_config_of(uuid);
 	DECLARE_DETACHED_PTHREAD_ATTR(attr);
 
-	if (c == NULL)
+	if (!c)
 		return -ENOENT;
 
 	/* memory check */
@@ -442,60 +457,63 @@ static int __process_create(const TEE_UUID *uuid, char * const *argv)
 		return -EEXIST;
 	}
 
+	if (process_ipc_security_check(c) != 0)
+		return -EACCES;
+
 	proc = kzalloc(sizeof(struct process));
-	if (proc == NULL)
+	if (!proc)
 		return -ENOMEM;
 
 	proc->c = c;
 	INIT_LIST_HEAD(&proc->threads);
 	INIT_LIST_HEAD(&proc->mmaps);
 	INIT_LIST_HEAD(&proc->utimers);
+	INIT_LIST_HEAD(&proc->children);
+	INIT_LIST_HEAD(&proc->sibling);
 	waitqueue_init(&proc->wq);
 	spin_lock_init(&proc->slock);
 	mutex_init(&proc->mlock);
 
 	proc->refc = 1;
 	proc->parent_id = current->proc->id;
+	atomic_set(&proc->wait_state, 0);
+	proc->exit_code = 0;
 
-#ifdef CONFIG_ASLR
+#if defined(CONFIG_ASLR)
 	prng(&proc->aslr, sizeof(proc->aslr));
 	proc->aslr = rounddown(proc->aslr % USER_ASLR_SIZE, PAGE_SIZE);
 #endif
 
 	ret = sigp_init(proc);
-	if (ret)
+	if (ret != 0)
 		goto out;
 
 	ret = sbrk_init(proc);
-	if (ret)
+	if (ret != 0)
 		goto out;
 
 	/*
 	 * allocate the page table (translation table base)
 	 */
 	ret = alloc_pt(proc);
-	if (ret)
+	if (ret != 0)
 		goto out;
 
-#ifdef CONFIG_REE
-	proc->vm4ree = vma_create(USER_VM4REE_VA(proc), USER_VM4REE_SIZE, PAGE_SIZE);
-	if (proc->vm4ree == NULL) {
-		ret = -ENOMEM;
-		goto out;
+	if (IS_ENABLED(CONFIG_REE)) {
+		proc->vm4ree = vma_create(USER_VM4REE_VA(proc), USER_VM4REE_SIZE, PAGE_SIZE);
+		if (!proc->vm4ree) {
+			ret = -ENOMEM;
+			goto out;
+		}
 	}
-#endif
 	proc->vm = vma_create(USER_VM4TEE_VA(proc), USER_VM4TEE_SIZE, PAGE_SIZE);
-	if (proc->vm == NULL) {
+	if (!proc->vm) {
 		ret = -ENOMEM;
 		goto out;
 	}
-
-	ret = process_alloc_pself(proc);
-	if (ret)
-		goto out;
 
 	ret = process_alloc_argv(proc, argv);
-	if (ret)
+	if (ret != 0)
 		goto out;
 
 	/*
@@ -504,7 +522,7 @@ static int __process_create(const TEE_UUID *uuid, char * const *argv)
 	 * 3. map the libc/process's elf to Process(TA) userspace
 	 */
 	ret = elf_load_proc(proc);
-	if (ret) {
+	if (ret != 0) {
 		EMSG("load %s - %s failed %d\n", proc->c->name,
 			proc->c->path, ret);
 		goto out;
@@ -515,7 +533,6 @@ static int __process_create(const TEE_UUID *uuid, char * const *argv)
 	id = pthread_kcreate(proc, &attr,
 		(thread_func_t)proc->main_func, proc->argv->uva);
 	if (id > 0) {
-		process_init_pself(proc);
 		process_add(proc);
 		return id;
 	}
@@ -523,20 +540,20 @@ static int __process_create(const TEE_UUID *uuid, char * const *argv)
 	ret = id;
 
 out:
-	process_destroy(proc);
+	__process_destroy(proc);
 	return ret;
 }
 
-int process_create(const TEE_UUID *uuid)
+int process_create(const char *name, char * const *argv)
 {
-	return __process_create(uuid, NULL);
+	return __process_create(process_config_of(name), argv);
 }
 
 int process_run(const char *name, char * const *argv)
 {
 	pid_t id = -1;
 
-	id = __process_create(process_uuid_of(name), argv);
+	id = __process_create(process_config_of(name), argv);
 
 	if (id > 0)
 		sched_ready(id);

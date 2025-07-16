@@ -18,30 +18,14 @@
 
 static void kthread_entry(thread_func_t func, void *data)
 {
+	long ret = 0;
+
 	if (func) {
-		func(data);
-		sched_kexit();
+		ret = func(data);
+		wakeup_notify(&current->join_q, ret);
 	}
-}
 
-static void kthread_cleanup_mutexes(struct thread *t)
-{
-	struct mutex *m = NULL, *n = NULL;
-
-	list_for_each_entry_safe(m, n, &t->mutexs, node) {
-		mutex_unlock(m);
-	}
-}
-
-static void kthread_cleanup_wqnodes(struct thread *t)
-{
-	struct waitqueue_node *n = NULL, *_n = NULL;
-
-	list_for_each_entry_safe(n, _n, &t->wqnodes, tnode) {
-		IMSG("%s waiting @ %s() line %d p=%p\n",
-			t->name, n->fnname, n->linenr, n->priv);
-		waitqueue_node_del(n);
-	}
+	sched_kexit();
 }
 
 /*
@@ -53,8 +37,7 @@ static void kthread_destroy(struct work *w)
 		struct thread *t = container_of(w,
 				struct thread, destroy);
 
-		kthread_cleanup_mutexes(t);
-		kthread_cleanup_wqnodes(t);
+		thread_cleanup_run(t);
 
 		wakeup(&t->join_q);
 
@@ -88,7 +71,7 @@ int __kthread_create(thread_func_t func, void *data,
 		return -EINVAL;
 
 	t = thread_alloc(stack_s);
-	if (t == NULL)
+	if (!t)
 		return -ENOMEM;
 
 	va_start(args, namefmt);
@@ -98,6 +81,7 @@ int __kthread_create(thread_func_t func, void *data,
 	t->proc = kproc();
 	INIT_LIST_HEAD(&t->mutexs);
 	INIT_LIST_HEAD(&t->wqnodes);
+	INIT_LIST_HEAD(&t->polls);
 	waitqueue_init(&t->wait_q);
 	waitqueue_init(&t->join_q);
 	mutex_init(&t->mlock);
@@ -109,17 +93,18 @@ int __kthread_create(thread_func_t func, void *data,
 	 */
 	ret = sched_install(t, SCHED_OTHER,
 				SCHED_PRIO_DEFAULT);
-	if (ret)
+	if (ret != 0)
 		goto out;
 
 	snprintf(t->name, sizeof(t->name), "%s@%04d",
 			name, t->id);
 
-	sched_entry_init(t->id,
+	ret = sched_entry_init(t->id,
 		kthread_entry, func, data);
 
 out:
 	if (ret != 0) {
+		sched_uninstall(t->sched);
 		thread_free(t);
 		return ret;
 	}

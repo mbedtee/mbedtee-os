@@ -49,7 +49,8 @@ int elf_verify_header(Elf64_Ehdr *hdr)
  * kva is process's own mapping of the obj LOAD which
  * contains .got, .got.plt and .data.rel.ro
  */
-int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
+int elf_relocate(struct elf_obj *obj, struct elf_obj *scope,
+	void *l_addr, void *kva)
 {
 	Elf64_Ehdr *hdr = obj->hdr;
 	const Elf64_Shdr *shdr = obj->shdr;
@@ -75,18 +76,22 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 			for (rela = relatab; rela < relatab + relnr; rela++) {
 				symndx = ELF64_R_SYM(rela->r_info);
 				symtyp = ELF64_R_TYPE(rela->r_info);
+				if (symndx >= obj->symnum)
+					return -EINVAL;
 				sym = &dynsym[symndx];
 
 				reloc_addr = kva + rela->r_offset;
+				if (!elf_reloc_addr_ok(obj, rela->r_offset))
+					return -EINVAL;
 				switch (symtyp) {
 				case R_AARCH64_RELATIVE:
-					*reloc_addr += (Elf64_Addr)l_addr;
+					*reloc_addr = l_addr + rela->r_addend;
 					break;
 				case R_AARCH64_GLOB_DAT:
 				case R_AARCH64_JUMP_SLOT:
 					if ((sym->st_shndx == SHN_UNDEF) ||
 						(sym->st_shndx >= hdr->e_shnum))
-						*reloc_addr = elf_dynsym(obj,
+						*reloc_addr = elf_dynsym(scope,
 								obj->dynstr + sym->st_name);
 					else
 						*reloc_addr = l_addr + sym->st_value;
@@ -101,6 +106,9 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 					break;
 				case R_AARCH64_COPY:
 					LMSG("R_AARCH64_COPY %lx\n", sym->st_size);
+					if (!elf_reloc_addr_ok(obj, sym->st_value) ||
+						sym->st_size > obj->size)
+						return -EINVAL;
 					memcpy(reloc_addr, obj->kva + sym->st_value, sym->st_size);
 					break;
 				default:
@@ -131,7 +139,7 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 				case R_AARCH64_JUMP_SLOT:
 					if ((sym->st_shndx == SHN_UNDEF) ||
 						(sym->st_shndx >= hdr->e_shnum))
-						*reloc_addr = elf_dynsym(obj,
+						*reloc_addr = elf_dynsym(scope,
 								obj->dynstr + sym->st_name);
 					else
 						*reloc_addr = l_addr + sym->st_value;

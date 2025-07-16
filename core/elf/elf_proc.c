@@ -10,7 +10,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <errno.h>
 #include <stddef.h>
 #include <trace.h>
 #include <vma.h>
@@ -73,6 +72,8 @@ struct elf_map {
 	 * after finish these two steps, kva will be unmapped/freed.
 	 */
 	void *kva;
+	bool kva_mapped;
+	bool l_addr_mapped;
 
 	/*
 	 * mapping structure of each DSO LOAD
@@ -108,7 +109,7 @@ static void *elf_sym(struct elf_obj *obj, const char *name)
 				(sym->st_shndx == SHN_UNDEF))
 				continue;
 
-			if (strncmp(obj->strtab + sym->st_name, name, 255) == 0)
+			if (strcmp(obj->strtab + sym->st_name, name) == 0)
 				return obj->l_addr + sym->st_value;
 		}
 		LMSG("%s not found in %s\n", name, obj->name);
@@ -121,9 +122,10 @@ static void *elf_sym(struct elf_obj *obj, const char *name)
  * Get the dynamic symbol run address according to the
  * specified dynamic symbol name.
  */
-void *elf_dynsym(struct elf_obj *obj, const char *name)
+void *elf_dynsym(struct elf_obj *scope, const char *name)
 {
 	Elf_Word symidx = 0;
+	Elf_Word nchain = 0;
 	Elf_Word nbucket = 0;
 	Elf_Word *bucket = NULL;
 	Elf_Word *chain = NULL;
@@ -133,24 +135,27 @@ void *elf_dynsym(struct elf_obj *obj, const char *name)
 	struct elf_map *m = NULL;
 	Elf_Word hash = elf_hash(name);
 
-	list_for_each_entry(m, &obj->maps, node) {
+	list_for_each_entry(m, &scope->maps, node) {
 		ref_obj = m->obj;
 		nbucket = *ref_obj->hash;
+		nchain = *(ref_obj->hash + 1);
 		bucket = ref_obj->hash + 2;
 		chain = &bucket[nbucket];
 		ref_symtab = ref_obj->dynsym;
 
 		symidx = bucket[hash % nbucket];
 
-		do {
+		while (symidx != 0 && symidx < nchain) {
 			ref_sym = &ref_symtab[symidx];
 
-			if (ref_sym->st_shndx == SHN_UNDEF)
-				continue;
-
-			if (strcmp(ref_obj->dynstr + ref_sym->st_name, name) == 0)
+			if (ref_sym->st_shndx != SHN_UNDEF &&
+				ref_sym->st_name < ref_obj->dynstr_size &&
+				strcmp(ref_obj->dynstr + ref_sym->st_name,
+					name) == 0)
 				return m->l_addr + ref_sym->st_value;
-		} while ((symidx = chain[symidx]) != 0);
+
+			symidx = chain[symidx];
+		}
 	}
 
 	EMSG("%s not found\n", name);
@@ -164,12 +169,12 @@ void *elf_dynsym(struct elf_obj *obj, const char *name)
 static void elf_dynamic_symbols(struct process *proc)
 {
 	struct elf_obj *obj = proc->obj;
-	struct process_wrapper *wrapper = &proc->pself->wrapper;
+	struct process_wrapper *wrapper = &proc->wrapper;
 
 	wrapper->proc_entry = elf_dynsym(obj, "process_entry");
 	wrapper->pthread_entry = elf_dynsym(obj, "pthread_entry");
 	wrapper->signal_entry = elf_dynsym(obj, "signal_entry");
-	wrapper->backtrace = elf_dynsym(obj, "backtrace");
+	wrapper->backtrace = elf_dynsym(obj, "backtrace_exit");
 	wrapper->open = elf_dynsym(obj, "pthread_session_open");
 	wrapper->invoke = elf_dynsym(obj, "pthread_session_invoke");
 	wrapper->close = elf_dynsym(obj, "pthread_session_close");
@@ -182,14 +187,14 @@ static void elf_dynamic_symbols(struct process *proc)
 static int elf_local_symbols(struct process *proc)
 {
 	struct elf_obj *obj = proc->obj;
-	struct process_gp *gp = &proc->pself->gp;
+	struct process_gp *gp = &proc->gp;
 	void *entry = NULL;
 
 	/*
 	 * found the main()
 	 */
 	entry = elf_sym(obj, "main");
-	if (entry != NULL) {
+	if (entry) {
 		proc->main_func = entry;
 		return 0;
 	}
@@ -213,21 +218,30 @@ static int elf_proc_entry(struct process *proc)
 	return elf_local_symbols(proc);
 }
 
+/*
+ * Relocate all DSOs and the main executable.
+ *
+ * Each DSO may reference symbols from other DSOs (e.g. libc),
+ * so pass the main app's obj as the symbol search scope -
+ * its maps list contains all mapped dependencies.
+ */
 static int elf_proc_relocate(struct elf_obj *obj)
 {
 	int ret = -1;
 	struct elf_map *m = NULL;
 
+	/* relocate each DSO, using the app's maps as scope */
 	list_for_each_entry(m, &obj->maps, node) {
-		ret = elf_relocate(m->obj, m->l_addr, m->kva);
+		ret = elf_relocate(m->obj, obj, m->l_addr, m->kva);
 		if (ret != 0)
 			return ret;
 	}
 
-	return elf_relocate(obj, obj->l_addr, obj->kva);
+	/* relocate the main executable itself */
+	return elf_relocate(obj, obj, obj->l_addr, obj->kva);
 }
 
-#ifdef CONFIG_USER_BACKTRACE
+#if defined(CONFIG_USER_BACKTRACE)
 /*
  * aarch64, riscv and mips use the .eh_frame for unwinding
  * arm uses the .ARM.exidx and .ARM.extab for unwinding
@@ -249,20 +263,20 @@ static void *elf_get_unwind_info(struct elf_obj *obj,
 		}
 	}
 
-	return 0;
+	return NULL;
 }
 
 static void elf_proc_unwind_info(struct process *proc,
 	void *tab, int tabsz, void *l_addr, int l_size)
 {
 	int i = 0, nrtabs = 0;
-	struct __process *pself = proc->pself;
+	struct unwind_info *unwind = &proc->unwind;
 
 	tab += (unsigned long)l_addr;
 
-	nrtabs = min(pself->unwind.nrtabs, MAX_UNWIND_TABLES);
+	nrtabs = min(unwind->nrtabs, MAX_UNWIND_TABLES);
 	for (i = 0; i < nrtabs; i++) {
-		if (tab == pself->unwind.tabs[i])
+		if (tab == unwind->tabs[i])
 			break;
 	}
 
@@ -271,13 +285,13 @@ static void elf_proc_unwind_info(struct process *proc,
 
 	if (nrtabs == MAX_UNWIND_TABLES)
 		return;
-	pself->unwind.tabs[nrtabs] = tab;
-	pself->unwind.tabsize[nrtabs] = tabsz;
+	unwind->tabs[nrtabs] = tab;
+	unwind->tabsize[nrtabs] = tabsz;
 
-	pself->unwind.l_addr[nrtabs] = l_addr;
-	pself->unwind.l_size[nrtabs] = l_size;
+	unwind->l_addr[nrtabs] = l_addr;
+	unwind->l_size[nrtabs] = l_size;
 
-	pself->unwind.nrtabs = nrtabs + 1;
+	unwind->nrtabs = nrtabs + 1;
 }
 
 static char *__elf_funcname(struct elf_obj *obj,
@@ -326,7 +340,7 @@ static char *__elf_funcname(struct elf_obj *obj,
  */
 static void elf_proc_unwinding(struct process *proc)
 {
-#ifdef CONFIG_USER_BACKTRACE
+#if defined(CONFIG_USER_BACKTRACE)
 	struct elf_obj *dso = NULL;
 	struct elf_obj *obj = proc->obj;
 	struct elf_map *m = NULL;
@@ -342,7 +356,7 @@ static void elf_proc_unwinding(struct process *proc)
 			elf_proc_unwind_info(proc, tab, sh_size, m->l_addr, dso->size);
 
 			LMSG("unwinding-tabs[%d]@%s %p\n",
-				proc->pself->unwind.nrtabs, dso->name, tab);
+				proc->unwind.nrtabs, dso->name, tab);
 		}
 
 		tab = NULL;
@@ -353,7 +367,7 @@ static void elf_proc_unwinding(struct process *proc)
 		elf_proc_unwind_info(proc, tab, sh_size, obj->l_addr, obj->size);
 
 		LMSG("unwinding-tabs[%d]@%s %p\n",
-			proc->pself->unwind.nrtabs, obj->name, tab);
+			proc->unwind.nrtabs, obj->name, tab);
 	}
 #endif
 }
@@ -370,7 +384,7 @@ static void elf_proc_unwinding(struct process *proc)
 static char *elf_funcname(struct elf_obj *obj,
 	unsigned long runaddr, unsigned long *offset)
 {
-#ifdef CONFIG_USER_BACKTRACE
+#if defined(CONFIG_USER_BACKTRACE)
 	char *funcname = NULL;
 	struct elf_obj *dso = NULL;
 	struct elf_map *m = NULL;
@@ -402,7 +416,7 @@ void elf_unload_proc(struct process *proc)
 	struct elf_map *m = NULL, *n = NULL;
 
 	obj = proc->obj;
-	if (obj == NULL)
+	if (!obj)
 		return;
 
 	proc->obj = NULL;
@@ -429,10 +443,9 @@ void elf_unload_proc(struct process *proc)
 			}
 		}
 
-		if (m->l_addr)
+		if (m->l_addr_mapped)
 			vma_free(proc->vm, m->l_addr + dso->vbase);
-
-		if (m->kva)
+		if (m->kva_mapped)
 			kvma_free(m->kva + dso->vbase);
 
 		list_del(&m->node);
@@ -448,7 +461,7 @@ void elf_unload_proc(struct process *proc)
 				rounddown(load->addr, load->align), load->nr_pages);
 	}
 
-	if (obj->l_addr)
+	if (obj->l_addr_mapped)
 		vma_free(proc->vm, obj->l_addr + obj->vbase);
 
 	elf_unload(obj);
@@ -462,6 +475,7 @@ static int elf_map_dependances(struct process *proc, struct elf_obj *obj)
 	struct elf_loadmap *lm = NULL;
 	struct elf_obj *dst = NULL;
 	Elf_Addr offset = 0;
+	bool found = false;
 	int ret = -ENOMEM;
 
 	/*
@@ -476,15 +490,24 @@ static int elf_map_dependances(struct process *proc, struct elf_obj *obj)
 		if (ret != 0)
 			goto out;
 
+		/*
+		 * in case of multi-needs,
+		 * handle the unmapped needs 1 by 1
+		 */
+		found = false;
 		list_for_each_entry(m, &proc->obj->maps, node) {
-			if (dst == m->obj)
-				goto out;
+			if (dst == m->obj) {
+				found = true;
+				break;
+			}
 		}
+		if (found)
+			continue;
 
 		ret = -ENOMEM;
 		m = kzalloc(sizeof(struct elf_map) +
 				(sizeof(struct elf_loadmap) * dst->nrloads));
-		if (m == NULL)
+		if (!m)
 			goto out;
 
 		m->obj = dst;
@@ -494,14 +517,14 @@ static int elf_map_dependances(struct process *proc, struct elf_obj *obj)
 		m->l_addr = vma_alloc(proc->vm, dst->size);
 		if (!m->l_addr)
 			goto out;
-
 		m->l_addr -= dst->vbase;
+		m->l_addr_mapped = true;
 
 		m->kva = kvma_alloc(dst->size);
 		if (!m->kva)
 			goto out;
-
 		m->kva -= dst->vbase;
+		m->kva_mapped = true;
 
 		lm = m->loadm;
 
@@ -519,7 +542,7 @@ static int elf_map_dependances(struct process *proc, struct elf_obj *obj)
 			lm->nr_pages = load->nr_pages;
 			if (lm->is_rwmap) {
 				lm->pages = pages_sc_alloc(load->nr_pages);
-				if (lm->pages == NULL)
+				if (!lm->pages)
 					goto out;
 
 				ret = pages_sc_map(lm->pages, kpt(), m->kva + offset,
@@ -567,6 +590,7 @@ static int elf_map_application(struct process *proc, struct elf_obj *obj)
 		l_addr = vma_alloc(proc->vm, obj->size);
 		if (!l_addr)
 			goto out;
+		obj->l_addr_mapped = true;
 		l_addr -= obj->vbase;
 	}
 
@@ -617,8 +641,11 @@ static void elf_free_unused(struct elf_obj *obj)
 					rounddown(load->addr, load->align), load->nr_pages);
 			}
 		}
-		kvma_free(obj->kva + obj->vbase);
-		obj->kva = NULL;
+		if (obj->kva_mapped) {
+			kvma_free(obj->kva + obj->vbase);
+			obj->kva_mapped = false;
+			obj->kva = NULL;
+		}
 	}
 
 	list_for_each_entry(m, &obj->maps, node) {
@@ -630,8 +657,11 @@ static void elf_free_unused(struct elf_obj *obj)
 					rounddown(lm->addr, lm->align), lm->nr_pages);
 			}
 		}
-		kvma_free(m->kva + m->obj->vbase);
-		m->kva = NULL;
+		if (m->kva_mapped) {
+			kvma_free(m->kva + m->obj->vbase);
+			m->kva_mapped = false;
+			m->kva = NULL;
+		}
 	}
 }
 
@@ -699,7 +729,7 @@ const char *elf_proc_funcname(struct process *proc,
 	if (!user_addr(runaddr))
 		return ksymname_of(runaddr, offset);
 
-	if (proc == NULL)
+	if (!proc || !proc->obj)
 		return NULL;
 
 	return elf_funcname(proc->obj, runaddr, offset);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * RISCV32/RISCV64 Arch-Specific ELF operations
  * symbol relocation, header verification etc.
  */
@@ -63,7 +63,8 @@ int elf_verify_header(Elf_Ehdr *hdr)
  * kva is process's own mapping of the obj LOAD which
  * contains .got, .got.plt and .data.rel.ro
  */
-int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
+int elf_relocate(struct elf_obj *obj, struct elf_obj *scope,
+	void *l_addr, void *kva)
 {
 	const Elf_Shdr *sh = NULL;
 	size_t relnr = 0;
@@ -82,7 +83,7 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 			Elf_Rela *rela = NULL;
 			Elf_Rela *relatab = NULL;
 
-			relatab = obj->kva + sh->sh_offset;
+			relatab = obj->kva + sh->sh_addr;
 			relnr = sh->sh_size / sizeof(Elf_Rela);
 
 			LMSG("%s %p relnr=%ld @ %s\n", obj->name, l_addr, (long)relnr,
@@ -91,9 +92,16 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 			for (rela = relatab; rela < relatab + relnr; rela++) {
 				symndx = ELF_R_SYM(rela->r_info);
 				symtyp = ELF_R_TYPE(rela->r_info);
+				if (symndx >= obj->symnum)
+					return -EINVAL;
 				sym = &dynsym[symndx];
 
+				if (symtyp == R_RISCV_NONE)
+					continue;
+
 				reloc_addr = kva + rela->r_offset;
+				if (!elf_reloc_addr_ok(obj, rela->r_offset))
+					return -EINVAL;
 
 				switch (symtyp) {
 				case R_RISCV_RELATIVE:
@@ -104,16 +112,18 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 				case R_RISCV_JUMP_SLOT:
 					if ((sym->st_shndx == SHN_UNDEF) ||
 						(sym->st_shndx >= hdr->e_shnum))
-						*reloc_addr = elf_dynsym(obj,
+						*reloc_addr = elf_dynsym(scope,
 								obj->dynstr + sym->st_name) + rela->r_addend;
 					else
 						*reloc_addr = l_addr + sym->st_value + rela->r_addend;
 					break;
 				case R_RISCV_COPY:
+					if (!elf_reloc_addr_ok(obj, sym->st_value) ||
+						sym->st_value + rela->r_addend < sym->st_value ||
+						sym->st_value + rela->r_addend + sym->st_size > obj->vbase + obj->size)
+						return -EINVAL;
 					memcpy(reloc_addr, obj->kva + sym->st_value
 						+ rela->r_addend, sym->st_size);
-					break;
-				case R_RISCV_NONE:
 					break;
 				default:
 					EMSG("undefined symbol type %d\n", symtyp);

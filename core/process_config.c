@@ -5,6 +5,7 @@
  */
 
 #include <string.h>
+#include <stdbool.h>
 #include <percpu.h>
 #include <sched.h>
 #include <mem.h>
@@ -20,10 +21,13 @@
 
 #include <property.h>
 
+/* default public devices permitted for all TAs */
+#define DEV_PUB_ACL "/dev/null,/dev/urandom,/dev/uart0"
+
 static LIST_HEAD(pconfigs);
 static DECLARE_MUTEX(pconf_mtx);
 
-struct process_config *process_config_of(const TEE_UUID *uuid)
+struct process_config *process_config_of_uuid(const TEE_UUID *uuid)
 {
 	struct process_config *c = NULL, *ret = NULL;
 
@@ -43,18 +47,27 @@ struct process_config *process_config_of(const TEE_UUID *uuid)
 	return ret;
 }
 
-const TEE_UUID *process_uuid_of(const char *name)
+struct process_config *process_config_of(const char *name)
 {
-	TEE_UUID *ret = NULL;
+	struct process_config *ret = NULL;
 	struct process_config *c = NULL;
+	bool is_path = false;
 
 	if (!name)
 		return NULL;
 
+	is_path = !!strchr(name, '/');
+
 	mutex_lock(&pconf_mtx);
 	list_for_each_entry(c, &pconfigs, node) {
-		if (strcmp(name, c->name) == 0) {
-			ret = &c->uuid;
+		if (strcmp(name, is_path ? c->path : c->name) == 0) {
+			ret = c;
+			break;
+		}
+
+		/* Backward-compatibility: match by name even if caller passed a path-like string. */
+		if (is_path && strcmp(name, c->name) == 0) {
+			ret = c;
 			break;
 		}
 	}
@@ -86,11 +99,23 @@ void process_handle_fs(const char *mnt)
 static char *strstr_of(char *buf, const char *e)
 {
 	char *pos = NULL;
+	size_t elen = 0;
 
-	if ((!buf) || (!e))
+	if (!buf || !e)
 		return NULL;
 
-	pos = strstr(buf, e);
+	elen = strlen(e);
+	pos = buf;
+	while ((pos = strstr(pos, e)) != NULL) {
+		/* check if it is a whole word match */
+		if ((pos == buf || pos[-1] == ' ' || pos[-1] == '\t' ||
+			pos[-1] == '\n' || pos[-1] == '\r') &&
+			(pos[elen] == '=' || pos[elen] == ' ' || pos[elen] == '\t')) {
+			break;
+		}
+		pos++;
+	}
+
 	if (!pos)
 		return NULL;
 
@@ -99,25 +124,41 @@ static char *strstr_of(char *buf, const char *e)
 		return NULL;
 
 	pos++;
-	while ((*pos != '\"')) {
-		if (*pos == '=')
-			return NULL;
+	/* skip whitespace after '=' */
+	while (*pos == ' ' || *pos == '\t')
 		pos++;
-	}
 
-	pos++;
-	return pos;
+	if (*pos == '"') {
+		/* key="value" format */
+		pos++;
+		return pos;
+	} else {
+		/* key=value format */
+		return pos;
+	}
 }
 
 static int strlen_of(char *buf, const char *e, const char *eoc)
 {
 	char *pos = NULL;
 	int len = 0;
+	size_t elen = 0;
 
-	if ((!buf) || (!e))
+	if (!buf || !e)
 		return 0;
 
-	pos = strstr(buf, e);
+	elen = strlen(e);
+	pos = buf;
+	while ((pos = strstr(pos, e)) != NULL) {
+		/* check if it is a whole word match */
+		if ((pos == buf || pos[-1] == ' ' || pos[-1] == '\t' ||
+			pos[-1] == '\n' || pos[-1] == '\r') &&
+			(pos[elen] == '=' || pos[elen] == ' ' || pos[elen] == '\t')) {
+			break;
+		}
+		pos++;
+	}
+
 	if (!pos)
 		return 0;
 
@@ -126,20 +167,33 @@ static int strlen_of(char *buf, const char *e, const char *eoc)
 		return 0;
 
 	pos++;
-	while ((pos < eoc) && (*pos != '\"')) {
-		if (*pos == '=')
-			return 0;
+	/* skip whitespace after '=' */
+	while ((pos < eoc) && (*pos == ' ' || *pos == '\t'))
 		pos++;
-	}
 
-	pos++;
-	while ((pos + len < eoc) && (*(pos + len) != '\"')) {
-		if (*(pos + len) == '=')
-			return 0;
-		len++;
+	if (pos < eoc && *pos == '"') {
+		/* key="value" format */
+		pos++;
+		while ((pos + len < eoc) && (*(pos + len) != '"')) {
+			if (*(pos + len) == '=')
+				return 0;
+			len++;
+		}
+		return len;
+	} else {
+		/* key=value format */
+		while ((pos + len < eoc) && (*(pos + len) != '\n') && (*(pos + len) != '\r')) {
+			if (*(pos + len) == ';')
+				break;
+			if (*(pos + len) == '=')
+				return 0;
+			len++;
+		}
+		/* trim trailing whitespace */
+		while (len > 0 && (pos[len-1] == ' ' || pos[len-1] == '\t'))
+			len--;
+		return len;
 	}
-
-	return len;
 }
 
 static char *strncpy_config(char *dest, const char *src, size_t n)
@@ -161,6 +215,7 @@ static char *strncpy_config(char *dest, const char *src, size_t n)
 			}
 			d++;
 		} while (--n != 0);
+		*d = 0;
 	}
 	return dest;
 }
@@ -172,7 +227,10 @@ static int uuid2val(const char *c, size_t size, TEE_UUID *uuid)
 	char *c_bak = NULL;
 	short clock_seq_hilow = 0;
 	char *split_c = "-";
-	char tmp[64];
+	char tmp[65];
+
+	if (size >= sizeof(tmp))
+		return false;
 
 	memset(tmp, 0, sizeof(tmp));
 	memcpy(tmp, c, size);
@@ -208,13 +266,13 @@ static int uuid2val(const char *c, size_t size, TEE_UUID *uuid)
 		i++;
 	}
 
-	if (!uuid->timeLow || !uuid->timeMid || !clock_seq_hilow)
+	if (uuid->timeLow == 0 || uuid->timeMid == 0 || clock_seq_hilow == 0)
 		goto out;
 
 	ret = true;
 
 out:
-	if (ret == false)
+	if (!ret)
 		EMSG("invalid uuid %s\n", tmp);
 	return ret;
 }
@@ -236,27 +294,27 @@ static int process_config_validate(char *c, int size, TEE_UUID *uuid)
 	int ret = false;
 	const char *eoc = c + size;
 
-	if (!get_uuid_from_config(c, size, uuid))
+	if (get_uuid_from_config(c, size, uuid) == 0)
 		goto out;
 
 	/* Must have 'name' */
-	if (!strlen_of(c, "name", eoc)) {
+	if (strlen_of(c, "name", eoc) == 0) {
 		EMSG("invalid name\n");
 		goto out;
 	}
 
 	/* TA must have 'path' */
-	if (!strlen_of(c, "path", eoc)) {
+	if (strlen_of(c, "path", eoc) == 0) {
 		EMSG("invalid path info\n");
 		goto out;
 	}
 
-	if (!strlen_of(c, "stack_size", eoc)) {
+	if (strlen_of(c, "stack_size", eoc) == 0) {
 		EMSG("invalid stack_size\n");
 		goto out;
 	}
 
-	if (!strlen_of(c, "heap_size", eoc)) {
+	if (strlen_of(c, "heap_size", eoc) == 0) {
 		EMSG("invalid heap_size\n");
 		goto out;
 	}
@@ -293,7 +351,7 @@ static int process_duplicated(const char *name, TEE_UUID *uuid)
 
 	mutex_unlock(&pconf_mtx);
 
-	return (ret != NULL);
+	return !!ret;
 }
 
 static const char *propnames_ta[PROP_NR_TA] = {
@@ -323,23 +381,34 @@ static int get_additional_ta_property(struct process_config *c,
 	uint64_t data64 = 0;
 	TEE_Identity id;
 
-	if (!c->additionalprops || !c->nr_additionalprops)
+	if (!c->additionalprops || c->nr_additionalprops == 0)
 		return -ENOENT;
 
 	str = strstr(c->additionalprops, name);
-	if (str == NULL)
+	if (!str)
 		return -ENOENT;
 
-	while (*str++ != ':')
-		;
+	while (*str != ':' && *str != 0)
+		str++;
+	if (*str == 0)
+		return -ENOENT;
+	str++;
 
-	while ((chr = *str++) != ':')
-		type[i++] = chr;
+	while ((chr = *str++) != ':') {
+		if (chr == 0)
+			return -ENOENT;
+		if (i < sizeof(type) - 1)
+			type[i++] = chr;
+	}
 	type[i] = 0;
 
 	i = 0;
-	while ((chr = *str++) != '>')
-		val[i++] = chr;
+	while ((chr = *str++) != '>') {
+		if (chr == 0)
+			return -ENOENT;
+		if (i < sizeof(val) - 1)
+			val[i++] = chr;
+	}
 	val[i] = 0;
 	vallen = i;
 
@@ -362,7 +431,7 @@ static int get_additional_ta_property(struct process_config *c,
 		strlcpy(p->data, val, PROP_SIZE_MAX);
 	} else if (strcmp(type, "identity") == 0) {
 		i = 0;
-		while (val[i] != ':')
+		while (i < vallen && val[i] != ':')
 			i++;
 
 		if (i < vallen) {
@@ -463,8 +532,9 @@ int process_get_property(struct process_config *c,
 			p->type = PROP_TYPE_IDENTITY;
 			strlcpy(p->name, GPD_CLIENT_IDENTITY, PROP_SIZE_MAX);
 			memcpy(p->data, &id, sizeof(TEE_Identity));
-		} else
+		} else {
 			return -ENOENT;
+		}
 	}
 
 	return 0;
@@ -472,23 +542,23 @@ int process_get_property(struct process_config *c,
 
 int process_config_set(char *config, size_t size, bool privilege)
 {
-	int e_size = 0, name_l = 0;
+	int e_size = 0, name_l = 0, pub_len = 0, sep = 0;
 	const char *eoc = config + size;
 	struct process_config *c = NULL;
 	char *str = NULL;
 	TEE_UUID uuid;
 
-	if (process_config_validate(config, size, &uuid) != true)
+	if (process_config_validate(config, size, &uuid) == 0)
 		return -EINVAL;
 
 	c = kzalloc(sizeof(struct process_config));
-	if (c == NULL)
+	if (!c)
 		return -ENOMEM;
 
 	memcpy(&c->uuid, &uuid, sizeof(uuid));
 
 	e_size = strlen_of(config, "name", eoc);
-	if ((unsigned int)e_size >= PROCESS_NAME_LEN) {
+	if (e_size <= 0 || e_size >= PROCESS_NAME_LEN) {
 		EMSG("error name len - %s\n", strstr_of(config, "name"));
 		kfree(c);
 		return -EINVAL;
@@ -496,7 +566,7 @@ int process_config_set(char *config, size_t size, bool privilege)
 	strncpy_trim(c->name, strstr_of(config, "name"), e_size);
 
 	e_size = strlen_of(config, "path", eoc);
-	if ((unsigned int)e_size >= PROCESS_PATH_LEN) {
+	if (e_size <= 0 || e_size >= PROCESS_PATH_LEN) {
 		EMSG("error path len - %s\n", strstr_of(config, "name"));
 		kfree(c);
 		return -EINVAL;
@@ -504,23 +574,23 @@ int process_config_set(char *config, size_t size, bool privilege)
 	strncpy_trim(c->path, strstr_of(config, "path"), e_size);
 
 	str = strstr_of(config, "single_instance");
-	if (str != NULL)
+	if (str)
 		c->single_instance = strtoul(str, NULL, 0);
 	str = strstr_of(config, "multi_session");
-	if (str != NULL)
+	if (str)
 		c->multi_session = strtoul(str, NULL, 0);
 	str = strstr_of(config, "inst_keepalive");
-	if (str != NULL)
+	if (str)
 		c->inst_keepalive = strtoul(str, NULL, 0);
 	str = strstr_of(config, "heap_size");
-	if (str != NULL)
+	if (str)
 		c->heap_size = strtoul(str, NULL, 0);
 	str = strstr_of(config, "stack_size");
-	if (str != NULL)
+	if (str)
 		c->ustack_size = strtoul(str, NULL, 0);
 	if (privilege) {
 		str = strstr_of(config, "privilege");
-		if (str != NULL)
+		if (str)
 			c->privilege = strtoul(str, NULL, 0);
 	}
 
@@ -539,38 +609,44 @@ int process_config_set(char *config, size_t size, bool privilege)
 	}
 
 	e_size = strlen_of(config, "dev_access", eoc);
-	if (e_size > 0) {
-		c->dev_acl = kzalloc(e_size + 1);
-		if (!c->dev_acl) {
-			EMSG("malloc dev_acl failed!\n");
-			goto out;
-		}
+	pub_len = strlen(DEV_PUB_ACL);
+	sep = (e_size > 0) ? 1 : 0;
 
-		strncpy_config(c->dev_acl, strstr_of(config, "dev_access"), e_size);
+	c->dev_acl = kzalloc(e_size + sep + pub_len + 1);
+	if (!c->dev_acl) {
+		EMSG("malloc dev_acl failed!\n");
+		goto out;
+	}
+
+	memcpy(c->dev_acl, DEV_PUB_ACL, pub_len);
+	if (e_size > 0) {
+		c->dev_acl[pub_len] = ',';
+		strncpy_config(c->dev_acl + pub_len + 1,
+			strstr_of(config, "dev_access"), e_size);
 	}
 
 	e_size = strlen_of(config, "ipc_access", eoc);
 	name_l = strlen(c->name);
-	c->ipc_acl = kzalloc(e_size + 2 + name_l);
+	c->ipc_acl = kzalloc(e_size + 1 + name_l + 1);
 	if (!c->ipc_acl) {
 		EMSG("malloc ipc_acl failed!\n");
 		goto out;
 	}
 	/* at least, TA can access itself */
-	memcpy(c->ipc_acl, c->name, name_l);
-	if (e_size) {
+	memcpy(c->ipc_acl, c->name, name_l + 1);
+	if (e_size != 0) {
 		c->ipc_acl[name_l] = ',';
-		strncpy_config(c->ipc_acl + name_l, strstr_of(config, "ipc_access"), e_size);
+		strncpy_config(c->ipc_acl + name_l + 1, strstr_of(config, "ipc_access"), e_size);
 	}
 
 	/* TA has additional property ?? */
 	e_size = strlen_of(config, "property", eoc);
 	if (e_size > 0) {
 		str = strstr_of(config, "property-nr");
-		if (str != NULL)
+		if (str)
 			c->nr_additionalprops = strtoul(str, NULL, 0);
 
-		c->additionalprops = kcalloc(e_size + 1, sizeof(struct property));
+		c->additionalprops = kzalloc(e_size + 1);
 		if (!c->additionalprops) {
 			EMSG("malloc for additional props failed!\n");
 			goto out;
@@ -578,14 +654,15 @@ int process_config_set(char *config, size_t size, bool privilege)
 		strlcpy(c->additionalprops, strstr_of(config, "property"), e_size + 1);
 	}
 
-	DMSG("%s@%s stack_size %d, heap_size %ld single_instance %d version: %s description: %s\n",
-		c->name, c->path, c->ustack_size, c->heap_size,
-		c->single_instance, c->version, c->description);
+	DMSG("%s@%s\n", c->name, c->path);
+	DMSG("stack %d, heap %ld single_instance %d version: %s\n",
+		c->ustack_size, c->heap_size, c->single_instance, c->version);
+
 	/*kdump("uuid", &uuid, 16);*/
 
 	mutex_init(&c->inst_lock);
 
-	if (c->privilege == false)
+	if (!c->privilege)
 		fs_create(c->name);
 
 	mutex_lock(&pconf_mtx);
@@ -595,6 +672,7 @@ int process_config_set(char *config, size_t size, bool privilege)
 	return 0;
 
 out:
+	kfree(c->additionalprops);
 	kfree(c->dev_acl);
 	kfree(c->ipc_acl);
 	kfree(c);
@@ -608,7 +686,7 @@ static int process_config_load(int fd)
 	char *config = NULL;
 
 	config = kmalloc(PAGE_SIZE);
-	if (config == NULL) {
+	if (!config) {
 		EMSG("malloc %ld size failed\n", PAGE_SIZE);
 		return -ENOMEM;
 	}
@@ -632,25 +710,26 @@ static int process_config_load(int fd)
 
 static void __init process_config_init(void)
 {
-	int fd = -1, dird = -1;
+	int fd = -1;
 	const char *path = "/apps/";
 	const char *ext = ".config";
 	char name[FS_NAME_MAX * 2];
-	struct dirent d;
+	struct dirent *d = NULL;
+	DIR *dir = NULL;
 
-	dird = sys_open(path, O_DIRECTORY);
-	if (dird < 0) {
-		EMSG("open /apps failed\n");
+	dir = opendir(path);
+	if (!dir) {
+		EMSG("open %s failed\n", path);
 		return;
 	}
 
 	while (1) {
 		strlcpy(name, path, sizeof(name));
-		if (sys_readdir(dird, &d) > 0) {
-			if (strstr(d.d_name, ext)) {
-				if (strlen(strstr(d.d_name, ext)) != strlen(ext))
+		if ((d = readdir(dir)) != NULL) {
+			if (strstr(d->d_name, ext)) {
+				if (strlen(strstr(d->d_name, ext)) != strlen(ext))
 					continue;
-				strncat(name, d.d_name, FS_NAME_MAX);
+				strlcat(name, d->d_name, sizeof(name));
 				IMSG("Processing %s\n", name);
 				fd = sys_open((const char *)name, O_RDONLY);
 				if (fd < 0) {
@@ -661,11 +740,12 @@ static void __init process_config_init(void)
 					EMSG("process_config_read failed\n");
 				sys_close(fd);
 			}
-		} else
+		} else {
 			break;
+		}
 	}
 
-	sys_close(dird);
+	closedir(dir);
 }
 
 MODULE_INIT_CORE(process_config_init);

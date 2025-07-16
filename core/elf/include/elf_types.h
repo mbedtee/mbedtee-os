@@ -7,10 +7,14 @@
 #ifndef _ELF_TYPES_H
 #define _ELF_TYPES_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <elf.h>
 #include <generated/autoconf.h>
 
-#ifdef CONFIG_64BIT
+#if defined(CONFIG_64BIT)
 typedef Elf64_Addr Elf_Addr;
 typedef Elf64_Off Elf_Off;
 typedef Elf64_Word Elf_Word;
@@ -38,4 +42,7 @@ typedef Elf32_Rela Elf_Rela;
 #define ELF_R_TYPE ELF32_R_TYPE
 #endif
 
+#ifdef __cplusplus
+}
+#endif
 #endif

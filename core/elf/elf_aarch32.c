@@ -48,7 +48,8 @@ int elf_verify_header(Elf32_Ehdr *hdr)
  * relocate the shared or executable object to l_addr
  * kva is process's own mapping of the obj LOAD which contains .got and .data.rel.ro
  */
-int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
+int elf_relocate(struct elf_obj *obj, struct elf_obj *scope,
+	void *l_addr, void *kva)
 {
 	Elf32_Ehdr *hdr = obj->hdr;
 	const Elf32_Shdr *shdr = obj->shdr;
@@ -74,9 +75,13 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 			for (rel = reltab; rel < reltab + relnr; rel++) {
 				symndx = ELF32_R_SYM(rel->r_info);
 				symtyp = ELF32_R_TYPE(rel->r_info);
+				if (symndx >= obj->symnum)
+					return -EINVAL;
 				sym = &dynsym[symndx];
 
 				reloc_addr = kva + rel->r_offset;
+				if (!elf_reloc_addr_ok(obj, rel->r_offset))
+					return -EINVAL;
 				switch (symtyp) {
 				case R_ARM_RELATIVE:
 					*reloc_addr += (Elf32_Addr)l_addr;
@@ -85,7 +90,7 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 				case R_ARM_JUMP_SLOT:
 					if ((sym->st_shndx == SHN_UNDEF) ||
 						(sym->st_shndx >= hdr->e_shnum))
-						*reloc_addr = elf_dynsym(obj,
+						*reloc_addr = elf_dynsym(scope,
 								obj->dynstr + sym->st_name);
 					else
 						*reloc_addr = l_addr + sym->st_value;
@@ -94,6 +99,9 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 					*reloc_addr += (Elf32_Addr)l_addr + sym->st_value;
 					break;
 				case R_ARM_COPY:
+					if (!elf_reloc_addr_ok(obj, sym->st_value) ||
+						sym->st_size > obj->size)
+						return -EINVAL;
 					memcpy(reloc_addr, obj->kva + sym->st_value, sym->st_size);
 					break;
 				default:
@@ -124,7 +132,7 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 				case R_ARM_JUMP_SLOT:
 					if ((sym->st_shndx == SHN_UNDEF) ||
 						(sym->st_shndx >= hdr->e_shnum))
-						*reloc_addr = elf_dynsym(obj,
+						*reloc_addr = elf_dynsym(scope,
 								obj->dynstr + sym->st_name) + rela->r_addend;
 					else
 						*reloc_addr = l_addr + sym->st_value + rela->r_addend;

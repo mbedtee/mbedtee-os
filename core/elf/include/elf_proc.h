@@ -7,6 +7,10 @@
 #ifndef _ELF_PROC_H
 #define _ELF_PROC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * loading for a process ELF
  */
@@ -30,4 +34,7 @@ void elf_unload_proc(struct process *proc);
 const char *elf_proc_funcname(struct process *proc, unsigned long runaddr,
 	unsigned long *offset);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

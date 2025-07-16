@@ -21,6 +21,8 @@
 
 #include <__pthread.h>
 #include <sys/pthread.h>
+#include <sys/poll.h>
+#include <file.h>
 
 /*
  * allocate/map the thread's user-stack
@@ -36,11 +38,11 @@ extern int pthread_alloc_usp(struct thread *t,
 		nr_pages = t->ustack_size >> PAGE_SHIFT;
 
 		t->ustack_uva = vma_alloc(t->proc->vm, t->ustack_size);
-		if (t->ustack_uva == NULL)
+		if (!t->ustack_uva)
 			return ret;
 
 		t->ustack_pages = pages_sc_alloc(nr_pages);
-		if (t->ustack_pages == NULL)
+		if (!t->ustack_pages)
 			goto out;
 
 		ret = pages_sc_map(t->ustack_pages, t->proc->pt,
@@ -111,7 +113,7 @@ static int pthread_alloc_tuser(struct thread *t)
 	}
 
 	ret = page_map(p, t->proc->pt, uva, PG_RW | PG_ZERO);
-	if (ret) {
+	if (ret != 0) {
 		vma_free(t->proc->vm, uva);
 		goto out;
 	}
@@ -150,8 +152,6 @@ static void pthread_init_tuser(struct thread *t)
 {
 	struct __pthread *self = t->tuser;
 
-	self->proc = t->proc->pself_uva;
-
 	self->id = t->id;
 	self->idmax = sched_idx_max;
 
@@ -187,45 +187,51 @@ static int pthread_add(struct thread *t)
 static void pthread_del(struct thread *t)
 {
 	struct process *proc = t->proc;
+	struct process *parent = NULL;
 	unsigned long flags = 0;
 	struct timespec tm, *rt = &proc->runtime;
+	pid_t parent_id = 0;
+	bool notify_parent = false;
+	bool last_thread = false;
 
 	spin_lock_irqsave(&proc->slock, flags);
 	list_del(&t->node);
 	/* record the exiting thread's cputime */
 	__sched_thread_cputime(t, &tm);
 	timespecadd(&tm, rt, rt);
-	spin_unlock_irqrestore(&proc->slock, flags);
-}
-
-/*
- * Cleanup the mutex
- */
-static void pthread_cleanup_mutexes(struct thread *t)
-{
-	struct mutex *m = NULL, *n = NULL;
-
-	list_for_each_entry_safe(m, n, &t->mutexs, node) {
-		IMSG("cleanup mutex: %s\n", t->name);
-		mutex_unlock(m);
+	/*
+	 * Capture the first non-zero thread retval as exit_code.
+	 * This handles pthread_exit(err) when _exit() was never called.
+	 */
+	if (proc->exit_code == 0)
+		proc->exit_code = t->join_q.notification;
+	if (list_empty(&proc->threads) &&
+		!(atomic_read(&proc->wait_state) & PROC_WAIT_EXITED)) {
+		atomic_orr(&proc->wait_state, PROC_WAIT_EXITED);
+		wakeup_notify(&proc->wq, proc->exit_code);
+		parent_id = proc->parent_id;
+		notify_parent = ((atomic_read(&proc->wait_state) \
+				& PROC_WAIT_WAITABLE) != 0);
+		last_thread = true;
 	}
-}
+	spin_unlock_irqrestore(&proc->slock, flags);
 
-static void pthread_cleanup_wqnodes(struct thread *t)
-{
-	struct waitqueue_node *n = NULL, *_n = NULL;
+	if (last_thread)
+		fdesc_close_all(proc);
 
-	list_for_each_entry_safe(n, _n, &t->wqnodes, tnode) {
-		LMSG("%s waiting @ %s() line %d p=%p\n",
-			t->name, n->fnname, n->linenr, n->priv);
-		waitqueue_node_del(n);
+	if (notify_parent && parent_id > 0) {
+		parent = process_get(parent_id);
+		if (parent) {
+			wakeup_notify(&parent->wq, 1);
+			process_put(parent);
+		}
 	}
 }
 
 /*
  * Cleanup the exited thread
  */
-static void pthread_destroy(struct work *w)
+static void pthread_destroy_work(struct work *w)
 {
 	if (w) {
 		struct thread *t = container_of(w,
@@ -234,8 +240,7 @@ static void pthread_destroy(struct work *w)
 
 		pthread_del(t);
 
-		pthread_cleanup_mutexes(t);
-		pthread_cleanup_wqnodes(t);
+		thread_cleanup_run(t);
 
 		wakeup(&t->join_q);
 
@@ -261,6 +266,25 @@ static void pthread_destroy(struct work *w)
 	}
 }
 
+/*
+ * Cleanup the just created thread (which never run)
+ */
+void pthread_destroy(struct thread *t)
+{
+	struct process *proc = t->proc;
+	unsigned long flags = 0;
+
+	spin_lock_irqsave(&proc->slock, flags);
+	list_del(&t->node);
+	spin_unlock_irqrestore(&proc->slock, flags);
+
+	sched_uninstall(t->sched);
+	pthread_free_usp(t);
+	pthread_free_tuser(t);
+	sigt_free(t);
+	thread_free(t);
+}
+
 static int pthread_attr_kinit(struct thread *t,
 	const pthread_attr_t *attr)
 {
@@ -283,7 +307,7 @@ static int pthread_attr_kinit(struct thread *t,
 		if (attr->inheritsched != PTHREAD_EXPLICIT_SCHED &&
 			attr->inheritsched != PTHREAD_INHERIT_SCHED)
 			return -EINVAL;
-		if (attr->stackaddr && !attr->stacksize)
+		if (attr->stackaddr && attr->stacksize == 0)
 			return -EINVAL;
 
 		p->detachstate = attr->detachstate;
@@ -296,7 +320,7 @@ static int pthread_attr_kinit(struct thread *t,
 		if (attr->stackaddr)
 			p->stackaddr = attr->stackaddr;
 
-		if (attr->stacksize)
+		if (attr->stacksize != 0)
 			p->stacksize = attr->stacksize;
 	}
 
@@ -314,14 +338,15 @@ int pthread_kcreate(struct process *proc,
 	pthread_attr_t *attr, pthread_func_t func, void *data)
 {
 	struct thread *t = NULL;
-	int ret = -1, pput = false, tid = -1;
+	int ret = -1, tid = -1;
+	bool pput = false;
 	int kstack_size = PAGE_SIZE * (sizeof(long)/sizeof(int));
 
-	if (proc == NULL)
+	if (!proc)
 		return -EINVAL;
 
 	/* roughly check: proc may be exiting */
-	if (!PROCESS_ALIVE(proc) && proc->id)
+	if (!PROCESS_ALIVE(proc) && proc->id != 0)
 		return -EINTR;
 
 	/* roughly check: below than PROCESS_THREAD_MAX */
@@ -329,26 +354,34 @@ int pthread_kcreate(struct process *proc,
 		return -EAGAIN;
 
 	t = thread_alloc(kstack_size);
-	if (t == NULL)
+	if (!t)
 		return -ENOMEM;
 
 	/*
 	 * init the basic thread info
 	 */
 	t->proc = proc;
+	INIT_LIST_HEAD(&t->node);
 	INIT_LIST_HEAD(&t->mutexs);
 	INIT_LIST_HEAD(&t->wqnodes);
+	INIT_LIST_HEAD(&t->polls);
 	waitqueue_init(&t->wait_q);
 	waitqueue_init(&t->join_q);
 	mutex_init(&t->mlock);
-	INIT_WORK(&t->destroy, pthread_destroy);
+	INIT_WORK(&t->destroy, pthread_destroy_work);
 
 	ret = sigt_init(t);
-	if (ret)
+	if (ret != 0)
 		goto error;
 
+	/*
+	 * Inherit the parent thread's signal mask (POSIX: pthread_create
+	 * inherits the caller's signal mask).
+	 */
+	t->sigt.mask = current->sigt.mask;
+
 	/* increase the process reference counter */
-	if (proc->id) {
+	if (proc->id != 0) {
 		if (!process_get(proc->id)) {
 			ret = -ESRCH; /* proc may be exiting */
 			goto error;
@@ -360,14 +393,14 @@ int pthread_kcreate(struct process *proc,
 	 * allocate/map the __pthread struct for __pthread_self()
 	 */
 	ret = pthread_alloc_tuser(t);
-	if (ret)
+	if (ret != 0)
 		goto error;
 
 	/*
 	 * Initialize the __pthread_ attr
 	 */
 	ret = pthread_attr_kinit(t, attr);
-	if (ret)
+	if (ret != 0)
 		goto error;
 
 	/*
@@ -375,7 +408,7 @@ int pthread_kcreate(struct process *proc,
 	 */
 	ret = pthread_alloc_usp(t, t->tuser->stackaddr,
 			t->tuser->stacksize);
-	if (ret)
+	if (ret != 0)
 		goto error;
 
 	/*
@@ -383,7 +416,7 @@ int pthread_kcreate(struct process *proc,
 	 */
 	ret = sched_install(t, t->tuser->policy,
 			t->tuser->priority);
-	if (ret)
+	if (ret != 0)
 		goto error;
 
 	tid = t->id;
@@ -402,26 +435,23 @@ int pthread_kcreate(struct process *proc,
 	pthread_init_tuser(t);
 
 	if (proc->id != tid) {
-		sched_entry_init(tid,
-			proc->pself->wrapper.pthread_entry,
+		ret = sched_entry_init(tid,
+			proc->wrapper.pthread_entry,
 			func, data);
 	} else {
-		sched_entry_init(tid,
-			proc->pself->wrapper.proc_entry,
+		ret = sched_entry_init(tid,
+			proc->wrapper.proc_entry,
 			func, data);
 	}
+	if (ret != 0)
+		goto error;
 
 	/* final step */
 	ret = pthread_add(t);
 
 error:
 	if (ret != 0) {
-		if (proc->id == tid)
-			proc->id = 0;
-		sched_uninstall(t->sched);
-		pthread_free_usp(t);
-		pthread_free_tuser(t);
-		thread_free(t);
+		pthread_destroy(t);
 		if (pput)
 			process_put(proc);
 		return ret;

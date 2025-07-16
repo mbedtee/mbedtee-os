@@ -17,10 +17,10 @@
 
 #include <kproc.h>
 
-static struct process_config __kc = {0};
-static struct process __kproc = {0};
-static struct pt_struct __kpt = {0};
-static struct thread __kthread = {0};
+static struct process_config __kc;
+static struct process __kproc;
+static struct pt_struct __kpt;
+static struct thread __kthread;
 
 /*
  * Returns the kernel dummy thread pointer
@@ -63,18 +63,19 @@ int __init kproc_init(void)
 
 	INIT_LIST_HEAD(&t->mutexs);
 	INIT_LIST_HEAD(&t->wqnodes);
+	INIT_LIST_HEAD(&t->polls);
 	INIT_LIST_HEAD(&proc->threads);
 	waitqueue_init(&proc->wq);
 	spin_lock_init(&proc->slock);
+	mutex_init(&proc->mlock);
 
-#if defined(CONFIG_MMU)
-	mmu_init_kpt(pt);
-#endif
+	if (IS_ENABLED(CONFIG_MMU))
+		mmu_init_kpt(pt);
 
 	proc->pt = pt;
 	proc->c = &__kc;
 	proc->refc = INT_MAX >> 1;
-	atomic_set(&proc->alive, 1);
+	atomic_set(&proc->alive, INT_MAX >> 1);
 	proc->c->privilege = true;
 	strlcpy(proc->c->name, "kernel", PROCESS_NAME_LEN);
 
@@ -83,11 +84,8 @@ int __init kproc_init(void)
 
 static void __init kproc_stdfd_init(void)
 {
-#if defined(CONFIG_UART)
-	int fd = sys_open("/dev/uart0", O_RDWR);
-#else
-	int fd = sys_open("/dev/null", O_RDWR);
-#endif
+	const char *dev = IS_ENABLED(CONFIG_UART) ? "/dev/uart0" : "/dev/null";
+	int fd = sys_open(dev, O_RDWR);
 
 	assert(fd >= 0);
 

@@ -112,7 +112,7 @@ static size_t elf_get_got_symno(struct elf_obj *obj)
 
 static int elf_relocate_sym(struct elf_obj *obj,
 	void *l_addr, void *kva, Elf32_Rel *rel, Elf32_Addr *got,
-	Elf32_Word gotsymno, Elf32_Word gotlocalnr)
+	Elf32_Word gotsymno, Elf32_Word gotlocalnr, Elf32_Word gotnr)
 {
 	int symndx = 0, symtyp = 0;
 	Elf32_Sym *sym = NULL;
@@ -120,14 +120,18 @@ static int elf_relocate_sym(struct elf_obj *obj,
 
 	symndx = ELF32_R_SYM(rel->r_info);
 	symtyp = ELF32_R_TYPE(rel->r_info);
+	if (symndx >= obj->symnum)
+		return -EINVAL;
 	sym = &obj->dynsym[symndx];
 
+	if (symtyp == R_MIPS_NONE)
+		return 0;
+
 	reloc_addr = kva + rel->r_offset;
+	if (!elf_reloc_addr_ok(obj, rel->r_offset))
+		return -EINVAL;
 
 	switch (symtyp) {
-	case R_MIPS_NONE:
-		FMSG("%s symndx %d\n", obj->name, symndx);
-		break;
 	/*
 	 * R_MIPS_REL32: A - EA + S
 	 * The value EA used by the dynamic linker to relocate an R_MIPS_REL32
@@ -150,18 +154,22 @@ static int elf_relocate_sym(struct elf_obj *obj,
 		}
 
 		if (symndx < gotsymno) {
-			if ((sym->st_info == STT_SECTION) &&
-				(ELF32_ST_BIND(rel->r_info) == STB_LOCAL))
+			if ((ELF32_ST_TYPE(sym->st_info) == STT_SECTION) &&
+				(ELF32_ST_BIND(sym->st_info) == STB_LOCAL))
 				*reloc_addr += (Elf32_Addr)l_addr;
-			else {
+			else
 				*reloc_addr += (Elf32_Addr)l_addr + sym->st_value;
-			}
 		} else {
+			Elf32_Word gotidx = symndx + gotlocalnr - gotsymno;
+
+			if (gotidx >= gotnr)
+				return -EINVAL;
+
 			/* for toolchain elf32-littlemips, differ from elf32-tradlittlemips */
 			if ((Elf32_Addr)*reloc_addr >= sym->st_value)
 				*reloc_addr -= sym->st_value;
 
-			*reloc_addr += got[symndx + gotlocalnr - gotsymno];
+			*reloc_addr += got[gotidx];
 		}
 
 		break;
@@ -178,7 +186,8 @@ static int elf_relocate_sym(struct elf_obj *obj,
  * relocate the shared or executable object to l_addr
  * kva is process's own mapping of the obj LOAD which contains .got and .data.rel.ro
  */
-int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
+int elf_relocate(struct elf_obj *obj, struct elf_obj *scope,
+	void *l_addr, void *kva)
 {
 	int ret = 0;
 	const Elf32_Shdr *sh = NULL;
@@ -192,7 +201,17 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 	Elf32_Addr *got = kva + elf_get_got_addr(obj);
 	Elf32_Word gotsymno = elf_get_got_symno(obj), i = 2;
 	Elf32_Word gotnr = elf_get_got_size(obj) / sizeof(Elf32_Addr);
-	Elf32_Sym *sym = &dynsym[gotsymno];
+	Elf32_Sym *sym = NULL;
+
+	if (gotsymno >= (Elf32_Word)obj->symnum)
+		return -EINVAL;
+
+	/* validate that global GOT entries won't exceed dynsym bounds */
+	if (gotnr > gotlocalnr &&
+		gotsymno + (gotnr - gotlocalnr) > (Elf32_Word)obj->symnum)
+		return -EINVAL;
+
+	sym = &dynsym[gotsymno];
 
 	/*
 	 * relocate the .got
@@ -201,7 +220,7 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 		got[i++] += (Elf32_Addr)l_addr;
 	while (i < gotnr) {
 		if (sym->st_shndx == SHN_UNDEF)
-			got[i++] = (Elf32_Addr)elf_dynsym(obj,
+			got[i++] = (Elf32_Addr)elf_dynsym(scope,
 					obj->dynstr + sym->st_name);
 		else
 			got[i++] += (Elf32_Addr)l_addr;
@@ -221,7 +240,7 @@ int elf_relocate(struct elf_obj *obj, void *l_addr, void *kva)
 
 			for (rel = reltab; rel < reltab + relnr; rel++) {
 				ret = elf_relocate_sym(obj, l_addr, kva, rel,
-							got, gotsymno, gotlocalnr);
+							got, gotsymno, gotlocalnr, gotnr);
 				if (ret != 0)
 					return ret;
 			}

@@ -10,7 +10,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <errno.h>
 #include <stddef.h>
 
 #include <trace.h>
@@ -54,7 +53,7 @@ static int elf_read_header(struct elf_obj *obj, int fd)
 	sys_lseek(fd, 0, SEEK_SET);
 	ret = sys_read(fd, obj->hdr, size);
 	if (size != ret) {
-		EMSG("Error while reading hdr %d %d\n", (int)size, (int)ret);
+		EMSG("Error while reading hdr %ld %ld\n", (long)size, (long)ret);
 		return -ENOENT;
 	}
 
@@ -68,39 +67,27 @@ static void elf_check_type(struct elf_obj *obj)
 	Elf_Dyn *d = NULL, *dhdr = obj->dynamic;
 	size_t d_nr = obj->dynamic_size / sizeof(Elf_Dyn);
 
+	if (d_nr == 0)
+		goto done;
+
 	/* check .dynamic to if it has the PIE flag */
 	for (d = dhdr + d_nr - 1; d >= dhdr; d--) {
 		if (d->d_tag == DT_FLAGS_1 &&
-			d->d_un.d_val == DF_1_PIE) {
+			(d->d_un.d_val & DF_1_PIE)) {
 			obj->is_pie = true;
 			break;
 		}
 	}
+
+done:
 	obj->is_app = (obj->hdr->e_type == ET_EXEC) || obj->is_pie;
 	obj->is_dso = (obj->hdr->e_type == ET_DYN) && !obj->is_pie;
 }
 
 /*
- * Get .dynstr section offset
- */
-static off_t elf_get_dynstr_off(struct elf_obj *obj)
-{
-	Elf_Ehdr *hdr = obj->hdr;
-	Elf_Shdr *shdr = obj->shdr;
-	Elf_Shdr *sh = NULL;
-
-	for (sh = shdr; sh < shdr + hdr->e_shnum; sh++) {
-		if (sh->sh_type == SHT_STRTAB) {
-			obj->dynstr = obj->kva + sh->sh_addr;
-			return sh->sh_addr;
-		}
-	}
-
-	return -ENOENT;
-}
-
-/*
- * Get .dynsym section offset
+ * Get .dynsym and .dynstr section offsets.
+ * Per ELF spec, SHT_DYNSYM's sh_link points to
+ * the associated string table (.dynstr).
  */
 static off_t elf_get_dynsym_off(struct elf_obj *obj)
 {
@@ -111,6 +98,10 @@ static off_t elf_get_dynsym_off(struct elf_obj *obj)
 	for (sh = shdr; sh < shdr + hdr->e_shnum; sh++) {
 		if (sh->sh_type == SHT_DYNSYM) {
 			obj->dynsym = obj->kva + sh->sh_addr;
+			if (sh->sh_link < hdr->e_shnum) {
+				obj->dynstr = obj->kva + shdr[sh->sh_link].sh_addr;
+				obj->dynstr_size = shdr[sh->sh_link].sh_size;
+			}
 			return sh->sh_addr;
 		}
 	}
@@ -169,6 +160,11 @@ static int elf_alloc_load(struct elf_obj *obj)
 			load->addr = ph->p_vaddr;
 			load->size = ph->p_memsz;
 			load->filesz = ph->p_filesz;
+			if (load->filesz > load->size) {
+				ret = -EFTYPE;
+				kfree(load);
+				goto out;
+			}
 			load->offset = ph->p_offset;
 			load->align = ph->p_align;
 
@@ -267,8 +263,10 @@ static int elf_alloc_kva(struct elf_obj *obj)
 {
 	/* allocate KVA */
 	obj->kva = kvma_alloc(obj->size);
-	if (obj->kva == NULL)
+	if (!obj->kva)
 		return -ENOMEM;
+
+	obj->kva_mapped = true;
 
 	obj->kva -= obj->vbase;
 
@@ -277,8 +275,9 @@ static int elf_alloc_kva(struct elf_obj *obj)
 
 static void elf_free_kva(struct elf_obj *obj)
 {
-	if (obj->kva) {
+	if (obj->kva_mapped) {
 		kvma_free(obj->kva + obj->vbase);
+		obj->kva_mapped = false;
 		obj->kva = NULL;
 	}
 }
@@ -392,11 +391,15 @@ static void elf_free_dynamic(struct elf_obj *obj)
 
 static int elf_read_dynamic(struct elf_obj *obj, int fd)
 {
-	size_t size = elf_get_dynamic_size(obj);
+	size_t size = obj->dynamic_size;
+	off_t off = elf_get_dynamic_offset(obj);
 
-	sys_lseek(fd, elf_get_dynamic_offset(obj), SEEK_SET);
+	if (off < 0)
+		return off;
+
+	sys_lseek(fd, off, SEEK_SET);
 	if (size != sys_read(fd, obj->dynamic, size)) {
-		EMSG("Error while reading shdr\n");
+		EMSG("Error while reading dynamic\n");
 		return -ENOENT;
 	}
 
@@ -407,7 +410,12 @@ static int elf_alloc_shstr(struct elf_obj *obj)
 {
 	Elf_Ehdr *hdr = obj->hdr;
 	Elf_Shdr *shdr = obj->shdr;
-	char *shstr = kmalloc(shdr[hdr->e_shstrndx].sh_size);
+	char *shstr = NULL;
+
+	if (hdr->e_shstrndx >= hdr->e_shnum)
+		return -EINVAL;
+
+	shstr = kmalloc(shdr[hdr->e_shstrndx].sh_size);
 
 	obj->shstr = shstr;
 
@@ -442,22 +450,26 @@ static int elf_alloc_strtab(struct elf_obj *obj, int fd)
 	off_t offset = 0;
 	size_t size = 0;
 
-	for (sh = shdr + hdr->e_shnum - 1; sh >= shdr; sh--) {
-		if ((sh->sh_type == SHT_STRTAB) &&
-			(sh != &shdr[hdr->e_shstrndx])) {
-			offset = sh->sh_offset;
-			size = sh->sh_size;
+	/*
+	 * Per ELF spec, SHT_SYMTAB's sh_link points to
+	 * the associated string table (.strtab).
+	 */
+	for (sh = shdr; sh < shdr + hdr->e_shnum; sh++) {
+		if (sh->sh_type == SHT_SYMTAB &&
+			sh->sh_link < hdr->e_shnum) {
+			offset = shdr[sh->sh_link].sh_offset;
+			size = shdr[sh->sh_link].sh_size;
 			break;
 		}
 	}
 
-	if (!size) {
+	if (size == 0) {
 		EMSG("Error no strtab\n");
 		return -ENOENT;
 	}
 
 	obj->strtab = vmalloc(size);
-	if (obj->strtab == NULL) {
+	if (!obj->strtab) {
 		EMSG("alloc strtab failed - 0x%lx\n", (long)size);
 		return -ENOMEM;
 	}
@@ -490,7 +502,7 @@ static int elf_alloc_symtab(struct elf_obj *obj, int fd)
 		}
 	}
 
-	if (!size) {
+	if (size == 0) {
 		EMSG("Error no symtab\n");
 		return -ENOENT;
 	}
@@ -498,7 +510,7 @@ static int elf_alloc_symtab(struct elf_obj *obj, int fd)
 	obj->symnum = size / sizeof(Elf_Sym);
 
 	obj->symtab = vmalloc(size);
-	if (obj->symtab == NULL) {
+	if (!obj->symtab) {
 		EMSG("alloc symtab failed - 0x%lx\n", (long)size);
 		return -ENOMEM;
 	}
@@ -540,12 +552,14 @@ static void elf_info(struct elf_obj *obj)
 	Elf_Shdr *shdr = obj->shdr;
 	char *shstr = obj->shstr;
 	Elf_Shdr *s = NULL;
+	size_t shstrsize = shdr[hdr->e_shstrndx].sh_size;
 
 	LMSG("Addr\t\tOff\tSize\tType\t\tName\n");
 	for (s = shdr; s < shdr + hdr->e_shnum; s++) {
 		LMSG("%08lX\t%06lX\t%06lX\t%08lX\t%s\n", (long)s->sh_addr,
 			(long)s->sh_offset, (long)s->sh_size,
-			(long)s->sh_type, shstr + s->sh_name);
+			(long)s->sh_type,
+			s->sh_name < shstrsize ? shstr + s->sh_name : "?");
 	}
 }
 
@@ -692,15 +706,15 @@ static struct elf_obj *elf_alloc(const char *objname)
 	if (ret != 0)
 		goto out;
 
-	ret = elf_get_dynstr_off(obj);
-	if (ret < 0) {
-		EMSG("no .dynstr\n");
-		goto out;
-	}
-
 	ret = elf_get_dynsym_off(obj);
 	if (ret < 0) {
 		EMSG("no .dynsym\n");
+		goto out;
+	}
+
+	if (!obj->dynstr) {
+		EMSG("no .dynstr\n");
+		ret = -ENOENT;
 		goto out;
 	}
 
@@ -729,7 +743,7 @@ static struct elf_obj *elf_alloc(const char *objname)
 	}
 	name_l = strlen(objname) + 1;
 	obj->name = kmalloc(name_l);
-	if (obj->name == NULL)
+	if (!obj->name)
 		goto out;
 	strlcpy(obj->name, objname, name_l);
 
@@ -766,7 +780,7 @@ static struct elf_obj *elf_get(const char *objname)
 	spin_lock_irqsave(&dsolock, flags);
 
 	obj = elf_match(objname);
-	if (obj != NULL)
+	if (obj)
 		obj->refc++;
 
 	spin_unlock_irqrestore(&dsolock, flags);
@@ -805,6 +819,8 @@ static int elf_get_needed(struct elf_obj *obj)
 		LMSG("d_tag %ld val %lx\n", (long)d->d_tag, (long)d->d_un.d_val);
 
 		if (d->d_tag == DT_NEEDED) {
+			if (d->d_un.d_val >= obj->dynstr_size)
+				continue;
 			objname = obj->dynstr + d->d_un.d_val;
 			slash = strrchr(objname, '/');
 			objname = slash ? slash + 1 : objname;
@@ -812,12 +828,12 @@ static int elf_get_needed(struct elf_obj *obj)
 			if (strlen(objname) == 0)
 				continue;
 			dso = elf_get(objname);
-			if (dso == NULL)
+			if (!dso)
 				dso = elf_load(objname);
 
-			if (dso == NULL)
+			if (!dso)
 				dso = elf_get(objname);
-			if (dso == NULL) {
+			if (!dso) {
 				ret = -ENOENT;
 				goto out;
 			}
@@ -831,14 +847,15 @@ static int elf_get_needed(struct elf_obj *obj)
 
 			needed->obj = dso;
 			list_add_tail(&needed->node, &obj->needs);
-		} else if (d->d_tag == DT_NULL)
+		} else if (d->d_tag == DT_NULL) {
 			break;
+		}
 	}
 
 	ret = 0;
 
 out:
-	if (ret)
+	if (ret != 0)
 		elf_put_needed(obj);
 	return ret;
 }
@@ -859,7 +876,7 @@ struct elf_obj *elf_load(const char *objname)
 
 	if (obj->is_dso) {
 		spin_lock_irqsave(&dsolock, flags);
-		if (elf_match(objname) == NULL) {
+		if (!elf_match(objname)) {
 			list_add_tail(&obj->node, &dsolist);
 			spin_unlock_irqrestore(&dsolock, flags);
 		} else {
@@ -889,7 +906,8 @@ void elf_unload(struct elf_obj *obj)
 			spin_unlock_irqrestore(&dsolock, flags);
 			elf_put_needed(obj);
 			elf_free(obj);
-		} else
+		} else {
 			spin_unlock_irqrestore(&dsolock, flags);
+		}
 	}
 }
