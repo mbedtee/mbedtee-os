@@ -8,6 +8,10 @@
 #ifndef _VMALLOC_H
 #define _VMALLOC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <kmalloc.h>
 
@@ -51,4 +55,7 @@ static inline void vfree(void *va) {}
 static inline void kvfree(void *va) {kfree(va); }
 #endif
 
+#ifdef __cplusplus
+}
+#endif
 #endif

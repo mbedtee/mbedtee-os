@@ -7,6 +7,10 @@
 #ifndef _ATOMIC_H
 #define _ATOMIC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <barrier.h>
 
 struct atomic_num {
@@ -26,17 +30,32 @@ struct atomic_num {
 #define atomic_read(v)											\
 ({																\
 	BUILD_ERROR_ON(!TYPE_COMPATIBLE(v, struct atomic_num *));	\
-	int __v = *(__volatile int *)(v);							\
+	int __v = *(volatile int *)(v);								\
 	asm volatile("" : : : "memory");							\
 	__v;														\
 })
 
-#define atomic_read_x(v)										\
+/*
+ * Generic SMP acquire/release helpers
+ */
+#define smp_load_acquire(p)										\
 ({																\
-	typeof(*(v)) __v = *(__volatile typeof(__v) *)(v);			\
-	asm volatile("" : : : "memory");							\
+	typeof(*(p)) __v = *(volatile typeof(*(p)) *)(p);			\
+	smp_rmb();													\
 	__v;														\
 })
+
+#define smp_store_release(p, v)									\
+do {															\
+	smp_wmb();													\
+	*(volatile typeof(*(p)) *)(p) = (v);						\
+} while (0)
+
+#define smp_store_mb(p, v)										\
+do {															\
+	*(volatile typeof(*(p)) *)(p) = (v);						\
+	smp_mb();													\
+} while (0)
 
 /*
  * atomically sets @i to @v
@@ -70,7 +89,6 @@ int atomic_add_return(struct atomic_num *v, int i);
  * return the new value of @v
  */
 int atomic_sub_return(struct atomic_num *v, int i);
-
 
 /*
  * atomically adds @i to @v
@@ -132,4 +150,7 @@ void atomic_orr(struct atomic_num *v, int i);
  */
 void atomic_bic(struct atomic_num *v, int i);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

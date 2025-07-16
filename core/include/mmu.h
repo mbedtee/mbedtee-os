@@ -9,7 +9,11 @@
 
 #include <map.h>
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <mem.h>
 #include <init.h>
@@ -108,5 +112,10 @@ int access_user_ok(const void *addr, size_t size, int prot);
  */
 int access_kern_ok(const void *addr, size_t size, int prot);
 
+#ifdef __cplusplus
+}
 #endif
-#endif
+
+#endif /* !__ASSEMBLY__ */
+
+#endif /* _MMU_H */

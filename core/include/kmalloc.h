@@ -7,6 +7,10 @@
 #ifndef _KMALLOC_H
 #define _KMALLOC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdbool.h>
 #include <debugfs.h>
@@ -22,11 +26,14 @@ int kmalloc_post_init(void);
 
 /*
  * release the cached idle pools after #usecs,
- * By set the #usecs to 0, it returns the pages to
- * page-pool immediately (retval: number of pages)
+ * By setting #usecs to 0, it returns the pages to
+ * the page pool immediately (retval: number of pages)
  */
 size_t kmalloc_release(unsigned int usecs);
 
 void kmalloc_info(struct debugfs_file *d);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

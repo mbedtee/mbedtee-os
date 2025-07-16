@@ -7,6 +7,10 @@
 #ifndef _LOCKDEP_H
 #define _LOCKDEP_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <generated/autoconf.h>
 
 struct lockval {
@@ -50,4 +54,7 @@ int arch_semaphore_acquire(struct lockval *lv);
  */
 int arch_semaphore_release(struct lockval *lv, unsigned int *limit);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

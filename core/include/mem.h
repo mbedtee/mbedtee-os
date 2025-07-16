@@ -7,6 +7,10 @@
 #ifndef _MEM_H
 #define _MEM_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 
 #define MEM_TYPE_RESERVED	0
@@ -26,6 +30,7 @@ struct mem_region {
 };
 
 extern size_t mem_size;
+extern unsigned long mem_base;
 
 void mem_init(void);
 void mem_info(void);
@@ -37,4 +42,7 @@ int mem_register(int type, unsigned long pa, size_t size);
 int mem_in_secure(unsigned long pa);
 int mem_overlap_secure(unsigned long pa, size_t size);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

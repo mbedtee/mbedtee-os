@@ -6,6 +6,10 @@
 #ifndef _WORKQUEUE_H
 #define _WORKQUEUE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <list.h>
 #include <atomic.h>
 #include <percpu.h>
@@ -156,4 +160,7 @@ bool __schedule_delayed_work_on(int cpu, struct delayed_work *dw, useconds_t use
 bool __mod_delayed_work(struct delayed_work *dw, useconds_t usecs);
 bool __mod_delayed_work_on(int cpu, struct delayed_work *dw, useconds_t usecs);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

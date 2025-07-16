@@ -6,6 +6,10 @@
 #ifndef _SPINLOCK_H
 #define _SPINLOCK_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <cpu.h>
 #include <assert.h>
 #include <lockdep.h>
@@ -21,7 +25,7 @@ struct spinlock {
 
 #define spin_lock_init(sl) lock_val_init(&(sl)->lock)
 
-#define spin_lock(sl) do {} while (arch_atomic_acquire(&(sl)->lock))
+#define spin_lock(sl) do { } while (arch_atomic_acquire(&(sl)->lock))
 
 #define spin_unlock(sl) arch_atomic_release(&(sl)->lock)
 
@@ -51,4 +55,7 @@ static inline void spin_unlock_irqrestore(
 	local_irq_restore(flags);
 }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

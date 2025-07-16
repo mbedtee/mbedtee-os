@@ -7,6 +7,10 @@
 #ifndef _TEVENT_H
 #define _TEVENT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <time.h>
 #include <rbtree.h>
 #include <kmalloc.h>
@@ -46,9 +50,9 @@ void tevent_init(struct tevent *event, tevent_handler handler, void *data);
 void tevent_start(struct tevent *event, struct timespec *time);
 
 /*
- * add the tevent to the target CPU's timer list
- * this tevent may not be triggered / handled immediately,
- * because current cpu possibly can't set other CPU's timer hardware.
+ * Add the tevent to the target CPU's timer list.
+ * The tevent may not be triggered or handled immediately,
+ * because the current CPU may not be able to set another CPU's timer hardware.
  */
 void tevent_start_on(struct tevent *t, struct timespec *time, int cpu);
 
@@ -58,8 +62,8 @@ void tevent_start_on(struct tevent *t, struct timespec *time, int cpu);
 void tevent_renew(struct tevent *event, struct timespec *time);
 
 /*
- * return true if it stopped this event,
- * otherwise return false (e.g. already stopped).
+ * Return true if the event was stopped,
+ * false otherwise (e.g. it was already stopped).
  */
 int tevent_stop(struct tevent *event);
 
@@ -78,7 +82,7 @@ static inline void tevent_free(struct tevent *t)
 {
 	unsigned long flags = 0;
 
-	if (atomic_read_x(&t->lock.lock.val))
+	if (smp_load_acquire(&t->lock.lock.val))
 		EMSG("tevent is still locked\n");
 
 	/* final confirm */
@@ -90,11 +94,14 @@ static inline void tevent_free(struct tevent *t)
 
 /*
  * For CPU Hot-Plug
- * take over the tevents of the dest CPU
+ * Take over the tevents of the destination CPU.
  */
 void tevent_takeover(int cpu_id);
 void tevent_migrating(void);
 
 void tevent_isr(void);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

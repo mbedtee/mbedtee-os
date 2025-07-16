@@ -7,7 +7,11 @@
 #ifndef _PROCESS_CONFIG_H
 #define _PROCESS_CONFIG_H
 
-#include <semaphore.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <mutex.h>
 #include <property.h>
 #include <tee_api_types.h>
 
@@ -24,10 +28,10 @@
 struct process_config {
 	/* Node in the configs list */
 	struct list_head node;
-	/* Process UUID */
-	TEE_UUID uuid;
 	/* Process Name */
 	char name[PROCESS_NAME_LEN];
+	/* Process UUID */
+	TEE_UUID uuid;
 	/* Process ELF file path*/
 	char path[PROCESS_PATH_LEN];
 	/* Process version */
@@ -71,10 +75,10 @@ struct process_config {
 void process_handle_fs(const char *mnt);
 
 /* Get the config by the UUID */
-struct process_config *process_config_of(const TEE_UUID *uuid);
+struct process_config *process_config_of_uuid(const TEE_UUID *uuid);
 
-/* Get the UUID by the name */
-const TEE_UUID *process_uuid_of(const char *name);
+/* Get the config by the name */
+struct process_config *process_config_of(const char *name);
 
 /*
  * Set the config into kernel config list
@@ -85,9 +89,12 @@ int process_config_set(char *config, size_t size, bool privilege);
 
 /*
  * Get the TA+Client Properties, TEE Properties
- * are got from userspace api
+ * are obtained from the userspace API.
  */
 int process_get_property(struct process_config *c,
 	unsigned long hdl, const void *nameoridx, struct property *p);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

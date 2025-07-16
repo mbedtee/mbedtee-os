@@ -7,6 +7,10 @@
 #ifndef _KPROCESS_H
 #define _KPROCESS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <mmu.h>
 
 struct thread;
@@ -27,4 +31,7 @@ struct process *kproc(void);
 struct pt_struct *kpt(void);
 struct thread *kthread(void);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

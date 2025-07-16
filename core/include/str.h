@@ -8,6 +8,10 @@
 #ifndef _STR_H
 #define _STR_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <list.h>
 
 struct device;
@@ -31,8 +35,8 @@ struct str_declaration {
 };
 
 /*
- * priority is down-decreased when RESUME
- * priority is down-increased when SUSPEND
+ * Priority is decreased on RESUME.
+ * Priority is increased on SUSPEND.
  *
  * STR registration for the non-modularized parts,
  * for the modules which are registered by module_system()
@@ -78,4 +82,7 @@ void str_suspend(void);
  */
 void str_resume(void);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

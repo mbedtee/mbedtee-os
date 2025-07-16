@@ -6,6 +6,10 @@
 #ifndef _KSYSCALL_H
 #define _KSYSCALL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <ctx.h>
 
 /*
@@ -13,4 +17,7 @@
  */
 void *syscall_handler(struct thread_ctx *regs);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

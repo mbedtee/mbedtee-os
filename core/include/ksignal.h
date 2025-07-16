@@ -7,6 +7,10 @@
 #ifndef _KSIGNAL_H
 #define _KSIGNAL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <signal.h>
 #include <list.h>
 #include <spinlock.h>
@@ -65,33 +69,44 @@ struct signal_thread {
 
 	/* queued signals for thread */
 	sigset_t pending;
+
+	/* alternate signal stack (sigaltstack(2)) */
+	stack_t sigaltstack;
+
 	struct list_head queue;
 };
-
-/*
- * thread has pending signal or not
- */
-#define is_sigtpending(t) ((t)->sigt.pending & ~(t)->sigt.mask)
-
-/*
- * thread and process have pending signal or not
- */
-#define is_sigpending(t) (((t)->sigt.pending | (t)->proc->sigp.pending) & ~(t)->sigt.mask)
 
 /*
  * thread is handling which signo
  */
 #define sighandling(t) ((t)->sigt.sighandling)
+#define sigtpending(t) ((t)->sigt.pending)
+#define sigppending(t) ((t)->sigt.pending | (t)->proc->sigp.pending)
+
+/*
+ * thread has pending signal or not
+ */
+#define is_sigtpending(t) (!!(sigtpending(t) & ~(t)->sigt.mask))
+
+/*
+ * thread and process have pending signal or not
+ */
+#define is_sigpending(t) (!!(sigppending(t) & ~(t)->sigt.mask))
 
 #else
 
 struct signal_proc {};
 struct signal_thread {};
 
+#define sighandling(t) (0)
+#define sigtpending(t) (0)
+#define sigppending(t) (0)
 #define is_sigtpending(t) (false)
 #define is_sigpending(t) (false)
-#define sighandling(t) (0)
 
 #endif
 
+#ifdef __cplusplus
+}
+#endif
 #endif

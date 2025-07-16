@@ -7,6 +7,10 @@
 #ifndef _TRACE_H
 #define _TRACE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -28,7 +32,7 @@
 #define DEFAULT_TRACE_LEVEL TRACE_LEVEL_IGNORE
 #endif
 
-#ifdef CONFIG_PRINTK
+#if defined(CONFIG_PRINTK)
 __printf(4, 5) void trace_kern(
 	const char *func, int line, int level,
 	const char *fmt, ...);
@@ -68,4 +72,7 @@ static inline void trace_kern(
 			printk("\n"); \
 	} while (0)
 
+#ifdef __cplusplus
+}
+#endif
 #endif

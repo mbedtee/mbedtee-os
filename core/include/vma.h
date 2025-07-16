@@ -7,11 +7,13 @@
 #ifndef _VMA_H
 #define _VMA_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <mutex.h>
 #include <stddef.h>
 #include <debugfs.h>
-
-#define PREFER_SPEED_OVER_SIZE
 
 struct vma {
 	/*
@@ -22,10 +24,9 @@ struct vma {
 	/* sorted by size */
 	struct rb_node *rbroot[4];
 
-#ifdef PREFER_SPEED_OVER_SIZE
 	/* sorted by address */
 	struct rb_node *rbroota[4];
-#endif
+
 	void *last;
 
 	struct spinlock lock;
@@ -65,4 +66,7 @@ size_t vma_sizeof(struct vma *vm, void *va);
 
 void vma_info(struct debugfs_file *d, struct vma *vm);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -7,6 +7,10 @@
 #ifndef _KTHREAD_H
 #define _KTHREAD_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <thread.h>
 
 /*
@@ -86,4 +90,7 @@ int __kthread_create(thread_func_t func, void *data,
 	_id_;												\
 })
 
+#ifdef __cplusplus
+}
+#endif
 #endif

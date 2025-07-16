@@ -1,39 +1,57 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
- * Semaphore implementation
+ * POSIX semaphore API
  */
 
 #ifndef _SEMAPHORE_H
 #define _SEMAPHORE_H
 
-#include <wait.h>
-#include <lockdep.h>
+#include <stdint.h>
+#include <time.h>
 
-struct semaphore {
-	struct lockval lock;
-	struct spinlock slock;
-	/* number of max. parallel accessors */
-	unsigned int limit;
-	/* current owner's tid for priority ceiling */
-	pid_t owner_id;
-	struct waitqueue wq;
-};
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#define DEFAULT_SEMA(x, l) { \
-	LOCKVAL_INIT(l), SPIN_LOCK_INIT(0), \
-	(l), 0, DEFAULT_WAITQ((x).wq), \
+/* sem_t contains an opaque kernel handle. */
+typedef struct {
+	uintptr_t __ksem;
+} sem_t;
+
+/*
+ * Max length of the user-visible semaphore name (excluding the internal "/sema"
+ * prefix used by the kernel/VFS namespace).
+ */
+#ifndef SEM_NAME_MAX
+#define SEM_NAME_MAX 64
+#endif
+
+#if !defined(SEM_VALUE_MAX)
+#define SEM_VALUE_MAX 0x7fffffffU
+#endif
+
+int sem_init(sem_t *sem, int pshared, unsigned int value);
+int sem_destroy(sem_t *sem);
+
+int sem_post(sem_t *sem);
+
+int sem_wait(sem_t *sem);
+int sem_trywait(sem_t *sem);
+int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout);
+
+int sem_getvalue(sem_t *sem, int *sval);
+
+#if !defined(SEM_FAILED)
+#define SEM_FAILED ((sem_t *)-1)
+#endif
+
+sem_t *sem_open(const char *name, int oflag, ...);
+int sem_close(sem_t *sem);
+int sem_unlink(const char *name);
+
+#ifdef __cplusplus
 }
-
-#define DECLARE_SEMA(name, limit) \
-	struct semaphore name = DEFAULT_SEMA(name, limit)
-
-void sema_init(struct semaphore *sem, unsigned int limit);
-
-void down(struct semaphore *sem);
-
-void up(struct semaphore *sem);
-
-int down_trylock(struct semaphore *sem);
+#endif
 
 #endif

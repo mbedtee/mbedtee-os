@@ -7,9 +7,14 @@
 #ifndef _SYS_POLL_H
 #define _SYS_POLL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <wait.h>
 #include <poll.h>
 #include <file.h>
+#include <thread.h>
 
 struct poll_table {
 	void (*waitfn)(struct file *filp,
@@ -23,4 +28,7 @@ static inline void poll_wait(struct file *filp,
 		pt->waitfn(filp, wq, pt);
 }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

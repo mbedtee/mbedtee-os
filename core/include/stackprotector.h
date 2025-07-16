@@ -7,10 +7,13 @@
 #ifndef _STACKPROT_H
 #define _STACKPROT_H
 
-#include <timer.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <generated/autoconf.h>
 
-#ifdef CONFIG_STACK_PROTECTOR
+#if defined(CONFIG_STACK_PROTECTOR)
 void __stack_chk_fail(void);
 
 static __always_inline void __stack_chk_guard_set(void)
@@ -26,5 +29,8 @@ static __always_inline void __stack_chk_guard_set(void)
 
 static __always_inline void __stack_chk_guard_set(void) {}
 
+#endif
+#ifdef __cplusplus
+}
 #endif
 #endif

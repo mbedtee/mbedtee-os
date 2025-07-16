@@ -7,7 +7,14 @@
 #ifndef _SBRK_H
 #define _SBRK_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 int sbrk_init(struct process *proc);
 long sbrk_incr(long incr);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -7,6 +7,10 @@
 #ifndef _MUTEX_H
 #define _MUTEX_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <list.h>
 #include <wait.h>
 #include <lockdep.h>
@@ -51,10 +55,15 @@ void mutex_init_recursive(struct mutex *m);
 
 void mutex_lock(struct mutex *m);
 
+int mutex_lock_interruptible(struct mutex *m);
+
 void mutex_unlock(struct mutex *m);
 
 int mutex_trylock(struct mutex *m);
 
 void mutex_destroy(struct mutex *m);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

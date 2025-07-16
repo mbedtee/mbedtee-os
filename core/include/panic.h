@@ -7,6 +7,10 @@
 #ifndef _PANIC_H
 #define _PANIC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <cpu.h>
 #include <percpu.h>
 #include <printk.h>
@@ -22,12 +26,14 @@ static inline __dead2 void deadloop(void)
 #define panic(...) \
 	do { \
 		local_irq_disable(); \
-		struct thread *__t_ = current; \
-		printk("\n!!oops-%s@CPU%d %s() L%d PANIC: ", \
-			__t_->name, percpu_id(), __func__, __LINE__); \
+		printk("\n!!oops@CPU%d %s() L%d PANIC: ", \
+			percpu_id(), __func__, __LINE__); \
 		printk(__VA_ARGS__); \
 		backtrace(); \
 		deadloop(); \
 	} while (0)
 
+#ifdef __cplusplus
+}
+#endif
 #endif

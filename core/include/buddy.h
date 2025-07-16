@@ -7,6 +7,10 @@
 #ifndef _BUDDY_H
 #define _BUDDY_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <list.h>
 #include <kmath.h>
 #include <stdint.h>
@@ -33,7 +37,8 @@ struct buddy_pool {
 		unsigned char order;
 	} *manager; /* manager controls the child's order */
 
-	/* reserved_size:
+	/*
+	 * reserved_size:
 	 * e.g. (pool_struct_size or manager_size) in case of the manager stands inside the pool
 	 * e.g. (0) in case of the manager stands outside the pool and no reserved node
 	 */
@@ -47,18 +52,18 @@ struct buddy_pool {
 };
 
 /*
- * init a buddy pool
- * the size must be power of 2
- * the manager_area must be specified by caller
+ * Initialize a buddy pool.
+ * The size must be a power of 2.
+ * The manager_area must be supplied by the caller.
  */
 int buddy_init(struct buddy_pool *buddy,
 		void *start, size_t size,
 		void *manager_area, size_t node_size);
 
 /*
- * init a buddy pool
- * the manager_area will be handled within this API
- * reuse start as the manager_area
+ * Initialize a buddy pool.
+ * The manager_area is managed internally by this function,
+ * which reuses the start address as the manager_area.
  */
 int buddy_init_ex(struct buddy_pool *buddy,
 		void *start, size_t size, size_t node_size);
@@ -77,13 +82,13 @@ static inline void *buddy_alloc(struct buddy_pool *buddy,
 }
 
 /*
- * return the size be freed (aligned to power of 2)
+ * Return the size freed (aligned to the next power of 2).
  */
 size_t buddy_free(struct buddy_pool *buddy,
 		const void *addr);
 
 /*
- * return the size held by 'addr'
+ * Return the allocation size held at 'addr'.
  */
 size_t buddy_sizeof(struct buddy_pool *buddy,
 		const void *addr);
@@ -91,4 +96,7 @@ size_t buddy_sizeof(struct buddy_pool *buddy,
 void buddy_reserve(struct buddy_pool *buddy,
 		size_t size);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

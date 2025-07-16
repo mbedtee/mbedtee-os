@@ -7,6 +7,10 @@
 #ifndef _PAGE_SC_H
 #define _PAGE_SC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <list.h>
 #include <page.h>
@@ -56,4 +60,7 @@ int pages_list_map(struct list_head *head, struct pt_struct *pt,
 void pages_list_unmap(struct list_head *head, struct pt_struct *pt,
 		void *va, size_t num);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

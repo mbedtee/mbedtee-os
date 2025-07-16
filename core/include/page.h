@@ -18,7 +18,6 @@
 #define PG_DMA     (0x0100u)  /* non-cacheable mapping */
 #define PG_EXEC    (0x0200u)  /* Executable */
 #define PG_ZERO    (0x0400u)  /* memset to 0 after mapped */
-#define PG_POOL    (0x0800u)  /* specific for kmalloc pools */
 
 /*
  * page size
@@ -32,7 +31,11 @@
  */
 #define page_aligned(x)	(((unsigned long)(x) & (~PAGE_MASK)) == 0)
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <mmu.h>
 #include <atomic.h>
@@ -71,6 +74,11 @@ void page_unmap(struct page *p, struct pt_struct *pt,
  * allocate one page
  */
 struct page *page_alloc(void);
+
+/*
+ * allocate batch pages into pages[]
+ */
+int pages_batch_alloc(struct page **pages, size_t num);
 
 /*
  * free one page
@@ -124,5 +132,10 @@ size_t nr_continuous_free_pages(void);
 
 void page_info(struct debugfs_file *d);
 
+#ifdef __cplusplus
+}
 #endif
-#endif
+
+#endif /* !__ASSEMBLY__ */
+
+#endif /* _PAGE_H */

@@ -7,6 +7,10 @@
 #ifndef _THREAD_H
 #define _THREAD_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <ida.h>
 #include <list.h>
 #include <wait.h>
@@ -23,7 +27,7 @@
 
 #define THREAD_NAME_LEN (PROCESS_NAME_LEN + 16)
 
-typedef void (*thread_func_t)(void *);
+typedef long (*thread_func_t)(void *);
 
 /*
  * Structure for user/kernel mode threads
@@ -67,6 +71,9 @@ struct thread {
 	/* list for thread's wait points */
 	struct list_head wqnodes;
 
+	/* list for thread's poll contexts */
+	struct list_head polls;
+
 	/* Destroy work */
 	struct work destroy;
 
@@ -102,16 +109,39 @@ struct thread {
 
 	struct signal_thread sigt;
 
+	/* lazy FPU: pointer to sched->regs for FPU trap restore */
+	struct thread_ctx *sched_ctx;
+
 	/*
 	 * User Thread name (cloned based on process's name)
 	 * Kernel Thread name (specified by the creater)
 	 */
 	char name[THREAD_NAME_LEN];
-} __aligned(sizeof(long));
+} __aligned(sizeof(long long));
 
 #define thread_enter_critical(t) ((t)->critical++)
 #define thread_leave_critical(t) ((t)->critical--)
 #define thread_isnt_critical(t) ((t)->critical == 0)
+/*
+ * thread resource cleanup
+ * callback installation
+ */
+typedef void (*thread_cleanup_func_t) (struct thread *);
+
+/*
+ * cleanup macros, priority is down-decreased
+ */
+#define DECLARE_THREAD_CLEANUP_HIGH(fn) \
+	static __section(".thread_cleanup.high") \
+	__used thread_cleanup_func_t __cleanup_high_##fn = fn
+#define DECLARE_THREAD_CLEANUP(fn) \
+	static __section(".thread_cleanup.medium") \
+	__used thread_cleanup_func_t __cleanup_##fn = fn
+#define DECLARE_THREAD_CLEANUP_LOW(fn) \
+	static __section(".thread_cleanup.low") \
+	__used thread_cleanup_func_t __cleanup_low_##fn = fn
+
+void thread_cleanup_run(struct thread *t);
 
 /* yield the processor to other threads, accept interruptible flag */
 static inline void thread_schedule(struct thread *t, int interruptible)
@@ -135,7 +165,7 @@ static inline struct thread *thread_alloc(size_t size)
 
 	t = pages_alloc_continuous(PG_RW,
 			size >> PAGE_SHIFT);
-	if (t == NULL)
+	if (!t)
 		return NULL;
 
 	memset(t, 0, sizeof(struct thread));
@@ -155,4 +185,8 @@ static inline void thread_free(struct thread *t)
 	pages_free_continuous(t);
 }
 
+#ifdef __cplusplus
+}
 #endif
+#endif
+

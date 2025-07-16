@@ -7,6 +7,10 @@
 #ifndef _OF_H
 #define _OF_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <list.h>
 #include <kmap.h>
 #include <stdint.h>
@@ -47,29 +51,29 @@ struct device_node *of_find_compatible_node(
 	const char *compat);
 
 /*
- * match the compatible device node
+ * Find a matching compatible device node.
  */
 struct device_node *of_find_matching_node(
 	struct device_node *from,
 	const struct of_device_id *matches);
 
 /*
- * get device node of the specified phandle
+ * Get the device node for the specified phandle.
  */
 struct device_node *of_find_node_by_phandle(unsigned int phandle);
 
 /*
- * return count of u32 read on success
- * #mincnt - minium allowed count of the #propname
- * #maxcnt - maxium allowed count of the #propname
- * return -EOVERFLOW if the property elements cnt less than mincnt
- * return -EOVERFLOW if the property elements cnt big than maxcnt
+ * Return the number of u32 values read on success.
+ * #mincnt - minimum allowed count of the #propname
+ * #maxcnt - maximum allowed count of the #propname
+ * return -EOVERFLOW if the property element count is less than mincnt
+ * return -EOVERFLOW if the property element count is greater than maxcnt
  */
 int of_property_read_variable_u32_array(struct device_node *dn,
 	const char *propname, unsigned int *out, size_t mincnt, size_t maxcnt);
 
 /*
- * return count of u32 read on success
+ * Return the number of u32 values read on success.
  * #cnt - try to read at most #cnt of u32 from #propname
  */
 int __of_property_read_u32_array(struct device_node *dn,
@@ -83,7 +87,7 @@ static inline int of_property_read_u32_array(struct device_node *dn,
 {
 	int ret = -ENODATA;
 
-	if (dn == NULL)
+	if (!dn)
 		return ret;
 
 	ret = of_property_read_variable_u32_array(dn, propname, out, cnt, 0);
@@ -149,7 +153,7 @@ const void *of_get_property(const struct device_node *dn,
 unsigned long of_read_ulong(const unsigned int *cell, int nr_cells);
 
 /*
- * property exists or not.
+ * Check whether the named property exists in the node.
  */
 static inline bool of_property_read_bool(
 	const struct device_node *dn, const char *propname)
@@ -267,4 +271,7 @@ int of_node_offset_by_compatible(int offset, const char *compat);
  */
 int of_fdt_init(void);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

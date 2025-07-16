@@ -7,6 +7,10 @@
 #ifndef _IPI_H
 #define _IPI_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <unistd.h>
 #include <stddef.h>
 #include <sched.h>
@@ -44,6 +48,22 @@ void ipi_down(void);
 int ipi_call(void *func, unsigned int cpu, const void *data, size_t size);
 
 /*
+ * ipi try-call, non-blocking asynchronous mode
+ *
+ * Same as ipi_call() but returns immediately
+ * if the target ring buffer is full (no retry).
+ * Used by callers that implement their own retry logic.
+ *
+ * @func - function of callee
+ * @cpu  - send to which CPU
+ * @data - buffer sending to callee (input)
+ * @size - buffer size (Max. #IPI_MSG_MAX_SIZE)
+ *
+ * @return - 0 on success, -ENOMEM if ring full.
+ */
+int ipi_try_call(void *func, unsigned int cpu, const void *data, size_t size);
+
+/*
  * ipi call, synchronous mode
  *
  * @func - function of callee
@@ -55,4 +75,7 @@ int ipi_call(void *func, unsigned int cpu, const void *data, size_t size);
  */
 int ipi_call_sync(void *func, unsigned int cpu, void *data, size_t size);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -7,6 +7,10 @@
 #ifndef _SYS_MMAP_H
 #define _SYS_MMAP_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <list.h>
 #include <errno.h>
 #include <mmu.h>
@@ -24,6 +28,7 @@ struct vm_struct {
 	const struct vm_operations *vm_ops;
 	void *private_data;
 	int prot;
+	struct atomic_num refc;
 };
 
 struct vm_fault {
@@ -47,4 +52,7 @@ int vm_munmap(void *addr, size_t length);
 struct process;
 int vm_fault(struct process *proc, void *addr, int flags);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

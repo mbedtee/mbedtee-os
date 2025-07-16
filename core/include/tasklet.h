@@ -8,6 +8,10 @@
 #ifndef _TASKLET_H
 #define _TASKLET_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <list.h>
 #include <atomic.h>
 #include <percpu.h>
@@ -38,4 +42,7 @@ void tasklet_kill(struct tasklet *t);
 
 void tasklet_routine_init(void);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

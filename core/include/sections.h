@@ -7,6 +7,10 @@
 #ifndef _SECTIONS_H
 #define _SECTIONS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern unsigned long __CODE_START[];
 extern unsigned long __CODE_END[];
 
@@ -18,8 +22,11 @@ extern unsigned long __RODATA_END[];
 
 extern unsigned long __EHFRAME_START[];
 
-extern unsigned long __CLEANUP_START[];
-extern unsigned long __CLEANUP_END[];
+extern unsigned long __PROCESS_CLEANUP_START[];
+extern unsigned long __PROCESS_CLEANUP_END[];
+
+extern unsigned long __THREAD_CLEANUP_START[];
+extern unsigned long __THREAD_CLEANUP_END[];
 
 extern unsigned long __STR_START[];
 extern unsigned long __STR_END[];
@@ -106,12 +113,22 @@ static inline unsigned long __rodata_size(void)
 
 static inline unsigned long __cleanup_start(void)
 {
-	return (unsigned long)&__CLEANUP_START;
+	return (unsigned long)&__PROCESS_CLEANUP_START;
 }
 
 static inline unsigned long __cleanup_end(void)
 {
-	return (unsigned long)&__CLEANUP_END;
+	return (unsigned long)&__PROCESS_CLEANUP_END;
+}
+
+static inline unsigned long __thread_cleanup_start(void)
+{
+	return (unsigned long)&__THREAD_CLEANUP_START;
+}
+
+static inline unsigned long __thread_cleanup_end(void)
+{
+	return (unsigned long)&__THREAD_CLEANUP_END;
 }
 
 static inline unsigned long __str_start(void)
@@ -260,4 +277,7 @@ static inline void *__uart_init_end(void)
 }
 
 
+#ifdef __cplusplus
+}
+#endif
 #endif

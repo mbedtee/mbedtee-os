@@ -7,6 +7,10 @@
 #ifndef _FILE_H
 #define _FILE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <atomic.h>
 #include <stddef.h>
 #include <fcntl.h>
@@ -27,6 +31,8 @@ struct file_system;
  */
 struct poll_table;
 
+struct fdesc_atclose;
+
 /*
  * File context link to lower-level drivers
  */
@@ -44,7 +50,20 @@ struct file {
 	const struct file_operations *fops;
 	/* current position, FS or device driver may not use it */
 	off_t pos;
+#if defined(CONFIG_FILE_DEBUG)
+	struct list_head fnode;
+	char owner[64];
+#endif
 };
+
+/*
+ * fdesc flags
+ * FD_CLOEXEC: close-on-exec flag (POSIX standard)
+ * FD_CLOSED:  internal flag for closed fdesc  (invisible to lookup)
+ * FD_OPENING: internal flag for opening fdesc (invisible to lookup)
+ */
+#define FD_CLOSED   (1 << 30)
+#define FD_OPENING	(1 << 29)
 
 /*
  * File context link to upper-level FS
@@ -52,6 +71,8 @@ struct file {
 struct file_desc {
 	/* file descriptor */
 	int fd;
+	/* fdesc flags (e.g. FD_CLOEXEC, FD_CLOSED) */
+	int flags;
 	/* reference counter */
 	int refc;
 	/* @ which process  */
@@ -61,13 +82,13 @@ struct file_desc {
 	/* corresponding file ctx  */
 	struct file *file;
 	/* atclose callbacks */
-	struct list_head atcloses;
+	struct fdesc_atclose *atcloses;
 };
 
 struct file_path {
 	/* @ which file system */
 	struct file_system *fs;
-	/* final spath inside the 'fs' */
+	/* final path inside the 'fs' */
 	const char *path;
 };
 
@@ -97,14 +118,14 @@ struct file_operations {
 #define NUMFD_PER_POOL (512)
 
 struct fd_pool {
-	/* node @ the process's fdtab->pools or depletedpools */
+	/* node in the process's fdtab->pools or depletedpools */
 	struct rb_node node;
 	/* pool's id @ the process's fdtab->pools */
 	unsigned int id;
 	/*
-	 * to record the last allocated/freed ID,
-	 * increased 1 for next allocation
-	 **/
+	 * Record the last allocated/freed ID.
+	 * Increase it by 1 for the next allocation.
+	 */
 	unsigned short next;
 	/* number of free fds */
 	unsigned short nbits;
@@ -138,10 +159,12 @@ struct fdtab {
  * Register a function to be performed at fdesc close
  */
 struct fdesc_atclose {
-	struct list_head node;
+	struct fdesc_atclose *next;
+	struct file_desc *owner;
 	void (*atclose)(struct fdesc_atclose *fdatc);
 };
-void fdesc_register_atclose(struct file_desc *, struct fdesc_atclose *);
+void fdesc_register_atclose(struct file_desc *, struct fdesc_atclose *,
+	void (*atclose)(struct fdesc_atclose *fdatc));
 bool fdesc_unregister_atclose(struct process *, struct fdesc_atclose *);
 
 /*
@@ -154,6 +177,27 @@ int fdesc_put(struct file_desc *fdesc);
 
 int fdesc_dup(struct file *src, struct file_desc **dst);
 
+int fdesc_dup_to(struct process *proc, struct file *src, int newfd);
+
+int fdesc_dup2_to(struct process *proc, int oldfd, int newfd);
+
+int fdesc_close_to(struct process *proc, int fd);
+
+int fdesc_open_to(struct process *proc, const char *path,
+	int flags, mode_t mode, int fd);
+
+int fdesc_close_cloexec(struct process *proc);
+
+void fdesc_close_all(struct process *proc);
+
+int fdesc_alloc_pseudo(struct file_desc **ppd,
+	const struct file_operations *fops, int fflags);
+
+void fdesc_free(struct file_desc *d);
+
+int file_alloc_pseudo(struct file **ppf,
+	const struct file_operations *fops, int fflags);
+
 static inline void file_get(struct file *f)
 {
 	atomic_inc(&f->refc);
@@ -165,13 +209,19 @@ bool file_can_poll(struct file *f);
 
 ssize_t sys_read(int fd, void *buf, size_t n);
 
+ssize_t sys_pread(int fd, void *buf, size_t n, off_t offset);
+
 ssize_t sys_write(int fd, const void *buf, size_t n);
+
+ssize_t sys_pwrite(int fd, const void *buf, size_t n, off_t offset);
 
 int sys_ioctl(int fd, int cmd, unsigned long arg);
 
 off_t sys_lseek(int fd, off_t offset, int whence);
 
 int sys_fstat(int fd, struct stat *st);
+
+int sys_stat(const char *path, struct stat *st);
 
 int sys_ftruncate(int fd, off_t size);
 
@@ -187,12 +237,28 @@ int sys_mkdir(const char *path, mode_t mode);
 
 int sys_rmdir(const char *path);
 
-ssize_t sys_readdir(int fd, struct dirent *d);
-
-ssize_t sys_getdents(int fd, struct dirent *d, size_t cnt);
+ssize_t sys_readdir(int fd, struct dirent *d, size_t cnt);
 
 int sys_dup(int oldfd);
 
 int sys_dup2(int oldfd, int newfd);
 
+int sys_fcntl(int fd, int cmd, unsigned long arg);
+
+int sys_pipe(int pipefd[2]);
+
+int sys_pipe2(int pipefd[2], int flags);
+
+/*
+ * Publish the file_desc to the process's fdtab.
+ * It clears the FD_OPENING flag, making the fd visible to others.
+ */
+static inline void fdesc_publish(struct file_desc *d)
+{
+	atomic_bic((struct atomic_num *)&d->flags, FD_OPENING);
+}
+
+#ifdef __cplusplus
+}
+#endif
 #endif

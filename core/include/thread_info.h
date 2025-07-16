@@ -7,6 +7,10 @@
 #ifndef _THREAD_INFO_H
 #define _THREAD_INFO_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <cpu.h>
 #include <sys/types.h>
 
@@ -26,7 +30,7 @@ struct thread *thread_get(pid_t tid);
 void thread_put(struct thread *t);
 
 /*
- * return if the thread's stack overflow or not
+ * Return whether the thread's stack has overflowed.
  */
 bool thread_overflow(struct thread *t);
 
@@ -40,4 +44,7 @@ bool thread_overflow(struct thread *t);
  */
 #define current_id (current->id)
 
+#ifdef __cplusplus
+}
+#endif
 #endif

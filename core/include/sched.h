@@ -6,6 +6,10 @@
 #ifndef _SCHED_H
 #define _SCHED_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <ctx.h>
 #include <cpuset.h>
 #include <percpu.h>
@@ -57,6 +61,8 @@ size_t sched_sizeof(void);
  * active/online this scheduler/cpu
  */
 void sched_cpu_online(void);
+
+int sched_getcpu(void);
 
 /*
  * Set the policy and priority for the thread specified by pid
@@ -131,11 +137,6 @@ void *sched_exec(struct thread_ctx *regs);
  */
 void *sched_exec_ree(struct thread_ctx *regs);
 
-/*
- * Create client virtual thread with the specific ctx
- */
-void sched_create_ree_thread(struct thread_ctx *ctx);
-
 /* install scheduler for thread */
 int sched_install(void *t, int policy, int priority);
 
@@ -161,7 +162,7 @@ void sched_free_id(pid_t id);
  * remaining msecs if the caller has been
  * waked up before timeout elapsed.
  */
-uint64_t sched_msecs(uint64_t msecs);
+uint64_t sched_msecs(uint64_t msecs, int interruptible);
 
 /*
  * This calling thread sleeps for
@@ -172,7 +173,7 @@ uint64_t sched_msecs(uint64_t msecs);
  * remaining microseconds if the caller has been
  * waked up before timeout elapsed.
  */
-uint64_t sched_usecs(uint64_t usecs);
+uint64_t sched_usecs(uint64_t usecs, int interruptible);
 
 /*
  * This calling thread sleeps for given timespec
@@ -180,7 +181,7 @@ uint64_t sched_usecs(uint64_t usecs);
  * Returns via #time
  * time.tv_sec may be negative if the timeout elapsed
  */
-void sched_timespec(struct timespec *time);
+void sched_timespec(struct timespec *time, int interruptible);
 
 /*
  * This function starts the timeout timer,
@@ -238,8 +239,6 @@ uint64_t sched_timeout_mutex_locked
 	uint64_t usecs, int interruptible
 );
 
-void sched_client_retval(int ret);
-
 /*
  * target 'id' inherits the run-time prio of the sched entity #s.
  *
@@ -275,4 +274,7 @@ void sched_down(void);
  */
 void sched_migrating(void);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

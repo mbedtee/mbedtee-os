@@ -7,6 +7,10 @@
 #ifndef _KVMA_H
 #define _KVMA_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <vma.h>
 
 #if defined(CONFIG_MMU)
@@ -36,4 +40,7 @@ static inline void kvma_info(struct debugfs_file *d) {}
 
 #endif
 
+#ifdef __cplusplus
+}
+#endif
 #endif

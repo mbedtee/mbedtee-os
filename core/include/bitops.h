@@ -7,6 +7,10 @@
 #ifndef _BITOPS_H
 #define _BITOPS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <cpu.h>
 #include <errno.h>
 #include <string.h>
@@ -44,6 +48,9 @@ static inline int __ffsl(unsigned long x)
  */
 static inline int __ctz(unsigned int x)
 {
+	if (x == 0)
+		return BITS_PER_INT;
+
 	return __builtin_ctz(x);
 }
 
@@ -56,6 +63,9 @@ static inline int __ctz(unsigned int x)
  */
 static inline int __ctzl(unsigned long x)
 {
+	if (x == 0)
+		return BITS_PER_LONG;
+
 	return __builtin_ctzl(x);
 }
 
@@ -89,6 +99,9 @@ static inline int __ffzl(unsigned long x)
  */
 static inline int __fls(unsigned int x)
 {
+	if (x == 0)
+		return -1;
+
 	return BITS_PER_INT - 1 - __builtin_clz(x);
 }
 
@@ -100,10 +113,13 @@ static inline int __fls(unsigned int x)
  */
 static inline int __flsl(unsigned long x)
 {
+	if (x == 0)
+		return -1;
+
 	return BITS_PER_LONG - 1 - __builtin_clzl(x);
 }
 
-/* start from S bit, end at E bit (S <= x <= E) */
+/* start from S bit, end at E bit (S <= x < E) */
 #define BITMAP_MASK(S, E) (((-1UL) << (S)) & (-1UL >> (BITS_PER_LONG - (E))))
 
 #define BITMAP_LAST_WORD_MASK(nbits) (~0UL >> (-(nbits) & (BITS_PER_LONG - 1)))
@@ -115,7 +131,7 @@ static inline int __flsl(unsigned long x)
 #define DECLARE_BITMAP(name, nbits) unsigned long name[BITMAP_LONG(nbits)]
 
 /*
- * allocate a long integer array
+ * Allocate a long integer array.
  */
 static inline unsigned long *bitmap_alloc(unsigned int nbits)
 {
@@ -123,7 +139,7 @@ static inline unsigned long *bitmap_alloc(unsigned int nbits)
 }
 
 /*
- * allocate a long integer array and set all bits to zero
+ * Allocate a long integer array with all bits cleared.
  */
 static inline unsigned long *bitmap_zalloc(unsigned int nbits)
 {
@@ -158,9 +174,9 @@ static inline bool bitmap_bit_isset(const unsigned long *bmap, unsigned int idx)
 
 /*
  * Find the last set bit in a bitmap
- * the bitmap has 'nr' of long integers.
+ * The bitmap has 'nr' long integers.
 
- * return 0 ~ (number*(32 or 64) - 1) normally;
+ * Returns 0 ~ (nr*(32 or 64) - 1) normally;
  * return -1 if the input array are all zero.
  */
 static inline int bitmap_fls(const unsigned long *bmap, unsigned int nr)
@@ -183,8 +199,8 @@ unsigned int bitmap_find_next_one(const unsigned long *bmap,
 
 /*
  * Find the next set bit in a bitmap
- * the bitmap has 'nbits', #start indicates the offset.
- * #start should be always smaller than #nbits.
+ * The bitmap has 'nbits' bits; #start indicates the starting offset.
+ * #start must always be smaller than #nbits.
  *
  * return #start ~ #nbits - 1 normally (start <= ret < nbits)
  * return #nbits if the input bits between start/nbits are all zero.
@@ -206,8 +222,8 @@ static inline unsigned int bitmap_next_one(const unsigned long *bmap,
 
 /*
  * Find the next zero bit in a bitmap
- * the bitmap has 'nbits', #start indicates the offset.
- * #start should be always smaller than #nbits.
+ * The bitmap has 'nbits' bits; #start indicates the starting offset.
+ * #start must always be smaller than #nbits.
  *
  * return #start ~ #nbits - 1 normally (start <= ret < nbits)
  * return #nbits if the input bits between start/nbits are all set.
@@ -229,8 +245,8 @@ static inline unsigned int bitmap_next_zero(const unsigned long *bmap,
 
 /*
  * Find the next contiguous zero area in a bitmap
- * the bitmap has 'nbits', #start indicates the offset.
- * #nr indicates the number of zero bits looking for
+ * The bitmap has 'nbits' bits; #start indicates the starting offset.
+ * #nr indicates the number of consecutive zero bits to search for.
  *
  * return #start ~ #nbits - 1 normally (start <= ret < nbits)
  * return #nbits if no contiguous zero area found between start/nbits.
@@ -398,4 +414,7 @@ static inline void bitmap_copy(unsigned long *dst, const unsigned long *src,
 	for ((bit) = 0; (bit) = bitmap_next_one((bmap), (nbits), (bit)), \
 			(bit) < (nbits); (bit)++)
 
+#ifdef __cplusplus
+}
+#endif
 #endif

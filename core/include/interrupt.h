@@ -8,6 +8,10 @@
 #ifndef _INTERRUPT_H
 #define _INTERRUPT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <affinity.h>
 
 /*
@@ -43,11 +47,13 @@
 
 /*
  * Define the SW Generated Interrupts (Softint/SGI)
+ * Only intra-system interrupts belong here:
+ *  - RPC_CALLEE: REE->TEE doorbell (TEE receives and handles)
+ *  - IPI: TEE->TEE inter-processor interrupt
  */
-#define SOFTINT_RPC_CALLER	0 /* Current system acts as REMOTE caller */
-#define SOFTINT_RPC_CALLEE	1 /* Current system acts as REMOTE callee */
-#define SOFTINT_IPI			2 /* Current system's LOCAL inter-processor calls */
-#define SOFTINT_MAX			3
+#define SOFTINT_RPC_CALLEE	0 /* Current system acts as REMOTE callee */
+#define SOFTINT_IPI			1 /* Current system's LOCAL inter-processor calls */
+#define SOFTINT_MAX			2
 
 struct irq_controller;
 
@@ -164,7 +170,7 @@ static inline struct irq_controller *_irq_create_controller(
 	struct irq_controller *ic = NULL;
 
 	ic = __irq_create_controller(dn, nr_irqs, ops, flags);
-	if (ic == NULL)
+	if (!ic)
 		return NULL;
 
 	ic->data = data;
@@ -361,9 +367,11 @@ int softint_register(unsigned int id,
 void softint_unregister(unsigned int id);
 
 /*
- * Raise a softint on the
- * processor specified by @cpu (except RPC_CALLER)
+ * Raise a softint on the processor specified by @cpu
  */
 void softint_raise(unsigned int id, unsigned int cpu);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

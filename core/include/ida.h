@@ -7,8 +7,13 @@
 #ifndef _IDA_H
 #define _IDA_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <bitops.h>
 #include <barrier.h>
+#include <atomic.h>
 #include <spinlock.h>
 
 struct ida {
@@ -35,13 +40,16 @@ int ida_alloc_range(struct ida *ida, unsigned int start, unsigned int end);
 
 static inline bool ida_isset(struct ida *ida, unsigned int id)
 {
+	unsigned int word = 0;
+	unsigned long bits = 0;
+
 	if (id >= ida->nbits)
 		return false;
 
-	/* make sure the updates to ida->bitmap is visible */
-	smp_mb();
+	word = id >> BIT_SHIFT_PER_LONG;
+	bits = smp_load_acquire(&ida->bitmap[word]);
 
-	return bitmap_bit_isset(ida->bitmap, id);
+	return !!(bits & (1UL << (id & BIT_MASK_PER_LONG)));
 }
 
 /* allocate an unused id between which (min <= id < ida->nbits) */
@@ -56,4 +64,7 @@ static inline int ida_alloc_max(struct ida *ida, unsigned int max)
 	return ida_alloc_range(ida, 0, max);
 }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

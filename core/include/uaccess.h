@@ -7,6 +7,10 @@
 #ifndef _UACCESS_H
 #define _UACCESS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <mmu.h>
 #include <page.h>
 #include <string.h>
@@ -137,4 +141,7 @@ static inline long strncpy_from_user(char *dst,
 	return pos;
 }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

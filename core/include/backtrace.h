@@ -7,11 +7,15 @@
 #ifndef _BACKTRACE_H
 #define _BACKTRACE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <generated/autoconf.h>
 
 #define BACKTRACE_STACK_SIZE (8192)
 
-#ifdef CONFIG_BACKTRACE
+#if defined(CONFIG_BACKTRACE)
 void backtrace(void);
 const char *ksymname_of(unsigned long addr, unsigned long *offset);
 extern void __register_frame(void *framehdr);
@@ -28,4 +32,7 @@ static inline const char *ksymname_of(
 }
 #endif
 
+#ifdef __cplusplus
+}
+#endif
 #endif

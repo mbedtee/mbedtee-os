@@ -7,6 +7,10 @@
 #ifndef _AFFINITY_H
 #define _AFFINITY_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <bitops.h>
 
 struct cpu_affinity {
@@ -121,4 +125,7 @@ static inline void cpu_affinity_fill(struct cpu_affinity *dst)
 #define for_each_online_cpu(cpu)         \
 	for_each_affinity_cpu((cpu), cpus_online)
 
+#ifdef __cplusplus
+}
+#endif
 #endif
