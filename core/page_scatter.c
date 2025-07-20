@@ -18,26 +18,22 @@
  */
 struct page **pages_sc_alloc(size_t num)
 {
-	size_t i = 0;
 	struct page **pages = NULL;
 
 	if (num == 0)
 		return NULL;
 
 	pages = kcalloc(num, sizeof(struct page *));
-	if (pages == NULL)
+	if (!pages)
 		return NULL;
 
-	for (i = 0; i < num; i++) {
-		pages[i] = page_alloc();
-		if (pages[i] == NULL)
-			goto out;
-	}
+	if (pages_batch_alloc(pages, num) != 0)
+		goto out;
 
 	return pages;
 
 out:
-	pages_sc_free(pages, i);
+	kfree(pages);
 	return NULL;
 }
 
@@ -49,15 +45,14 @@ void pages_sc_free(struct page *pages[], size_t num)
 	size_t i = 0;
 	struct page *p = NULL;
 
-	if (pages == NULL)
+	if (!pages)
 		return;
 
 	for (i = 0; i < num; i++) {
 		p = pages[i];
-		if (p != NULL)
-			page_free(p);
-		else
+		if (!p)
 			break;
+		page_free(p);
 	}
 
 	kfree(pages);
@@ -73,7 +68,7 @@ int pages_sc_map(struct page *pages[], struct pt_struct *pt,
 	size_t i = 0;
 	void *va_ori = va;
 
-	if ((va == NULL) || (num == 0))
+	if (!va || num == 0)
 		return -EINVAL;
 
 	for (i = 0; i < num; i++) {
@@ -98,13 +93,13 @@ void pages_sc_unmap(struct page *pages[], struct pt_struct *pt,
 {
 	size_t i = 0;
 
-	if ((pages == NULL) || (va == NULL) || (num == 0))
+	if (!pages || !va || num == 0)
 		return;
 
-	for (i = 0; i < num; i++) {
-		page_unmap(pages[i], pt, va);
-		va += PAGE_SIZE;
-	}
+	unmap(pt, va, num << PAGE_SHIFT);
+
+	for (i = 0; i < num; i++)
+		page_put(pages[i]);
 }
 
 /*
@@ -115,30 +110,41 @@ int pages_list_alloc(
 	struct list_head *head, size_t num)
 {
 	size_t i = 0;
+	struct page **tmp = NULL;
 	struct scatter_page *sp = NULL;
 
 	if (num == 0)
 		return -EINVAL;
+
+	tmp = kcalloc(num, sizeof(struct page *));
+	if (!tmp)
+		return -ENOMEM;
+
+	if (pages_batch_alloc(tmp, num) != 0) {
+		kfree(tmp);
+		return -ENOMEM;
+	}
 
 	for (i = 0; i < num; i++) {
 		sp = kmalloc(sizeof(struct scatter_page));
 		if (!sp)
 			goto out;
 
-		sp->page = page_alloc();
-		if (!sp->page) {
-			kfree(sp);
-			goto out;
-		}
-
-		memset(page_address(sp->page), 0, PAGE_SIZE);
+		memset(page_address(tmp[i]), 0, PAGE_SIZE);
+		sp->page = tmp[i];
 		list_add_tail(&sp->node, head);
 	}
 
+	kfree(tmp);
 	return 0;
 
 out:
+	/* free scatter_page nodes already added */
 	pages_list_free(head, i);
+	/* free pages not yet assigned to a node */
+	for (; i < num; i++)
+		page_free(tmp[i]);
+	kfree(tmp);
 	return -ENOMEM;
 }
 
@@ -166,11 +172,11 @@ int pages_list_map(struct list_head *head, struct pt_struct *pt,
 		void *va, size_t num, unsigned long flags)
 {
 	int ret = -1;
-	size_t i = 0;
+	size_t i = 0, j = 0;
 	struct scatter_page *sp = NULL;
 	void *va_ori = va;
 
-	if (va == NULL || num == 0 || list_empty(head))
+	if (!va || num == 0 || list_empty(head))
 		return -EINVAL;
 
 	list_for_each_entry(sp, head, node) {
@@ -188,7 +194,12 @@ int pages_list_map(struct list_head *head, struct pt_struct *pt,
 	return 0;
 
 out:
-	pages_list_unmap(&sp->node, pt, va_ori, i);
+	unmap(pt, va_ori, i << PAGE_SHIFT);
+	list_for_each_entry(sp, head, node) {
+		if (j++ >= i)
+			break;
+		page_put(sp->page);
+	}
 	return ret;
 }
 
@@ -201,15 +212,14 @@ void pages_list_unmap(struct list_head *head, struct pt_struct *pt,
 	size_t i = 0;
 	struct scatter_page *sp = NULL;
 
-	if (va == NULL || num == 0)
+	if (!va || num == 0)
 		return;
 
-	va += num << PAGE_SHIFT;
+	unmap(pt, va, num << PAGE_SHIFT);
 
 	list_for_each_entry_reverse(sp, head, node) {
 		if (i++ >= num)
 			break;
-		va -= PAGE_SIZE;
-		page_unmap(sp->page, pt, va);
+		page_put(sp->page);
 	}
 }

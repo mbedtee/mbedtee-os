@@ -41,13 +41,14 @@ int page_pool_add(unsigned long pa, unsigned long size)
 		return -EINVAL;
 
 	pool = kzalloc(sizeof(struct page_pool));
-	if (pool == NULL)
+	if (!pool)
 		return -ENOMEM;
 
 	nr_pages = size >> PAGE_SHIFT;
 	n = roundup2pow(nr_pages);
 
-	/* | pages | mgr |
+	/*
+	 * | pages | mgr |
 	 * |   PA-RESVD  |  PA-pages-for-allocation  |
 	 */
 	pages = phys_to_virt(pa);
@@ -80,11 +81,17 @@ out:
 unsigned long page_to_phys(struct page *p)
 {
 	struct page_pool *pool = NULL;
+	size_t nr_pages = 0;
+	size_t idx = 0;
 
 	list_for_each_entry(pool, &pools, node) {
-		if (p >= pool->pages &&
-			p <= pool->pages + (pool->size >> PAGE_SHIFT) - 1)
-			return pool->pa + ((p - pool->pages) << PAGE_SHIFT);
+		nr_pages = pool->size >> PAGE_SHIFT;
+		if (p < pool->pages)
+			continue;
+
+		idx = p - pool->pages;
+		if (idx < nr_pages)
+			return pool->pa + ((unsigned long)idx << PAGE_SHIFT);
 	}
 
 	EMSG("page %p\n", p);
@@ -95,10 +102,15 @@ unsigned long page_to_phys(struct page *p)
 struct page *phys_to_page(unsigned long pa)
 {
 	struct page_pool *pool = NULL;
+	unsigned long offset = 0;
 
 	list_for_each_entry(pool, &pools, node) {
-		if (pa >= pool->pa && pa <= pool->pa + pool->size - 1)
-			return pool->pages + ((pa - pool->pa) >> PAGE_SHIFT);
+		if (pa < pool->pa)
+			continue;
+
+		offset = pa - pool->pa;
+		if (offset < pool->size)
+			return pool->pages + (offset >> PAGE_SHIFT);
 	}
 
 	EMSG("pa %lx\n", pa);
@@ -111,8 +123,23 @@ struct page *phys_to_page(unsigned long pa)
  */
 void *page_address(struct page *p)
 {
-	if (p && atomic_read(&p->refc))
+	if (p && atomic_read(&p->refc) != 0)
 		return phys_to_virt(page_to_phys(p));
+
+	return NULL;
+}
+
+static struct page_pool *find_page_pool(struct page *p)
+{
+	struct page_pool *pool = NULL;
+	struct buddy_pool *buddy = NULL;
+
+	list_for_each_entry(pool, &pools, node) {
+		buddy = &pool->buddy;
+		if ((void *)p >= buddy->start &&
+			(void *)p < buddy->start + (1ul << buddy->order))
+			return pool;
+	}
 
 	return NULL;
 }
@@ -123,7 +150,6 @@ void *page_address(struct page *p)
 size_t pages_sizeof(struct page *p)
 {
 	size_t num = 0;
-	struct buddy_pool *buddy = NULL;
 	struct page_pool *pool = NULL;
 	unsigned long flags = 0;
 
@@ -133,15 +159,11 @@ size_t pages_sizeof(struct page *p)
 
 		assert(atomic_read(&p->refc) > 0);
 
-		list_for_each_entry(pool, &pools, node) {
-			buddy = &pool->buddy;
-			if (((void *)p >= buddy->start) &&
-				((void *)p < buddy->start + (1ul << buddy->order))) {
-				spin_lock_irqsave(&pool->lock, flags);
-				num = buddy_sizeof(buddy, p) / sizeof(struct page);
-				spin_unlock_irqrestore(&pool->lock, flags);
-				break;
-			}
+		pool = find_page_pool(p);
+		if (pool) {
+			spin_lock_irqsave(&pool->lock, flags);
+			num = buddy_sizeof(&pool->buddy, p) / sizeof(struct page);
+			spin_unlock_irqrestore(&pool->lock, flags);
 		}
 	}
 
@@ -172,7 +194,7 @@ again:
 		}
 	}
 
-	if ((p == NULL) && (kmalloc_release(0) >= num))
+	if (!p && (kmalloc_release(0) >= num))
 		goto again;
 
 	return p;
@@ -183,8 +205,6 @@ again:
  */
 static void pages_free(struct page *p)
 {
-	bool found = false;
-	struct buddy_pool *buddy = NULL;
 	struct page_pool *pool = NULL;
 	unsigned long flags = 0;
 
@@ -194,21 +214,14 @@ static void pages_free(struct page *p)
 
 		assert(atomic_read(&p->refc) > 0);
 
-		list_for_each_entry(pool, &pools, node) {
-			buddy = &pool->buddy;
-			if (((void *)p >= buddy->start) &&
-				((void *)p < buddy->start + (1ul << buddy->order))) {
-				if (atomic_sub_return(&p->refc, 1) == 0) {
-					spin_lock_irqsave(&pool->lock, flags);
-					buddy_free(buddy, p);
-					spin_unlock_irqrestore(&pool->lock, flags);
-				}
-				found = true;
-				break;
-			}
-		}
+		pool = find_page_pool(p);
+		assert(pool != NULL);
 
-		assert(found);
+		if (atomic_sub_return(&p->refc, 1) == 0) {
+			spin_lock_irqsave(&pool->lock, flags);
+			buddy_free(&pool->buddy, p);
+			spin_unlock_irqrestore(&pool->lock, flags);
+		}
 	}
 }
 
@@ -218,6 +231,46 @@ static void pages_free(struct page *p)
 struct page *page_alloc(void)
 {
 	return pages_alloc(1);
+}
+
+/*
+ * allocate batch pages.
+ * reduce lock operations by trying multiple buddy allocs
+ * while holding the same pool lock.
+ */
+int pages_batch_alloc(struct page **pages, size_t num)
+{
+	int ret = -ENOMEM;
+	size_t i = 0, cnt = 0;
+	unsigned long lflags = 0;
+	struct page *p = NULL;
+	struct page_pool *pool = NULL;
+
+again:
+	list_for_each_entry(pool, &pools, node) {
+		spin_lock_irqsave(&pool->lock, lflags);
+		while (cnt < num) {
+			p = buddy_alloc(&pool->buddy, sizeof(struct page));
+			if (!p)
+				break;
+			atomic_set(&p->refc, 1);
+			pages[cnt++] = p;
+		}
+		spin_unlock_irqrestore(&pool->lock, lflags);
+
+		if (cnt == num)
+			return 0;
+	}
+
+	if ((cnt < num) && (kmalloc_release(0) >= (num - cnt)))
+		goto again;
+
+	for (i = 0; i < cnt; i++) {
+		pages_free(pages[i]);
+		pages[i] = NULL;
+	}
+
+	return ret;
 }
 
 /*
@@ -254,11 +307,11 @@ void *pages_alloc_continuous(unsigned long flags, unsigned long num)
 	void *va = NULL;
 	struct page *p = NULL;
 
-	if ((!num) || (!flags))
+	if (num == 0 || flags == 0)
 		return NULL;
 
 	p = pages_alloc(roundup2pow(num));
-	if (p == NULL)
+	if (!p)
 		return NULL;
 
 	va = phys_to_virt(page_to_phys(p));
@@ -289,7 +342,7 @@ size_t nr_free_pages(void)
 	/*
 	 * make sure the stores to "pool->buddy" is done
 	 */
-	smp_wmb();
+	smp_rmb();
 
 	list_for_each_entry(pool, &pools, node)
 		nrpages += pool->buddy.curr_size >> pool->buddy.node_order;
@@ -306,11 +359,11 @@ size_t nr_continuous_free_pages(void)
 	/*
 	 * make sure the stores to "pool->buddy" is done
 	 */
-	smp_wmb();
+	smp_rmb();
 
 	list_for_each_entry(pool, &pools, node) {
 		max = buddy_max_order(&pool->buddy);
-		if (max) {
+		if (max != 0) {
 			nrpages = 1UL << (max - pool->buddy.node_order);
 			if (nrpages > ret)
 				ret = nrpages;

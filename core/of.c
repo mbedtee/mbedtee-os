@@ -5,7 +5,7 @@
  */
 
 #include <of.h>
-#include <libfdt.h>
+#include <of_dtb.h>
 #include <driver.h>
 #include <kmalloc.h>
 #include <strmisc.h>
@@ -20,7 +20,7 @@ static struct device_node *of_alloc_root(void)
 	struct device_node *dn = NULL;
 
 	dn = kzalloc(sizeof(struct device_node));
-	if (dn == NULL)
+	if (!dn)
 		return NULL;
 
 	dn->id.name = "/";
@@ -37,15 +37,15 @@ static struct device_node *of_alloc_node(
 	struct device_node *dn = NULL;
 
 	dn = kzalloc(sizeof(struct device_node));
-	if (dn == NULL)
+	if (!dn)
 		return NULL;
 
 	dn->offset = offset;
-	dn->id.name = fdt_get_name(__dtb, offset, NULL);
-	dn->id.compat = fdt_getprop(__dtb, offset, "compatible", NULL);
+	dn->id.name = dtb_node_name(__dtb, offset, NULL);
+	dn->id.compat = dtb_get_prop(__dtb, offset, "compatible", NULL);
 	dn->parent = parent;
 
-	dn->phandle = fdt_get_phandle(__dtb, offset);
+	dn->phandle = dtb_node_phandle(__dtb, offset);
 
 	while (parent->next)
 		parent = parent->next;
@@ -55,8 +55,10 @@ static struct device_node *of_alloc_node(
 	INIT_LIST_HEAD(&dn->child);
 
 	parent = dn;
-	fdt_for_each_subnode(offset, __dtb, parent->offset) {
+	dtb_for_each_child(offset, __dtb, parent->offset) {
 		dn = of_alloc_node(parent, offset);
+		if (!dn)
+			break;
 		list_add_tail(&dn->node, &parent->child);
 	}
 
@@ -71,8 +73,10 @@ static void of_populate_nodes(void)
 	__root_dn = of_alloc_root();
 
 	/* from root */
-	fdt_for_each_subnode(offset, __dtb, 0) {
+	dtb_for_each_child(offset, __dtb, 0) {
 		dn = of_alloc_node(__root_dn, offset);
+		if (!dn)
+			break;
 		list_add_tail(&dn->node, &__root_dn->child);
 	}
 }
@@ -81,9 +85,9 @@ int of_fdt_init(void)
 {
 	void *local_dtb = NULL;
 
-#ifndef CONFIG_EMBEDDED_DTB
+#if !defined(CONFIG_EMBEDDED_DTB)
 	void *dtb_addr = phys_to_virt(CONFIG_DTB_ADDR);
-	size_t dtb_size = fdt_totalsize(dtb_addr);
+	size_t dtb_size = dtb_total_size(dtb_addr);
 
 	local_dtb = kmalloc(dtb_size);
 	if (!local_dtb)
@@ -94,8 +98,12 @@ int of_fdt_init(void)
 	local_dtb = (void *)__dtb_start();
 #endif
 
-	if (fdt_check_header(local_dtb))
+	if (dtb_check(local_dtb) != 0) {
+#if !defined(CONFIG_EMBEDDED_DTB)
+		kfree(local_dtb);
+#endif
 		return -EINVAL;
+	}
 
 	__dtb = local_dtb;
 
@@ -108,13 +116,13 @@ int of_fdt_early_init(void)
 {
 	void *local_dtb = NULL;
 
-#ifndef CONFIG_EMBEDDED_DTB
+#if !defined(CONFIG_EMBEDDED_DTB)
 	local_dtb = phys_to_virt(CONFIG_DTB_ADDR);
 #else
 	local_dtb = (void *)__dtb_start();
 #endif
 
-	if (fdt_check_header(local_dtb))
+	if (dtb_check(local_dtb) != 0)
 		return -EINVAL;
 
 	__dtb = local_dtb;
@@ -128,16 +136,16 @@ static int of_property_read_u32_array_by_offset(int offset,
 	int len, proplen = 0;
 	const unsigned int *val = NULL;
 
-	val = fdt_getprop(__dtb, offset, propname, &proplen);
+	val = dtb_get_prop(__dtb, offset, propname, &proplen);
 
-	if ((!proplen) || (!val))
+	if ((proplen == 0) || !val)
 		return -ENODATA;
 
 	len = (proplen > (sz * sizeof(unsigned int))) ?
 		(sz * sizeof(unsigned int)) : proplen;
 
-	while (len && out) {
-		*out++ = fdt32_to_cpu(*val++);
+	while (len != 0 && out) {
+		*out++ = be32_to_cpu(*val++);
 		len -= sizeof(unsigned int);
 	}
 
@@ -154,11 +162,11 @@ int of_read_property_addr_size_by_offset(int offset,
 	of_property_read_u32_array_by_offset(0, "#address-cells", &naddr, 1);
 	of_property_read_u32_array_by_offset(0, "#size-cells", &nsize, 1);
 
-	if (naddr == 0 || nsize == 0)
+	if (naddr == 0 || nsize == 0 || naddr > 4 || nsize > 4)
 		return -ENODATA;
 
-	range = fdt_getprop(__dtb, offset, name, &plen);
-	if (range == NULL)
+	range = dtb_get_prop(__dtb, offset, name, &plen);
+	if (!range)
 		return -ENODATA;
 
 	if (plen/sizeof(int) <= (size_t)(naddr + nsize) * idx)
@@ -174,7 +182,7 @@ int of_read_property_addr_size_by_offset(int offset,
 
 int of_node_offset_by_compatible(int offset, const char *compat)
 {
-	return fdt_node_offset_by_compatible(__dtb, offset, compat);
+	return dtb_find_compatible(__dtb, offset, compat);
 }
 
 int of_name_equal(struct device_node *dn, const char *name)
@@ -200,10 +208,10 @@ struct device_node *of_find_node_by_name(
 {
 	struct device_node *dn = NULL;
 
-	if (name == NULL)
+	if (!name)
 		return NULL;
 
-	dn = (from == NULL) ? __root_dn : from;
+	dn = !from ? __root_dn : from;
 
 	while ((dn = dn->next) != NULL) {
 		if (of_name_equal(dn, name))
@@ -234,10 +242,10 @@ struct device_node *of_find_compatible_node(
 {
 	struct device_node *dn = NULL;
 
-	if (compat == NULL)
+	if (!compat)
 		return NULL;
 
-	dn = (from == NULL) ? __root_dn : from;
+	dn = !from ? __root_dn : from;
 
 	while ((dn = dn->next) != NULL) {
 		if (of_compatible_equal(dn, compat))
@@ -253,10 +261,10 @@ struct device_node *of_find_matching_node(
 {
 	struct device_node *dn = NULL;
 
-	if (matches == NULL)
+	if (!matches)
 		return NULL;
 
-	dn = (from == NULL) ? __root_dn : from;
+	dn = !from ? __root_dn : from;
 
 	while ((dn = dn->next) != NULL) {
 		if (of_compatible_equal(dn, matches->compat) &&
@@ -277,9 +285,9 @@ int __of_property_read_u32_array(struct device_node *dn,
 	if (cnt == 0)
 		return 0;
 
-	val = fdt_getprop(__dtb, dn ? dn->offset : -1, propname, &proplen);
+	val = dtb_get_prop(__dtb, dn ? dn->offset : -1, propname, &proplen);
 
-	if ((!proplen) || (!val))
+	if ((proplen == 0) || !val)
 		return -ENODATA;
 
 	propcnt = proplen / sizeof(unsigned int);
@@ -287,8 +295,8 @@ int __of_property_read_u32_array(struct device_node *dn,
 	cnt = min(propcnt, cnt);
 
 	ret = cnt;
-	while (cnt) {
-		*out++ = fdt32_to_cpu(*val++);
+	while (cnt != 0) {
+		*out++ = be32_to_cpu(*val++);
 		cnt--;
 	}
 
@@ -302,16 +310,16 @@ int of_property_read_variable_u32_array(struct device_node *dn,
 	int proplen = 0, cnt = 0, ret = 0;
 	const unsigned int *val = NULL;
 
-	val = fdt_getprop(__dtb, dn ? dn->offset : -1, propname, &proplen);
+	val = dtb_get_prop(__dtb, dn ? dn->offset : -1, propname, &proplen);
 
-	if ((!proplen) || (!val))
+	if ((proplen == 0) || !val)
 		return -ENODATA;
 
 	cnt = proplen / sizeof(unsigned int);
 
 	if (cnt < mincnt)
 		return -EOVERFLOW;
-	if (maxcnt && (cnt > maxcnt))
+	if (maxcnt != 0 && (cnt > maxcnt))
 		return -EOVERFLOW;
 
 	/* if maxcnt is zero, just read mincnt */
@@ -319,8 +327,8 @@ int of_property_read_variable_u32_array(struct device_node *dn,
 		cnt = mincnt;
 
 	ret = cnt;
-	while (cnt) {
-		*out++ = fdt32_to_cpu(*val++);
+	while (cnt != 0) {
+		*out++ = be32_to_cpu(*val++);
 		cnt--;
 	}
 
@@ -333,11 +341,11 @@ int of_property_count_elems_of_size(const struct device_node *dn,
 {
 	int proplen = 0;
 
-	const int *val = fdt_getprop_namelen(__dtb,
+	const int *val = dtb_get_prop_len(__dtb,
 			dn ? dn->offset : -1, propname,
 			strlen(propname), &proplen);
 
-	if ((!proplen) || (!val))
+	if ((proplen == 0) || !val)
 		return -ENODATA;
 
 	return (proplen / elem_size);
@@ -351,7 +359,7 @@ int of_n_addr_cells(struct device_node *dn)
 		if (dn->parent)
 			dn = dn->parent;
 
-		if (!of_property_read_u32(dn, "#address-cells", &naddr))
+		if (of_property_read_u32(dn, "#address-cells", &naddr) == 0)
 			break;
 	} while (dn->parent);
 
@@ -366,7 +374,7 @@ int of_n_size_cells(struct device_node *dn)
 		if (dn->parent)
 			dn = dn->parent;
 
-		if (!of_property_read_u32(dn, "#size-cells", &nsize))
+		if (of_property_read_u32(dn, "#size-cells", &nsize) == 0)
 			break;
 	} while (dn->parent);
 
@@ -376,7 +384,7 @@ int of_n_size_cells(struct device_node *dn)
 const void *of_get_property(const struct device_node *dn,
 	const char *name, int *lenp)
 {
-	return fdt_getprop_namelen(__dtb, dn->offset,
+	return dtb_get_prop_len(__dtb, dn->offset,
 			name, strlen(name), lenp);
 }
 
@@ -385,7 +393,7 @@ unsigned long of_read_ulong(const unsigned int *cells, int nr_cells)
 	unsigned long long r = 0;
 
 	for (; nr_cells--; cells++)
-		r = (r << 32) | fdt32_to_cpu(*cells);
+		r = (r << 32) | be32_to_cpu(*cells);
 
 	return r;
 }
@@ -400,7 +408,7 @@ int of_read_property_addr_size(struct device_node *dn, const char *name,
 	nsize = of_n_size_cells(dn);
 
 	range = of_get_property(dn, name, &plen);
-	if (range == NULL)
+	if (!range)
 		return -ENODATA;
 
 	if (plen / sizeof(int) <= (size_t)(naddr + nsize) * idx)
@@ -431,7 +439,7 @@ int of_n_interrupt_cells(struct device_node *dn)
 	do {
 		dn = of_irq_find_parent(dn);
 
-		if (!of_property_read_u32(dn, "#interrupt-cells", &nsize))
+		if (of_property_read_u32(dn, "#interrupt-cells", &nsize) == 0)
 			break;
 	} while (dn);
 
@@ -449,13 +457,13 @@ int of_irq_parse_one(struct device_node *dn, int idx,
 	int nsize = 0, plen = 0;
 	const unsigned int *range = NULL;
 
-	if (dn == NULL)
+	if (!dn)
 		return -ENODATA;
 
 	nsize = of_n_interrupt_cells(dn);
 
 	range = of_get_property(dn, "interrupts", &plen);
-	if (range == NULL)
+	if (!range)
 		return -ENODATA;
 
 	if (plen / sizeof(int) <= (size_t)nsize * idx)
@@ -463,10 +471,10 @@ int of_irq_parse_one(struct device_node *dn, int idx,
 
 	range += nsize * idx;
 
-	*hwriq = fdt32_to_cpu(*range++);
+	*hwriq = be32_to_cpu(*range++);
 
 	if (type && (nsize == 2))
-		*type = fdt32_to_cpu(*range);
+		*type = be32_to_cpu(*range);
 
 	return 0;
 }

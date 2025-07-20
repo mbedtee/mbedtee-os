@@ -9,12 +9,16 @@
 #include <errno.h>
 #include <thread.h>
 
-static int pages_map(struct page *p, struct pt_struct *pt,
-	void *va, unsigned long nr, unsigned long flags)
+/*
+ * map one page to va
+ * get this page
+ */
+int page_map(struct page *p, struct pt_struct *pt,
+	void *va, unsigned long flags)
 {
 	int ret = -ENOMEM;
 
-	if ((!p) || (!pt) || (!va))
+	if (!p || !pt || !va)
 		return -EINVAL;
 
 	if ((unsigned long)va & (~PAGE_MASK))
@@ -22,7 +26,7 @@ static int pages_map(struct page *p, struct pt_struct *pt,
 
 	page_get(p);
 
-	ret = map(pt, page_to_phys(p), va, nr << PAGE_SHIFT, flags);
+	ret = map(pt, page_to_phys(p), va, PAGE_SIZE, flags);
 	if (ret != 0) {
 		DMSG("map %p@%p error %d\n", p, va, ret);
 		page_put(p);
@@ -32,36 +36,19 @@ static int pages_map(struct page *p, struct pt_struct *pt,
 }
 
 /*
- * map one page to va
- * get this page
+ * unmap one page from va
+ * put this page
  */
-int page_map(struct page *p, struct pt_struct *pt,
-	void *va, unsigned long flags)
+void page_unmap(struct page *p, struct pt_struct *pt, void *va)
 {
-	return pages_map(p, pt, va, 1, flags);
-}
-
-static void pages_unmap(struct page *p, struct pt_struct *pt,
-	void *va, unsigned long nr)
-{
-	if ((!p) || (!va) || (!nr))
+	if (!p || !va)
 		return;
 
 	if ((unsigned long)va & (~PAGE_MASK))
 		return;
 
-	unmap(pt, va, nr << PAGE_SHIFT);
-
+	unmap(pt, va, PAGE_SIZE);
 	page_put(p);
-}
-
-/*
- * unmap one page to va
- * put this page
- */
-void page_unmap(struct page *p, struct pt_struct *pt, void *va)
-{
-	pages_unmap(p, pt, va, 1);
 }
 
 int pin_user_pages(unsigned long start, int nr, struct page **pages)

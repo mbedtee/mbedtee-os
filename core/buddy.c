@@ -9,7 +9,6 @@
 #include <buddy.h>
 #include <kmath.h>
 #include <errno.h>
-#include <trace.h>
 
 #define lchild_of(x) ((((x) + 1) << 1) - 1)
 #define rchild_of(x) (((x) + 1) << 1)
@@ -28,7 +27,7 @@ int buddy_init(struct buddy_pool *buddy,
 		return -EINVAL;
 	}
 
-	if (size % node_size) {
+	if (size % node_size != 0) {
 		EMSG("size isn't aligned\n");
 		return -EINVAL;
 	}
@@ -74,7 +73,7 @@ int buddy_init_ex(struct buddy_pool *buddy,
 
 	ret = buddy_init(buddy, start - unaligned_size, pool_size,
 				start, node_size);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	buddy_reserve(buddy, unaligned_size + mgr_size);
@@ -114,7 +113,7 @@ void *buddy_alloc_order(struct buddy_pool *buddy,
 	buddy->manager[i].order = 0;
 	buddy->curr_size -= (1UL << order);
 
-	while (i) {
+	while (i != 0) {
 		i = parent_of(i);
 		lchild_order = buddy->manager[lchild_of(i)].order;
 		rchild_order = buddy->manager[rchild_of(i)].order;
@@ -141,7 +140,7 @@ size_t buddy_sizeof(struct buddy_pool *buddy,
 	/* start from the youngest child */
 	order = buddy->node_order;
 	i = ((offset + (1UL << buddy->order)) >> order) - 1;
-	while (i && buddy->manager[i].order) {
+	while (i != 0 && buddy->manager[i].order != 0) {
 		order++;
 		i = parent_of(i);
 	}
@@ -169,7 +168,7 @@ size_t buddy_free(struct buddy_pool *buddy,
 	/* start from the youngest child */
 	order = buddy->node_order;
 	i = ((offset + (1UL << buddy->order)) >> order) - 1;
-	while (i && buddy->manager[i].order) {
+	while (i != 0 && buddy->manager[i].order != 0) {
 		order++;
 		i = parent_of(i);
 	}
@@ -182,7 +181,7 @@ size_t buddy_free(struct buddy_pool *buddy,
 	buddy->curr_size += freedsize;
 
 	/* resume the parents */
-	while (i) {
+	while (i != 0) {
 		i = parent_of(i);
 		lchild_order = buddy->manager[lchild_of(i)].order;
 		rchild_order = buddy->manager[rchild_of(i)].order;
@@ -202,7 +201,7 @@ void buddy_reserve(struct buddy_pool *buddy, size_t size)
 	size = roundup(size, (size_t)1 << node_order);
 
 	while (order >= node_order) {
-		if (size & (1UL << order))
+		if ((size & (1UL << order)) != 0)
 			buddy_alloc_order(buddy, order);
 		order--;
 	}

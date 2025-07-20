@@ -46,13 +46,9 @@
 
 struct vma_pool {
 	struct rb_node node;
-#ifdef PREFER_SPEED_OVER_SIZE
 	struct rb_node addrnode;
-#endif
 	struct buddy_pool buddy;
 };
-
-#ifdef PREFER_SPEED_OVER_SIZE
 
 static void vma_rbadd_addr(struct vma_pool *p,
 	struct rb_node **root)
@@ -100,24 +96,6 @@ static struct vma_pool *vma_rbfind(struct vma *vm,
 	return NULL;
 }
 
-#else
-
-static struct vma_pool *vma_rbfind(struct vma *vm,
-	const void *va, unsigned int level)
-{
-	struct rb_node *n = vm->rbroot[level];
-	struct vma_pool *pool = NULL;
-
-	rb_for_each_entry(pool, n, node) {
-		if (va_match_buddy(va, &pool->buddy))
-			return pool;
-	}
-
-	return NULL;
-}
-
-#endif
-
 static void *vma_find_top_space
 (
 	struct vma *vm, int level
@@ -155,42 +133,36 @@ static void vma_rbadd(struct vma_pool *p,
 	rb_insert(&p->node, root);
 }
 
-static inline void vma_rbtree_sort_dec(struct vma_pool *p,
-	struct rb_node **root)
+static inline void vma_rbtree_resort(struct vma_pool *p,
+	unsigned int old_max_order, struct rb_node **root)
 {
-	struct vma_pool *prev = NULL;
-	struct rb_node *n = rb_prev(&p->node);
+	unsigned int new_max_order = buddy_max_order(&p->buddy);
+	struct rb_node *n = NULL;
 
-	if (n) {
-		prev = rb_entry_of(n, struct vma_pool, node);
-		if (buddy_max_order(&p->buddy) < buddy_max_order(&prev->buddy)) {
+	if (new_max_order > old_max_order) {
+		n = rb_next(&p->node);
+		if (n && new_max_order > buddy_max_order(
+				&rb_entry_of(n, struct vma_pool, node)->buddy)) {
+			rb_del(&p->node, root);
+			vma_rbadd(p, root, NULL);
+		}
+	} else if (new_max_order < old_max_order) {
+		n = rb_prev(&p->node);
+		if (n && new_max_order < buddy_max_order(
+				&rb_entry_of(n, struct vma_pool, node)->buddy)) {
 			rb_del(&p->node, root);
 			vma_rbadd(p, root, NULL);
 		}
 	}
 }
 
-static inline void vma_rbtree_sort_inc(struct vma_pool *p,
-	struct rb_node **root)
-{
-	struct vma_pool *nxt = NULL;
-	struct rb_node *n = rb_next(&p->node);
-
-	if (n) {
-		nxt = rb_entry_of(n, struct vma_pool, node);
-		if (buddy_max_order(&p->buddy) > buddy_max_order(&nxt->buddy)) {
-			rb_del(&p->node, root);
-			vma_rbadd(p, root, NULL);
-		}
-	}
-}
 static struct vma_pool *vma_pool_add
 (
 	struct vma *vm, unsigned int level
 )
 {
 	void *mgr = NULL;
-	void *pool_start = 0;
+	void *pool_start = NULL;
 	struct vma_pool *pool = NULL;
 	struct rb_node *n = NULL, *match = NULL;
 	unsigned int pool_order = vm->node_order + ((level + 1) * 7);
@@ -216,9 +188,12 @@ again:
 		}
 
 		if (match) {
+			unsigned int old_order = 0;
+
 			pool = rb_entry_of(match, struct vma_pool, node);
+			old_order = buddy_max_order(&pool->buddy);
 			pool_start = buddy_alloc_order(&pool->buddy, pool_order);
-			vma_rbtree_sort_dec(pool, &vm->rbroot[level + 1]);
+			vma_rbtree_resort(pool, old_order, &vm->rbroot[level + 1]);
 		} else {
 			pool = vma_pool_add(vm, level + 1);
 			if (pool)
@@ -226,27 +201,35 @@ again:
 		}
 	}
 
-	if (pool_start == NULL)
+	if (!pool_start)
 		return NULL;
 
 	pool = kmalloc(sizeof(struct vma_pool));
-	if (pool == NULL)
-		return NULL;
+	if (!pool)
+		goto err;
 
 	mgr = kmalloc(buddy_order_mgs(pool_order, node_order));
-	if (mgr == NULL)
+	if (!mgr)
 		goto err;
 
 	buddy_init(&pool->buddy, pool_start,
 		1UL << pool_order, mgr, 1UL << node_order);
 
 	vma_rbadd(pool, &vm->rbroot[level], rb_last(vm->rbroot[level]));
-#ifdef PREFER_SPEED_OVER_SIZE
 	vma_rbadd_addr(pool, &vm->rbroota[level]);
-#endif
 	return pool;
 
 err:
+	/* return the pool_start to upper level buddy */
+	if (match) {
+		struct vma_pool *parent = rb_entry_of(match, struct vma_pool, node);
+
+		unsigned int old_order = buddy_max_order(&parent->buddy);
+
+		buddy_free(&parent->buddy, pool_start);
+		vma_rbtree_resort(parent, old_order, &vm->rbroot[level + 1]);
+	}
+	kfree(mgr);
 	kfree(pool);
 	return NULL;
 }
@@ -257,9 +240,7 @@ static void vma_pool_remove(struct vma *vm,
 	vm->last = NULL;
 
 	rb_del(&pool->node, &vm->rbroot[level]);
-#ifdef PREFER_SPEED_OVER_SIZE
 	rb_del(&pool->addrnode, &vm->rbroota[level]);
-#endif
 	kfree(pool->buddy.manager);
 	kfree(pool);
 }
@@ -271,7 +252,7 @@ struct vma *vma_create
 {
 	struct vma *vm = NULL;
 
-	if ((!start) || (!size))
+	if (start == 0 || size == 0)
 		return NULL;
 
 	if (!is_pow2(size) || !is_pow2(node_size)) {
@@ -279,7 +260,7 @@ struct vma *vma_create
 		return NULL;
 	}
 
-	if (start % node_size) {
+	if (start % node_size != 0) {
 		EMSG("start/pool_size isn't aligned\n");
 		return NULL;
 	}
@@ -323,11 +304,11 @@ void *vma_alloc(struct vma *vm, size_t size)
 	struct vma_pool *pool = NULL;
 	struct rb_node *n = NULL, *match = NULL;
 
-	if (!vm || !size)
+	if (!vm || size == 0)
 		return NULL;
 
 	size = roundup2pow(size);
-	order = log2of(size);
+	order = max(log2of(size), (unsigned int)vm->node_order);
 
 	if (order > vm->size_order)
 		return NULL;
@@ -359,8 +340,10 @@ void *vma_alloc(struct vma *vm, size_t size)
 
 again:
 	if (pool) {
+		unsigned int old_order = buddy_max_order(&pool->buddy);
+
 		va = buddy_alloc_order(&pool->buddy, order);
-		vma_rbtree_sort_dec(pool, &vm->rbroot[level]);
+		vma_rbtree_resort(pool, old_order, &vm->rbroot[level]);
 	} else {
 		pool = vma_pool_add(vm, level);
 		if (pool)
@@ -373,7 +356,8 @@ again:
 
 void vma_free(struct vma *vm, void *va)
 {
-	unsigned int freed = false, i = 0;
+	bool freed = false;
+	unsigned int i = 0;
 	unsigned long flags = 0;
 	struct vma_pool *pool = NULL;
 	struct buddy_pool *buddy = NULL;
@@ -385,7 +369,10 @@ void vma_free(struct vma *vm, void *va)
 
 	pool = vm->last;
 	if (pool && va_match_buddy(va, &pool->buddy)) {
+		unsigned int old_order = 0;
+
 		buddy = &pool->buddy;
+		old_order = buddy_max_order(buddy);
 		buddy_free(buddy, va);
 		freed = true;
 
@@ -395,7 +382,7 @@ void vma_free(struct vma *vm, void *va)
 			vma_pool_remove(vm, pool, i);
 			i += 1;
 		} else {
-			vma_rbtree_sort_inc(pool, &vm->rbroot[i]);
+			vma_rbtree_resort(pool, old_order, &vm->rbroot[i]);
 			i = -1;
 		}
 	}
@@ -403,7 +390,10 @@ void vma_free(struct vma *vm, void *va)
 	for (; i < ARRAY_SIZE(vm->rbroot); i++) {
 		pool = vma_rbfind(vm, va, i);
 		if (pool) {
+			unsigned int old_order = 0;
+
 			buddy = &pool->buddy;
+			old_order = buddy_max_order(buddy);
 			buddy_free(buddy, va);
 			freed = true;
 
@@ -414,7 +404,7 @@ void vma_free(struct vma *vm, void *va)
 				va = buddy->start; /* need to remove upper level ? */
 				vma_pool_remove(vm, pool, i);
 			} else {
-				vma_rbtree_sort_inc(pool, &vm->rbroot[i]);
+				vma_rbtree_resort(pool, old_order, &vm->rbroot[i]);
 				break;
 			}
 		}
@@ -458,6 +448,8 @@ void vma_info(struct debugfs_file *d, struct vma *vm)
 	int i = 0;
 	unsigned long flags = 0;
 	struct vma_pool *pool = NULL;
+
+	BUILD_ERROR_ON(ARRAY_SIZE(vm->rbroot) != 4);
 
 	spin_lock_irqsave(&vm->lock, flags);
 

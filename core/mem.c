@@ -25,6 +25,7 @@ static const char * const memtypes[] = {
 };
 
 size_t mem_size;
+unsigned long mem_base;
 
 static inline int __init mem_mapping(void)
 {
@@ -65,12 +66,12 @@ static inline int __init mem_mapping(void)
 	 *
 	 */
 	for_each_matching_addr_size("memory", "mapping", addr, size) {
-		if (!size)
+		if (size == 0)
 			continue;
 
 		if (addr <= PA_OFFSET) {
 			/* map the gap @ header */
-			while ((addr < PA_OFFSET) && !ret && size) {
+			while ((addr < PA_OFFSET) && ret == 0 && size != 0) {
 				nrbytes = min((size_t)(block_size - (addr & block_mask)), size);
 				nrbytes = min(nrbytes, (size_t)(PA_OFFSET - addr));
 				ret |= map(pt, addr, phys_to_virt(addr), nrbytes, PG_RW);
@@ -84,14 +85,14 @@ static inline int __init mem_mapping(void)
 			/* map the .data / .bss and all others */
 			addr = virt_to_phys(__data_start());
 			size -= addr - PA_OFFSET;
-			while (size && !ret) {
+			while (size != 0 && ret == 0) {
 				nrbytes = min((size_t)(block_size - (addr & block_mask)), size);
 				ret |= map(pt, addr, phys_to_virt(addr), nrbytes, PG_RW);
 				addr += nrbytes;
 				size -= nrbytes;
 			}
 		} else {
-			while (size && !ret) {
+			while (size != 0 && ret == 0) {
 				nrbytes = min((size_t)(block_size - (addr & block_mask)), size);
 				ret |= map(pt, addr, phys_to_virt(addr), nrbytes, PG_RW);
 				addr += nrbytes;
@@ -105,7 +106,7 @@ static inline int __init mem_mapping(void)
 	size = __code_end() - addr;
 	if (!access_kern_ok((void *)addr, size, PG_RW)) {
 		addr = virt_to_phys(addr);
-		while (size) {
+		while (size != 0) {
 			nrbytes = min((size_t)(block_size - (addr & block_mask)), size);
 			map(pt, addr, phys_to_virt(addr), nrbytes, PG_RW);
 			addr += nrbytes;
@@ -165,7 +166,7 @@ void __init mem_info(void)
 {
 	struct mem_region *m = mems;
 
-	while (m != NULL) {
+	while (m) {
 		IMSG("%s: Start = 0x%lx, Size = 0x%lx\n",
 			memtypes[m->type], m->start, m->size);
 		m = m->next;
@@ -203,7 +204,7 @@ int mem_register(int type, unsigned long pa, size_t size)
 
 	m = kmalloc(sizeof(struct mem_region));
 
-	assert(m != NULL);
+	assert(m);
 
 	m->start = pa;
 	m->size = size;
@@ -216,10 +217,10 @@ int mem_register(int type, unsigned long pa, size_t size)
 
 	n = mems;
 
-	if (n == NULL)
+	if (!n) {
 		mems = m;
-	else {
-		while (n->next != NULL)
+	} else {
+		while (n->next)
 			n = n->next;
 		n->next = m;
 	}
@@ -243,8 +244,11 @@ int __init mem_early_init(void)
 	size_t size = 0, type = 0;
 
 	of_for_each_matching_addr_size("memory", "reg", start, size) {
-		if (!size)
+		if (size == 0)
 			continue;
+
+		if (mem_size == 0)
+			mem_base = start;
 
 		mem_size += size;
 
@@ -253,17 +257,13 @@ int __init mem_early_init(void)
 		/* entirely not overlap with code */
 		if ((end < code_start) || (start > code_end)) {
 			type = MEM_TYPE_HEAP;
-
-#if defined(CONFIG_MMU)
-			ret |= map_early(start, size, PG_RW);
-#endif
+			if (IS_ENABLED(CONFIG_MMU))
+				ret |= map_early(start, size, PG_RW);
 			ret |= page_pool_add(start, size);
 		} else {
 			type = MEM_TYPE_COMBO;
-
-#if defined(CONFIG_MMU)
-			ret |= map_early(start, size, PG_RW | PG_EXEC);
-#endif
+			if (IS_ENABLED(CONFIG_MMU))
+				ret |= map_early(start, size, PG_RW | PG_EXEC);
 
 			/* partially overlap with code ? */
 			if (code_end < end)
@@ -320,7 +320,7 @@ int mem_in_secure(unsigned long pa)
 {
 	struct mem_region *m = mems;
 
-	while (m != NULL) {
+	while (m) {
 		if (pa >= m->start &&
 			pa <= m->start + m->size - 1)
 			return true;
@@ -344,7 +344,7 @@ int mem_overlap_secure(unsigned long pa, size_t size)
 	if (end < pa)
 		return true;
 
-	while (m != NULL) {
+	while (m) {
 		if (pa < m->start &&
 			end >= m->start + m->size - 1)
 			return true;
