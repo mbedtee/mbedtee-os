@@ -11,15 +11,13 @@
 #include <thread.h>
 #include <lockdep.h>
 #include <interrupt.h>
-#include <semaphore.h>
+#include <ksemaphore.h>
 
 static inline void __set_owner(struct thread *t,
 	struct semaphore *s)
 {
-	s->owner_id = t->id;
-
-	/* make sure the owner_id update is visible to others */
-	smp_mb();
+	/* Publish owner_id after prior semaphore state updates. */
+	smp_store_mb(&s->owner_id, t->id);
 }
 
 static inline void __clear_owner(struct semaphore *s)
@@ -29,7 +27,7 @@ static inline void __clear_owner(struct semaphore *s)
 
 void sema_init(struct semaphore *s, unsigned int limit)
 {
-	if ((!s) || (limit == 0))
+	if (!s || limit == 0)
 		return;
 
 	s->limit = limit;
@@ -44,16 +42,16 @@ void down(struct semaphore *s)
 	unsigned long flags = 0;
 	struct thread *t = current;
 
-	if (s == NULL)
+	if (!s)
 		return;
 
 	spin_lock_irqsave(&s->slock, flags);
 
 	do {
-		if (!atomic_read_x(&s->lock.val)) {
+		if (smp_load_acquire(&s->lock.val) == 0) {
 			spin_unlock(&s->slock);
 			sched_inherit_prio(t->sched, s->owner_id);
-			wait(&s->wq);
+			wait_event(&s->wq, smp_load_acquire(&s->lock.val) > 0);
 			spin_lock(&s->slock);
 		}
 	} while (arch_semaphore_acquire(&s->lock));
@@ -63,12 +61,44 @@ void down(struct semaphore *s)
 	spin_unlock_irqrestore(&s->slock, flags);
 }
 
+int down_interruptible(struct semaphore *s)
+{
+	unsigned long flags = 0;
+	long wret = 0;
+	struct thread *t = current;
+
+	if (!s)
+		return -EINVAL;
+
+	spin_lock_irqsave(&s->slock, flags);
+
+	do {
+		if (smp_load_acquire(&s->lock.val) == 0) {
+			spin_unlock(&s->slock);
+			sched_inherit_prio(t->sched, s->owner_id);
+			wret = wait_event_interruptible(&s->wq,
+				smp_load_acquire(&s->lock.val) > 0);
+			spin_lock(&s->slock);
+
+			if (wret == -EINTR && smp_load_acquire(&s->lock.val) == 0) {
+				spin_unlock_irqrestore(&s->slock, flags);
+				return -EINTR;
+			}
+		}
+	} while (arch_semaphore_acquire(&s->lock));
+
+	__set_owner(t, s);
+
+	spin_unlock_irqrestore(&s->slock, flags);
+	return 0;
+}
+
 void up(struct semaphore *s)
 {
 	unsigned long flags = 0;
 	pid_t owner = 0;
 
-	if (s == NULL)
+	if (!s)
 		return;
 
 	spin_lock_irqsave(&s->slock, flags);
@@ -96,7 +126,8 @@ void up(struct semaphore *s)
  */
 int down_trylock(struct semaphore *s)
 {
-	unsigned long flags = 0, ret = 0;
+	unsigned long flags = 0;
+	int ret = 1;
 	struct thread *t = current;
 
 	if (!s)
@@ -104,12 +135,10 @@ int down_trylock(struct semaphore *s)
 
 	spin_lock_irqsave(&s->slock, flags);
 
-	if (!atomic_read_x(&s->lock.val))
-		ret = true;
-
-	if (likely(arch_semaphore_acquire(&s->lock) == 0)) {
+	if (smp_load_acquire(&s->lock.val) != 0 &&
+		likely(arch_semaphore_acquire(&s->lock) == 0)) {
 		__set_owner(t, s);
-		ret = false;
+		ret = 0;
 	}
 
 	spin_unlock_irqrestore(&s->slock, flags);

@@ -14,19 +14,40 @@
 /*
  * This function sleeps for given number of milliseconds
  *
- * return the remain msecs.
+ * Returns the remaining milliseconds.
  */
 long msleep(unsigned long msecs)
 {
-	return sched_msecs(msecs);
+	return sched_msecs(msecs, false);
 }
 
 /*
  * This function sleeps for given number of microseconds
  *
- * return the remain usecs.
+ * Returns the remaining microseconds.
  */
 int usleep(useconds_t usecs)
 {
-	return sched_usecs(usecs);
+	return sched_usecs(usecs, false);
 }
+
+/*
+ * This function sleeps for given number of milliseconds
+ *
+ * Returns the remaining milliseconds.
+ */
+long msleep_interruptible(unsigned long msecs)
+{
+	return sched_msecs(msecs, true);
+}
+
+/*
+ * This function sleeps for given number of microseconds
+ *
+ * Returns the remaining microseconds.
+ */
+int usleep_interruptible(useconds_t usecs)
+{
+	return sched_usecs(usecs, true);
+}
+

@@ -31,6 +31,27 @@
 #define MQ_MSGMAX			(32768)
 #define MQ_MSGSIZEMAX		(1048576)
 
+#define MSGQ_FS_MOUNT "/msgq"
+
+static int msgq_path_of(char *out, size_t outlen, const char *name)
+{
+	const char *p = name;
+
+	if (!out || outlen == 0 || !name)
+		return -EINVAL;
+
+	/* glibc/Linux convention: syscall passes name without leading '/' */
+	if (*p == 0)
+		return -EINVAL;
+	if (*p == '/' || strchr(p, '/'))
+		return -EINVAL;
+
+	if (snprintf(out, outlen, "%s/%s", MSGQ_FS_MOUNT, p) >= (int)outlen)
+		return -ENAMETOOLONG;
+
+	return 0;
+}
+
 static const struct file_operations msgq_fops;
 
 struct msgq_fnode {
@@ -44,6 +65,7 @@ struct msgq_fnode {
 	pthread_attr_t evpattr;
 	pid_t evppid;
 	bool evpset;
+	int evp_err;
 };
 
 #define msgq_fnode_of(n) container_of(n, struct msgq_fnode, node)
@@ -52,7 +74,7 @@ struct msg_block {
 	struct msg_block *next;
 };
 
-struct msg  {
+struct msg {
 	struct list_head node;
 	struct msg_block *blks;
 	size_t size;
@@ -62,9 +84,8 @@ struct msg  {
 struct msgq_fd {
 	struct list_head node;
 	struct file *file;
+	pid_t owner_pid;
 };
-
-static void msgq_free_msg(struct msg *m);
 
 static int msgq_close(struct file *f)
 {
@@ -81,41 +102,12 @@ static int msgq_close(struct file *f)
 static int msgq_unlink(struct file_system *pfs, const char *path)
 {
 	int ret = -1;
-	struct tfs_node *n = NULL;
 	struct tfs *fs = pfs->priv;
 
-	if (!path)
-		return -EINVAL;
-
 	tfs_lock(fs);
-
-	n = tfs_get_node(fs, path);
-	if (n == NULL) {
-		ret = -ENOENT;
-		goto out;
-	}
-
-	if (n->attr & TFS_ATTR_DIR) {
-		ret = -EISDIR;
-		goto out;
-	}
-
-	if (fspath_isdir(path)) {
-		ret = -ENOTDIR;
-		goto out;
-	}
-
-	ret = tfs_security_check(fs, n);
-	if (ret != 0)
-		goto out;
-
-	list_del(&n->node);
-
-	tfs_put_node(fs, n);
-
-out:
-	tfs_put_node(fs, n);
+	ret = tfs_unlink(fs, path);
 	tfs_unlock(fs);
+
 	return ret;
 }
 
@@ -123,7 +115,7 @@ static struct tfs_node *msgq_alloc_node(struct tfs *fs)
 {
 	struct msgq_fnode *msgn = kzalloc(sizeof(*msgn));
 
-	if (msgn == NULL)
+	if (!msgn)
 		return NULL;
 
 	INIT_LIST_HEAD(&msgn->msgs);
@@ -132,6 +124,22 @@ static struct tfs_node *msgq_alloc_node(struct tfs *fs)
 	waitqueue_init(&msgn->wq_wr);
 
 	return &msgn->node;
+}
+
+static void msgq_free_msg(struct msg *m)
+{
+	struct msg_block *mb = NULL, *next = NULL;
+
+	if (m) {
+		mb = m->blks;
+		kfree(m);
+
+		while (mb) {
+			next = mb->next;
+			kfree(mb);
+			mb = next;
+		}
+	}
 }
 
 static void msgq_free_node(struct tfs_node *n)
@@ -212,8 +220,6 @@ static int msgq_do_create(struct tfs *fs,
 	if (ret != 0)
 		return ret;
 
-	(*n)->refc++;
-
 	return ret;
 }
 
@@ -238,13 +244,14 @@ static int msgq_open(struct file *f,
 
 	n = tfs_get_node(fs, f->path);
 
-	if (n != NULL) {
+	if (n) {
 		ret = msgq_do_open(fs, n, isdir, f);
 		if (ret != 0) {
 			tfs_put_node(fs, n);
 			goto out;
 		}
 	} else {
+		/* refc is 1 after creation */
 		ret = msgq_do_create(fs, &n, isdir, f, mode);
 		if (ret != 0)
 			goto out;
@@ -257,6 +264,9 @@ static int msgq_open(struct file *f,
 			msgn->attr.mq_maxmsg = MQ_DFT_MSGMAX;
 			msgn->attr.mq_msgsize = MQ_DFT_MSGSIZEMAX;
 		}
+
+		/* increase refc for open */
+		n->refc++;
 	}
 
 	f->priv = n;
@@ -270,14 +280,35 @@ out:
 mqd_t mq_open(const char *name, int oflag, ...)
 {
 	int ret = -1;
+	mode_t mode = 0;
+	struct mq_attr *attr = NULL;
+	char path[FS_PATH_MAX];
 	va_list ap;
 
-	va_start(ap, oflag);
-	ret = sys_open(name, oflag, va_arg(ap, mode_t),
-			va_arg(ap, struct mq_attr *));
-	va_end(ap);
+	ret = msgq_path_of(path, sizeof(path), name);
+	if (ret != 0)
+		return ret;
 
-	return ret;
+	if (oflag & O_CREAT) {
+		va_start(ap, oflag);
+		mode = va_arg(ap, mode_t);
+		attr = va_arg(ap, struct mq_attr *);
+		va_end(ap);
+	}
+
+	return sys_open(path, oflag, mode, attr);
+}
+
+int mq_unlink(const char *name)
+{
+	int ret = -1;
+	char path[FS_PATH_MAX];
+
+	ret = msgq_path_of(path, sizeof(path), name);
+	if (ret != 0)
+		return ret;
+
+	return sys_unlink(path);
 }
 
 static void evp_notify(struct msgq_fnode *msgn)
@@ -286,39 +317,31 @@ static void evp_notify(struct msgq_fnode *msgn)
 	struct process *proc = NULL;
 
 	proc = process_get(msgn->evppid);
-	if (proc == NULL)
+	if (!proc)
 		return;
 
 	if (msgn->evp.sigev_notify == SIGEV_THREAD) {
-		ret = pthread_kcreate(proc,
-			msgn->evp.sigev_notify_attributes ? &msgn->evpattr : NULL,
+		ret = pthread_kcreate(proc, &msgn->evpattr,
 			(pthread_func_t)msgn->evp.sigev_notify_function,
 			msgn->evp.sigev_value.sival_ptr);
-		if (ret > 0)
+		if (ret > 0) {
 			sched_ready(ret);
+		} else {
+			msgn->evp_err = ret;
+			msgn->evpset = false;
+		}
 	} else {
 		ret = sigenqueue(msgn->evppid, msgn->evp.sigev_signo,
 			SI_MESGQ, msgn->evp.sigev_value, false);
+		if (ret < 0) {
+			msgn->evp_err = ret;
+			msgn->evpset = false;
+		}
 	}
 
 	process_put(proc);
 }
 
-static void msgq_free_msg(struct msg *m)
-{
-	struct msg_block *mb = NULL, *next = NULL;
-
-	if (m != NULL) {
-		mb = m->blks;
-		kfree(m);
-
-		while (mb) {
-			next = mb->next;
-			kfree(mb);
-			mb = next;
-		}
-	}
-}
 
 static struct msg *msgq_alloc_msg(size_t msg_len)
 {
@@ -328,17 +351,17 @@ static struct msg *msgq_alloc_msg(size_t msg_len)
 
 	nrbytes = min(msg_len, (size_t)PAGE_SIZE - sizeof(*m));
 	m = kmalloc(nrbytes + sizeof(*m));
-	if (m == NULL)
+	if (!m)
 		return NULL;
 
 	m->blks = NULL;
 	prev = &m->blks;
 	msg_len -= nrbytes;
 
-	while (msg_len) {
+	while (msg_len != 0) {
 		nrbytes = min(msg_len, (size_t)PAGE_SIZE - sizeof(*mb));
 		mb = kmalloc(nrbytes + sizeof(*mb));
-		if (mb == NULL)
+		if (!mb)
 			goto out;
 		mb->next = NULL;
 		*prev = mb;
@@ -398,6 +421,7 @@ static int mq_wr_wait(struct msgq_fnode *msgn,
 	const struct timespec *abstime)
 {
 	int ret = 0;
+	long wret = 0;
 	uint64_t timeout = 0;
 
 	wakeup(&msgn->wq_rd);
@@ -411,17 +435,26 @@ static int mq_wr_wait(struct msgq_fnode *msgn,
 			return ret;
 		do {
 			tfs_unlock_node(&msgn->node);
-			timeout = wait_timeout(&msgn->wq_wr, timeout);
+			wret = wait_timeout_interruptible(&msgn->wq_wr, timeout);
 			tfs_lock_node(&msgn->node);
-		} while ((msgn->attr.mq_curmsgs == msgn->attr.mq_maxmsg) && timeout);
 
-		if (msgn->attr.mq_curmsgs == msgn->attr.mq_maxmsg)
-			return -ETIMEDOUT;
+			if (wret < 0 && (msgn->attr.mq_curmsgs == msgn->attr.mq_maxmsg))
+				return wret;
+
+			/* recalculate remaining timeout for retry */
+			if (msgn->attr.mq_curmsgs == msgn->attr.mq_maxmsg) {
+				ret = abstime2usecs(abstime, &timeout);
+				if (ret != 0)
+					return -ETIMEDOUT;
+			}
+		} while (msgn->attr.mq_curmsgs == msgn->attr.mq_maxmsg);
 	} else {
 		do {
 			tfs_unlock_node(&msgn->node);
-			wait(&msgn->wq_wr);
+			wret = wait_interruptible(&msgn->wq_wr);
 			tfs_lock_node(&msgn->node);
+			if (wret == -EINTR && (msgn->attr.mq_curmsgs == msgn->attr.mq_maxmsg))
+				return -EINTR;
 		} while (msgn->attr.mq_curmsgs == msgn->attr.mq_maxmsg);
 	}
 
@@ -441,7 +474,7 @@ int mq_timedsend(mqd_t mqdes, const char *msg_ptr, size_t msg_len,
 		return -EINVAL;
 
 	d = fdesc_get(mqdes);
-	if (d == NULL)
+	if (!d)
 		return -EBADF;
 
 	if (d->file->fops != &msgq_fops) {
@@ -458,7 +491,7 @@ int mq_timedsend(mqd_t mqdes, const char *msg_ptr, size_t msg_len,
 	}
 
 	m = msgq_alloc_msg(msg_len);
-	if (m == NULL) {
+	if (!m) {
 		ret = -ENOMEM;
 		goto outf;
 	}
@@ -504,6 +537,7 @@ static int mq_rd_wait(struct msgq_fnode *msgn,
 	const struct timespec *abstime)
 {
 	int ret = 0;
+	long wret = 0;
 	uint64_t timeout = 0;
 
 	wakeup(&msgn->wq_wr);
@@ -518,17 +552,26 @@ static int mq_rd_wait(struct msgq_fnode *msgn,
 			return ret;
 		do {
 			tfs_unlock_node(&msgn->node);
-			timeout = wait_timeout(&msgn->wq_rd, timeout);
+			wret = wait_timeout_interruptible(&msgn->wq_rd, timeout);
 			tfs_lock_node(&msgn->node);
-		} while ((msgn->attr.mq_curmsgs == 0) && timeout);
 
-		if (msgn->attr.mq_curmsgs == 0)
-			return -ETIMEDOUT;
+			if (wret < 0 && (msgn->attr.mq_curmsgs == 0))
+				return wret;
+
+			/* recalculate remaining timeout for retry */
+			if (msgn->attr.mq_curmsgs == 0) {
+				ret = abstime2usecs(abstime, &timeout);
+				if (ret != 0)
+					return -ETIMEDOUT;
+			}
+		} while (msgn->attr.mq_curmsgs == 0);
 	} else {
 		do {
 			tfs_unlock_node(&msgn->node);
-			wait(&msgn->wq_rd);
+			wret = wait_interruptible(&msgn->wq_rd);
 			tfs_lock_node(&msgn->node);
+			if (wret == -EINTR && (msgn->attr.mq_curmsgs == 0))
+				return -EINTR;
 		} while (msgn->attr.mq_curmsgs == 0);
 	}
 
@@ -569,7 +612,7 @@ ssize_t mq_timedreceive(mqd_t mqdes, char *msg_ptr,
 	struct msg *m = NULL;
 
 	d = fdesc_get(mqdes);
-	if (d == NULL)
+	if (!d)
 		return -EBADF;
 
 	if (d->file->fops != &msgq_fops) {
@@ -635,9 +678,10 @@ int mq_notify(mqd_t mqdes, const struct sigevent *evp)
 	struct tfs_node *n = NULL;
 	struct msgq_fnode *msgn = NULL;
 	struct thread *curr = current;
+	DECLARE_DETACHED_PTHREAD_ATTR(dattr);
 
 	d = fdesc_get(mqdes);
-	if (d == NULL)
+	if (!d)
 		return -EBADF;
 
 	if (d->file->fops != &msgq_fops) {
@@ -658,6 +702,11 @@ int mq_notify(mqd_t mqdes, const struct sigevent *evp)
 		ret = -EINVAL;
 		goto out;
 	}
+	if (msgn->evp_err != 0 && !msgn->evpset && evp) {
+		ret = msgn->evp_err;
+		msgn->evp_err = 0;
+		goto out;
+	}
 
 	if (evp) {
 		memcpy(&msgn->evp, evp, sizeof(msgn->evp));
@@ -666,13 +715,15 @@ int mq_notify(mqd_t mqdes, const struct sigevent *evp)
 			if (msgn->evp.sigev_notify_attributes) {
 				memcpy(&msgn->evpattr, msgn->evp.sigev_notify_attributes,
 					sizeof(msgn->evpattr));
-
-				if (msgn->evpattr.inheritsched == PTHREAD_INHERIT_SCHED) {
-					msgn->evpattr.schedpolicy = curr->tuser->policy;
-					msgn->evpattr.contentionscope = curr->tuser->scope;
-					msgn->evpattr.schedparam.sched_priority = curr->tuser->priority;
-				}
+			} else {
+				memcpy(&msgn->evpattr, &dattr, sizeof(msgn->evpattr));
 			}
+			if (msgn->evpattr.inheritsched == PTHREAD_INHERIT_SCHED) {
+				msgn->evpattr.schedpolicy = curr->tuser->policy;
+				msgn->evpattr.contentionscope = curr->tuser->scope;
+				msgn->evpattr.schedparam.sched_priority = curr->tuser->priority;
+			}
+			msgn->evpattr.detachstate = PTHREAD_CREATE_DETACHED;
 		} else if (msgn->evp.sigev_notify == SIGEV_SIGNAL) {
 			if (msgn->evp.sigev_signo < 1 || msgn->evp.sigev_signo >= NSIG) {
 				ret = -EINVAL;
@@ -707,7 +758,7 @@ int mq_send_fd(mqd_t mqdes, int fd)
 	struct msgq_fd *m = NULL;
 
 	d = fdesc_get(mqdes);
-	if (d == NULL)
+	if (!d)
 		return -EBADF;
 
 	if (d->file->fops != &msgq_fops) {
@@ -716,7 +767,7 @@ int mq_send_fd(mqd_t mqdes, int fd)
 	}
 
 	m = kmalloc(sizeof(*m));
-	if (m == NULL) {
+	if (!m) {
 		ret = -ENOMEM;
 		goto outf;
 	}
@@ -725,7 +776,7 @@ int mq_send_fd(mqd_t mqdes, int fd)
 	msgn = msgq_fnode_of(n);
 
 	src = fdesc_get(fd);
-	if (src == NULL) {
+	if (!src) {
 		ret = -EINVAL;
 		goto outf;
 	}
@@ -738,6 +789,7 @@ int mq_send_fd(mqd_t mqdes, int fd)
 
 	tfs_lock_node(n);
 	m->file = f;
+	m->owner_pid = current->proc->id;
 	list_add_tail(&m->node, &msgn->fds);
 	tfs_update_time(NULL, &n->mtime, &n->ctime);
 	tfs_unlock_node(n);
@@ -752,15 +804,23 @@ outf:
 	return ret;
 }
 
-static void mq_waitfd(struct msgq_fnode *msgn)
+static int mq_waitfd(struct msgq_fnode *msgn)
 {
+	long notif = 0;
+
 	wakeup(&msgn->wq_wr);
 
 	do {
 		tfs_unlock_node(&msgn->node);
-		wait(&msgn->wq_rd);
+		notif = wait_interruptible(&msgn->wq_rd);
 		tfs_lock_node(&msgn->node);
+		if (notif == -EINTR)
+			return -EINTR;
+		if (list_empty(&msgn->fds) && notif < 0)
+			return notif;
 	} while (list_empty(&msgn->fds));
+
+	return 0;
 }
 
 static int mq_fd_security_check(struct file *p)
@@ -768,7 +828,7 @@ static int mq_fd_security_check(struct file *p)
 	struct process *proc = NULL;
 
 	/* only for device type */
-	if (p->dev == NULL)
+	if (!p->dev)
 		return 0;
 
 	proc = current->proc;
@@ -776,7 +836,7 @@ static int mq_fd_security_check(struct file *p)
 	/*
 	 * permission permitted
 	 */
-	if (strstr_delimiter(proc->c->dev_acl, p->path, ','))
+	if (strstr_token(proc->c->dev_acl, p->path, ','))
 		return 0;
 
 	return -EACCES;
@@ -791,7 +851,7 @@ int mq_receive_fd(mqd_t mqdes, int *pfd)
 	struct msgq_fd *m = NULL;
 
 	d = fdesc_get(mqdes);
-	if (d == NULL)
+	if (!d)
 		return -EBADF;
 
 	if (d->file->fops != &msgq_fops) {
@@ -809,7 +869,9 @@ int mq_receive_fd(mqd_t mqdes, int *pfd)
 			ret = -EAGAIN;
 			goto out;
 		} else {
-			mq_waitfd(msgn);
+			ret = mq_waitfd(msgn);
+			if (ret != 0)
+				goto out;
 		}
 	}
 
@@ -849,7 +911,7 @@ int mq_setattr(mqd_t mqdes, const struct mq_attr *mqstat,
 		return -EINVAL;
 
 	d = fdesc_get(mqdes);
-	if (d == NULL)
+	if (!d)
 		return -EBADF;
 
 	if (d->file->fops != &msgq_fops) {
@@ -895,7 +957,7 @@ static ssize_t msgq_read(struct file *f, void *buf, size_t cnt)
 	struct msgq_fnode *msgn = msgq_fnode_of(n);
 	char info[128];
 
-	if (buf == NULL)
+	if (!buf)
 		return -EINVAL;
 
 	tfs_lock_node(n);
@@ -910,7 +972,7 @@ static ssize_t msgq_read(struct file *f, void *buf, size_t cnt)
 	if (l >= cnt)
 		return -EMSGSIZE;
 
-	strlcpy(buf, info, l);
+	strlcpy(buf, info, l + 1);
 
 	return l + 1;
 }
@@ -920,7 +982,7 @@ static int msgq_fstat(struct file *f, struct stat *st)
 	struct tfs_node *n = f->priv;
 	struct msgq_fnode *msgn = msgq_fnode_of(n);
 
-	if (st == NULL)
+	if (!st)
 		return -EINVAL;
 
 	tfs_lock_node(n);
@@ -962,7 +1024,7 @@ static ssize_t msgq_readdir(struct file *f, struct dirent *d, size_t count)
 	struct tfs *fs = file2tfs(f);
 	struct tfs_node *n = f->priv;
 
-	if (d == NULL)
+	if (!d)
 		return -EINVAL;
 
 	tfs_lock(fs);
@@ -992,8 +1054,8 @@ static struct tfs msgq_tfs = {
 
 static struct file_system msgq_fs = {
 	/* based on the tmpfs */
-	.name = "msgfs",
-	.mnt = {"/msgq", 0, 0},
+	.name = "msgq",
+	.mnt = {MSGQ_FS_MOUNT, 0, 0},
 	.mount = tfs_mount,
 	.umount = tfs_umount,
 	.getpath = tfs_getpath,
@@ -1003,6 +1065,58 @@ static struct file_system msgq_fs = {
 	/* independent tmpfs instance */
 	.priv = &msgq_tfs,
 };
+
+static void msgq_cleanup_walk(struct tfs_node *dir, pid_t owner,
+	struct list_head *tofree)
+{
+	struct tfs_node *n = NULL, *next = NULL;
+	struct msgq_fnode *msgn = NULL;
+	struct msgq_fd *f = NULL, *fn = NULL;
+	bool removed = false;
+
+	list_for_each_entry_safe(n, next, &dir->nodes, node) {
+		if (n->attr & TFS_ATTR_DIR) {
+			msgq_cleanup_walk(n, owner, tofree);
+			continue;
+		}
+
+		msgn = msgq_fnode_of(n);
+		tfs_lock_node(n);
+		removed = false;
+		list_for_each_entry_safe(f, fn, &msgn->fds, node) {
+			if (f->owner_pid == owner) {
+				list_move_tail(&f->node, tofree);
+				removed = true;
+			}
+		}
+		if (removed)
+			wakeup_notify(&msgn->wq_rd, -EOWNERDEAD);
+		tfs_unlock_node(n);
+	}
+}
+
+static void msgq_cleanup_fds(struct process *proc)
+{
+	struct msgq_fd *f = NULL, *fn = NULL;
+	LIST_HEAD(tofree);
+	pid_t pid = 0;
+
+	if (!proc)
+		return;
+
+	pid = proc->id;
+
+	tfs_lock(&msgq_tfs);
+	msgq_cleanup_walk(msgq_tfs.root, pid, &tofree);
+	tfs_unlock(&msgq_tfs);
+
+	list_for_each_entry_safe(f, fn, &tofree, node) {
+		list_del(&f->node);
+		file_put(f->file);
+		kfree(f);
+	}
+}
+DECLARE_CLEANUP(msgq_cleanup_fds);
 
 static void __init msgq_init(void)
 {

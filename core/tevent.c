@@ -24,7 +24,7 @@ static struct percpu_ti {
 	uint16_t nrevents;
 	struct tevent *curr;
 	struct rb_node *tevents;
-} __percpu_ti[CONFIG_NR_CPUS] = {0};
+} __percpu_ti[CONFIG_NR_CPUS];
 
 static inline struct percpu_ti *percpu_ti(void)
 {
@@ -100,7 +100,7 @@ static void __tevent_trigger_next(
 	struct tevent *t,
 	struct timespec *next)
 {
-	uint64_t cycles = 0, minim = CYCLES_PER_MSECS;
+	uint64_t cycles = 0, minim = CYCLES_PER_MSECS >> 1;
 
 	cycles = time_to_cycles(next);
 
@@ -129,7 +129,7 @@ void tevent_start(struct tevent *t, struct timespec *time)
 		timespecadd(&now, time, &t->expire);
 
 		spin_lock(&ti->lock);
-		if (tevent_queue_add(ti, t) == true)
+		if (tevent_queue_add(ti, t))
 			__tevent_trigger_next(t, time);
 		spin_unlock(&ti->lock);
 	}
@@ -137,9 +137,9 @@ void tevent_start(struct tevent *t, struct timespec *time)
 }
 
 /*
- * add the tevent to the target CPU's timer list
- * this tevent may not be triggered / handled immediately,
- * because current cpu possibly can't set other CPU's timer hardware.
+ * Add the tevent to the target CPU's timer list.
+ * The tevent may not be triggered or handled immediately,
+ * because the current CPU may not be able to set another CPU's timer hardware.
  */
 void tevent_start_on(struct tevent *t, struct timespec *time, int cpu)
 {
@@ -158,7 +158,7 @@ void tevent_start_on(struct tevent *t, struct timespec *time, int cpu)
 		timespecadd(&now, time, &t->expire);
 
 		spin_lock(&ti->lock);
-		if (tevent_queue_add(ti, t) == true) {
+		if (tevent_queue_add(ti, t)) {
 			if (cpu == percpu_id())
 				__tevent_trigger_next(t, time);
 		}
@@ -177,21 +177,19 @@ int tevent_stop(struct tevent *t)
 	struct percpu_ti *ti = NULL;
 	unsigned long flags = 0;
 
-	do  {
-		spin_lock_irqsave(&t->lock, flags);
+	spin_lock_irqsave(&t->lock, flags);
 
-		ti = t->ti;
+	ti = t->ti;
 
+	if (tevent_active(t)) {
+		spin_lock(&ti->lock);
 		if (tevent_active(t)) {
-			spin_lock(&ti->lock);
-			if (tevent_active(t)) {
-				tevent_queue_del(ti, t);
-				ret = true;
-			}
-			spin_unlock(&ti->lock);
+			tevent_queue_del(ti, t);
+			ret = true;
 		}
-		spin_unlock_irqrestore(&t->lock, flags);
-	} while (0);
+		spin_unlock(&ti->lock);
+	}
+	spin_unlock_irqrestore(&t->lock, flags);
 
 	return ret;
 }
@@ -225,7 +223,7 @@ void tevent_renew(struct tevent *t, struct timespec *time)
 	timespecadd(&now, time, &t->expire);
 
 	spin_lock(&ti->lock);
-	if (tevent_queue_add(ti, t) == true)
+	if (tevent_queue_add(ti, t))
 		__tevent_trigger_next(t, time);
 	spin_unlock(&ti->lock);
 
@@ -240,14 +238,15 @@ void tevent_isr(void)
 
 	spin_lock(&ti->lock);
 
+	/* read once before the loop; re-read only after handler releases the lock */
+	read_time(&now);
+
 	while ((t = rb_first_entry(ti->tevents,
 			struct tevent, node)) != NULL) {
-
-		read_time(&now);
 		timespecsub(&t->expire, &now, &left);
 
 		if (timespeccmp(&left, &((struct timespec){0, 1000L}), >)) {
-			if (t->ticking == false)
+			if (!t->ticking)
 				__tevent_trigger_next(t, &left);
 			break;
 		}
@@ -258,6 +257,8 @@ void tevent_isr(void)
 		t->handler(t);
 		spin_lock(&ti->lock);
 		ti->curr = NULL;
+		/* handler ran outside the lock - real time has advanced */
+		read_time(&now);
 	}
 
 	spin_unlock(&ti->lock);

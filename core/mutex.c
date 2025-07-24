@@ -16,13 +16,11 @@ static inline void mutex_set_owner(
 	struct thread *t,
 	struct mutex *m)
 {
-	m->owner_id = t->id;
+	/* Publish owner_id after lock acquisition/meta updates. */
+	smp_store_mb(&m->owner_id, t->id);
 
 	if (list_empty(&m->node))
 		list_add_tail(&m->node, &t->mutexs);
-
-	/* make sure the owner_id update is visible to others */
-	smp_mb();
 }
 
 static inline void mutex_clear_owner(struct mutex *m)
@@ -62,21 +60,21 @@ void mutex_lock(struct mutex *m)
 	unsigned long flags = 0;
 	struct thread *t = current;
 
-	if (m == NULL)
+	if (!m)
 		return;
 
 	spin_lock_irqsave(&m->slock, flags);
 
 	do {
-		if (atomic_read_x(&m->lock.val)) {
+		if (smp_load_acquire(&m->lock.val)) {
 			if (m->type == MUTEX_RECURSIVE) {
 				if (m->owner_id == t->id)
 					goto out;
 			}
 
 			spin_unlock(&m->slock);
-			/*sched_inherit_prio(t->sched, m->owner_id);*/
-			wait_event(&m->waitq, !atomic_read_x(&m->lock.val));
+			sched_inherit_prio(t->sched, m->owner_id);
+			wait_event(&m->waitq, !smp_load_acquire(&m->lock.val));
 			spin_lock(&m->slock);
 		}
 	} while (arch_atomic_tryacquire(&m->lock));
@@ -87,11 +85,49 @@ out:
 	spin_unlock_irqrestore(&m->slock, flags);
 }
 
+int mutex_lock_interruptible(struct mutex *m)
+{
+	unsigned long flags = 0;
+	long wret = 0;
+	struct thread *t = current;
+
+	if (!m)
+		return -EINVAL;
+
+	spin_lock_irqsave(&m->slock, flags);
+
+	do {
+		if (smp_load_acquire(&m->lock.val)) {
+			if (m->type == MUTEX_RECURSIVE) {
+				if (m->owner_id == t->id)
+					goto out;
+			}
+
+			spin_unlock(&m->slock);
+			sched_inherit_prio(t->sched, m->owner_id);
+			wret = wait_event_interruptible(&m->waitq,
+				!smp_load_acquire(&m->lock.val));
+			spin_lock(&m->slock);
+
+			if (wret == -EINTR && smp_load_acquire(&m->lock.val)) {
+				spin_unlock_irqrestore(&m->slock, flags);
+				return -EINTR;
+			}
+		}
+	} while (arch_atomic_tryacquire(&m->lock));
+
+out:
+	m->rc++;
+	mutex_set_owner(t, m);
+	spin_unlock_irqrestore(&m->slock, flags);
+	return 0;
+}
+
 void mutex_unlock(struct mutex *m)
 {
 	unsigned long flags = 0;
 
-	if (m == NULL)
+	if (!m)
 		return;
 
 	spin_lock_irqsave(&m->slock, flags);
@@ -109,7 +145,8 @@ void mutex_unlock(struct mutex *m)
 
 int mutex_trylock(struct mutex *m)
 {
-	unsigned long flags = 0, ret = 0;
+	unsigned long flags = 0;
+	int ret = 0;
 	struct thread *t = current;
 
 	spin_lock_irqsave(&m->slock, flags);
@@ -132,7 +169,7 @@ void mutex_destroy(struct mutex *m)
 
 	spin_lock_irqsave(&m->slock, flags);
 
-	if (m && atomic_read_x(&m->lock.val))
+	if (smp_load_acquire(&m->lock.val))
 		EMSG("The mutex is locked\n");
 
 	wakeup(&m->waitq);
@@ -141,3 +178,14 @@ void mutex_destroy(struct mutex *m)
 
 	waitqueue_flush(&m->waitq);
 }
+
+static void mutex_cleanup_t(struct thread *t)
+{
+	struct mutex *m = NULL, *n = NULL;
+
+	list_for_each_entry_safe(m, n, &t->mutexs, node) {
+		IMSG("%s unlocking @ %p\n", t->name, m);
+		mutex_unlock(m);
+	}
+}
+DECLARE_THREAD_CLEANUP_HIGH(mutex_cleanup_t);

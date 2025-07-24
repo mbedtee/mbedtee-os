@@ -5,3 +5,6 @@ core-ipc-cflags-y +=
 
 core-ipc-$(CONFIG_IPC_SHM) += shm.o
 core-ipc-$(CONFIG_IPC_MSGQ) += msgq.o
+core-ipc-$(CONFIG_IPC_PIPE) += pipe.o
+core-ipc-$(CONFIG_IPC_SEM) += sem.o
+core-ipc-$(CONFIG_IPC_EVENTFD) += eventfd.o

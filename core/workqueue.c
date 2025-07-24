@@ -13,6 +13,7 @@
 #include <trace.h>
 #include <delay.h>
 #include <barrier.h>
+#include <atomic.h>
 #include <tasklet.h>
 #include <tevent.h>
 #include <kmalloc.h>
@@ -36,7 +37,7 @@ static struct workqueue *system_highpri_wq;
 #define INVALID_WQ_CPU(x) ((unsigned int)(x) > WORKER_UNBIND_CPU)
 
 #define workqueue_active(wq) \
-	(atomic_read_x(&wq->state) == WQ_ACTIVE)
+	(smp_load_acquire(&wq->state) == WQ_ACTIVE)
 
 /*
  * worker struct is located at each thread's stack,
@@ -70,11 +71,11 @@ struct flusher {
 static struct worker_list {
 	struct spinlock lock;
 	struct list_head workers;
-} percpu_idle_worker[CONFIG_NR_CPUS + 1] = {0};
+} percpu_idle_worker[CONFIG_NR_CPUS + 1];
 
 /* percpu system worker */
-static struct worker *system_worker[CONFIG_NR_CPUS] = {NULL};
-static struct worker *system_highpri_worker[CONFIG_NR_CPUS] = {NULL};
+static struct worker *system_worker[CONFIG_NR_CPUS];
+static struct worker *system_highpri_worker[CONFIG_NR_CPUS];
 
 #define IS_SYSTEM_WQ(wq) ((wq) == system_wq || (wq) == system_highpri_wq)
 
@@ -231,7 +232,7 @@ static struct worker *pick_idle_worker(
 		wl = &percpu_idle_worker[i];
 		spin_lock(&wl->lock);
 		wk = list_last_entry_or_null(&wl->workers, struct worker, node);
-		if (wk != NULL) {
+		if (wk) {
 			if (wq->prio != wk->prio) {
 				struct sched_param p = {.sched_priority = wq->prio};
 
@@ -302,7 +303,7 @@ static inline struct worker *worker_of(struct thread *t)
 	return t->sched + sched_sizeof();
 }
 
-static void worker_thread(void *unused)
+static long worker_thread(void *unused)
 {
 	struct work *w = NULL;
 	struct worker *wk = worker_of(current);
@@ -328,8 +329,11 @@ working:
 			goto working;
 		if (destroy_system_worker(wk) != 0)
 			goto working;
-	} else if (destroy_worker(wk) != 0)
+	} else if (destroy_worker(wk) != 0) {
 		goto working;
+	}
+
+	return 0;
 }
 
 static struct worker *create_worker(int cpu,
@@ -356,7 +360,7 @@ static struct worker *create_worker(int cpu,
 		return NULL;
 
 	t = thread_get(tid);
-	if (t == NULL)
+	if (!t)
 		return NULL;
 
 	wk = worker_of(t);
@@ -425,13 +429,12 @@ static int enqueue_work(int cpu, struct workqueue *wq, struct work *w)
 
 bool queue_work_on(int cpu, struct workqueue *wq, struct work *w)
 {
-	if (!w->func || INVALID_WQ_CPU(cpu))
-		assert(false);
-
 	bool ret = false;
 	int stat = 0;
 	struct worker *wk = NULL;
 	unsigned long flags = 0;
+
+	assert(w->func && !INVALID_WQ_CPU(cpu));
 
 	spin_lock_irqsave(&wq->lock, flags);
 
@@ -525,8 +528,7 @@ bool queue_delayed_work_on(int cpu, struct workqueue *wq,
 	struct work *w = &dw->w;
 	unsigned long flags = 0;
 
-	if (!w->func || INVALID_WQ_CPU(cpu))
-		assert(false);
+	assert(w->func && !INVALID_WQ_CPU(cpu));
 
 	spin_lock_irqsave(&wq->lock, flags);
 
@@ -569,7 +571,7 @@ bool mod_delayed_work_on(int cpu, struct workqueue *wq,
 
 	local_irq_save(flags);
 
-	if (wq == NULL)
+	if (!wq)
 		wq = system_wq;
 
 again:
@@ -625,7 +627,7 @@ static bool check_wait_work_finish(struct work *w)
 	pid_t tid = (intptr_t)wk;
 	struct thread *t = thread_get(tid);
 
-	if (t != NULL) {
+	if (t) {
 		wk = worker_of(t);
 		if (!worker_overflow(wk) && (wk->tid == tid) &&
 			(wk->thread == t) && (wk->curr == w)) {
@@ -659,12 +661,10 @@ again:
 	if (isdelaywk && tevent_stop(&dw->timer))
 		delayed_work_event(&dw->timer);
 
-	/* make sure w->worker is visible */
-	smp_mb();
-	wk = w->worker;
+	wk = smp_load_acquire(&w->worker);
 	if (!IS_ERR_PTR(wk)) {
 		spin_lock(&wk->lock);
-		if (wk != w->worker) {
+		if (wk != smp_load_acquire(&w->worker)) {
 			spin_unlock(&wk->lock);
 			goto again;
 		}
@@ -692,26 +692,29 @@ bool cancel_delayed_work(struct delayed_work *dw)
 {
 	bool ret = false;
 	unsigned long flags = 0;
-	struct work *w = &dw->w;
+	struct work *w = NULL;
 	struct worker *wk = NULL;
 	struct workqueue *wq = NULL;
 
+	if (!dw)
+		return ret;
+
 	local_irq_save(flags);
 
+	w = &dw->w;
+
 again:
-	/* make sure updates to #dw/#wk are visible */
-	smp_mb();
 	if (tevent_stop(&dw->timer)) {
-		wq = dw->wq;
+		wq = smp_load_acquire(&dw->wq);
 		spin_lock(&wq->lock);
 		del_delayed_work(wq, dw);
 		spin_unlock(&wq->lock);
 		ret = true;
 	} else {
 		if (!list_empty(&dw->node)) {
-			wq = dw->wq;
+			wq = smp_load_acquire(&dw->wq);
 			spin_lock(&wq->lock);
-			if (wq != dw->wq || list_empty(&dw->node)) {
+			if (wq != smp_load_acquire(&dw->wq) || list_empty(&dw->node)) {
 				spin_unlock(&wq->lock);
 				goto again;
 			}
@@ -719,10 +722,10 @@ again:
 			spin_unlock(&wq->lock);
 			ret = true;
 		} else {
-			wk = w->worker;
+			wk = smp_load_acquire(&w->worker);
 			if (!IS_ERR_PTR(wk)) {
 				spin_lock(&wk->lock);
-				if (wk != w->worker) {
+				if (wk != smp_load_acquire(&w->worker)) {
 					spin_unlock(&wk->lock);
 					goto again;
 				}
@@ -738,7 +741,7 @@ again:
 	}
 
 	/* cancelled by this func */
-	if (ret == true)
+	if (ret)
 		atomic_clear_zero(&w->busy);
 
 	local_irq_restore(flags);
@@ -757,10 +760,8 @@ bool cancel_delayed_work_sync(struct delayed_work *dw)
 	local_irq_save(flags);
 
 again:
-	/* make sure updates to #dw/#wk are visible */
-	smp_mb();
 	if (tevent_stop(&dw->timer)) {
-		wq = dw->wq;
+		wq = smp_load_acquire(&dw->wq);
 		spin_lock(&wq->lock);
 		del_delayed_work(wq, dw);
 		atomic_clear_zero(&w->busy);
@@ -771,9 +772,9 @@ again:
 			ret = check_wait_work_finish(w);
 			atomic_clear_zero(&w->busy);
 		} else if (!list_empty(&dw->node)) {
-			wq = dw->wq;
+			wq = smp_load_acquire(&dw->wq);
 			spin_lock(&wq->lock);
-			if (wq != dw->wq || list_empty(&dw->node)) {
+			if (wq != smp_load_acquire(&dw->wq) || list_empty(&dw->node)) {
 				spin_unlock(&wq->lock);
 				goto again;
 			}
@@ -782,10 +783,10 @@ again:
 			spin_unlock(&wq->lock);
 			ret = true;
 		} else {
-			wk = w->worker;
+			wk = smp_load_acquire(&w->worker);
 			if (!IS_ERR_PTR(wk)) {
 				spin_lock(&wk->lock);
-				if (wk != w->worker) {
+				if (wk != smp_load_acquire(&w->worker)) {
 					spin_unlock(&wk->lock);
 					goto again;
 				}
@@ -827,12 +828,10 @@ bool cancel_work(struct work *w)
 	local_irq_save(flags);
 
 again:
-	/* make sure w->worker is visible */
-	smp_mb();
-	wk = w->worker;
+	wk = smp_load_acquire(&w->worker);
 	if (!IS_ERR_PTR(wk)) {
 		spin_lock(&wk->lock);
-		if (wk != w->worker) {
+		if (wk != smp_load_acquire(&w->worker)) {
 			spin_unlock(&wk->lock);
 			goto again;
 		}
@@ -881,8 +880,9 @@ again:
 			__wakeup_flusher(w, wk);
 			spin_unlock(&wk->lock);
 			ret = true;
-		} else
+		} else {
 			goto again;
+		}
 	}
 
 	local_irq_restore(flags);
@@ -929,8 +929,7 @@ static bool __schedule_work_on_noalloc(int cpu,
 	struct worker *wk = NULL;
 	unsigned long flags = 0;
 
-	if (!w->func || INVALID_WQ_CPU(cpu))
-		assert(false);
+	assert(w->func && !INVALID_WQ_CPU(cpu));
 
 	spin_lock_irqsave(&wq->lock, flags);
 
@@ -1023,8 +1022,7 @@ static bool __schedule_delayed_work_noalloc_on(
 	struct work *w = &dw->w;
 	unsigned long flags = 0;
 
-	if (!w->func || INVALID_WQ_CPU(cpu))
-		assert(false);
+	assert(w->func && !INVALID_WQ_CPU(cpu));
 
 	spin_lock_irqsave(&wq->lock, flags);
 
@@ -1105,7 +1103,7 @@ struct workqueue *create_workqueue(const char *fmt, ...)
 	va_list args;
 	struct workqueue *wq = NULL;
 
-	if (fmt == NULL)
+	if (!fmt)
 		return NULL;
 
 	wq = kzalloc(sizeof(struct workqueue));
@@ -1148,9 +1146,10 @@ void workqueue_setscheduler(
 void flush_workqueue(struct workqueue *wq)
 {
 	if (wq) {
-		wait_event(&wq->wait_q,
+		while (wait_event_timeout(&wq->wait_q,
 			list_empty(&wq->dws) &&
-			list_empty(&wq->workers));
+			list_empty(&wq->workers), 10000000) == 0)
+			EMSG("flush_workqueue %s still pending\n", wq->name);
 	}
 }
 
