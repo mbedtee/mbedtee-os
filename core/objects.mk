@@ -3,10 +3,14 @@
 
 core-cflags-y += -Wstack-usage=1024
 
-core-y += main.o ida.o interrupt.o mem.o page.o  \
-	of.o tevent.o ipi.o str.o kproc.o kmalloc.o \
-	kthread.o mutex.o semaphore.o assert.o workqueue.o \
+core-y += main.o ida.o interrupt.o mem.o page.o \
+	of_dtb.o of.o tevent.o ipi.o str.o kproc.o kthread.o \
+	mutex.o semaphore.o assert.o workqueue.o \
 	wait.o bitops.o buddy.o sleep.o delay.o
+
+core-$(CONFIG_KMALLOC_SLAB) += kmalloc.o
+core-$(CONFIG_KMALLOC_SLAB_BUDDY) += kmalloc_sb.o
+core-$(CONFIG_KMALLOC_BITMAP_BUDDY) += kmalloc_bb.o
 
 core-$(CONFIG_STACK_PROTECTOR) += stackprotector.o
 

@@ -47,8 +47,9 @@ static void __init kern_info(void)
 	struct tm t;
 	time_t sec = strtoul(BUILD_TIME_SEC, NULL, 10);
 	long nsec = strtoul(BUILD_TIME_NSEC, NULL, 10);
+	int tz_offset = tz_offset_secs(BUILD_TIME_ZONE);
 
-	time2date(sec, &t);
+	time2date(sec + tz_offset, &t);
 
 	IMSG("Product: %s\n", PRODUCT_NAME);
 	IMSG("Version: %s\n", PRODUCT_VERSION);
@@ -59,10 +60,10 @@ static void __init kern_info(void)
 	IMSG("Newlib version: %s\n", _NEWLIB_VERSION);
 
 	IMSG("Build Tag - %s\n", BUILD_TAG);
-	IMSG("Build Time - %04d-%02d-%02d %02d:%02d:%02d.%03ld\n",
+	IMSG("Build Time - %04d-%02d-%02d %02d:%02d:%02d.%03ld (UTC%s)\n",
 		t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
 		t.tm_hour, t.tm_min, t.tm_sec,
-		nsec / MICROSECS_PER_SEC);
+		nsec / MICROSECS_PER_SEC, BUILD_TIME_ZONE);
 
 	mem_info();
 }
@@ -81,7 +82,7 @@ static void __rest_init_once(void)
 	kmalloc_post_init();
 }
 
-static void __rest_init(void *d)
+static long __rest_init(void *d)
 {
 	local_irq_disable();
 
@@ -93,6 +94,8 @@ static void __rest_init(void *d)
 	arch_specific_init();
 
 	sched_cpu_online();
+
+	return 0;
 }
 
 static void rest_init(void)
@@ -148,6 +151,7 @@ static void __init early_init_once(void)
 	timer_early_init();
 
 	set_systime(sec, nsec);
+	set_systz(-tz_offset_secs(BUILD_TIME_ZONE) / 60);
 
 	if (IS_ENABLED(CONFIG_UART))
 		uart_early_init();
@@ -181,7 +185,7 @@ int __nosprot main(void)
 	 *
 	 * all secondary cores shall not call it.
 	 */
-	if (_earinit == false) {
+	if (!_earinit) {
 		_earinit = true;
 
 		kproc_init();

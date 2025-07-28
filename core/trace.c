@@ -23,8 +23,8 @@ static const char * const tracelevel_str[] = {
 	NULL, "ERR", "WAR", "INF", "DBG", "LOG", "FS "
 };
 
-static char strbuff[CONFIG_NR_CPUS][TRACE_SIZE + FUNC_SIZE + MISC_SIZE] = {0};
-static char func_str[CONFIG_NR_CPUS][FUNC_SIZE] = {0};
+static char strbuff[CONFIG_NR_CPUS][TRACE_SIZE + FUNC_SIZE + MISC_SIZE];
+static char func_str[CONFIG_NR_CPUS][FUNC_SIZE];
 
 void trace_kern(
 	const char *func, int line, int level,
@@ -41,7 +41,7 @@ void trace_kern(
 
 	local_irq_save(flags);
 
-	cpu = percpu_id();
+	cpu = sched_getcpu();
 	raw = &strbuff[cpu][FUNC_SIZE + MISC_SIZE];
 
 	flen = strnlen(func, FUNC_SIZE - 1);
@@ -58,6 +58,12 @@ void trace_kern(
 		func_str[cpu][flen] = 0;
 	}
 
+	/*
+	 * raw points into strbuff[cpu][FUNC_SIZE+MISC_SIZE] and snprintf's
+	 * destination is strbuff[cpu]; the prefix fits within FUNC_SIZE+MISC_SIZE
+	 * so there is no actual overlap. The atomic store defeats the compiler's
+	 * alias-analysis to suppress the spurious -Wrestrict false positive.
+	 */
 	__atomic_store_n(&dstraw, raw, __ATOMIC_RELAXED);
 
 	l = snprintf(strbuff[cpu], sizeof(strbuff[cpu]),

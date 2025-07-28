@@ -41,17 +41,21 @@ const char *ksymname_of(unsigned long addr, unsigned long *offset)
 	return &ksymname[ksymoffset[low]];
 }
 
+struct backtrace_data {
+	int depth;
+	unsigned long lastlreg;
+};
+
 static _Unwind_Reason_Code __tracer(struct _Unwind_Context *ctx, void *d)
 {
-	int *depth = (int *)d;
+	struct backtrace_data *bt = (struct backtrace_data *)d;
 	unsigned long offset = -1;
 	unsigned long lreg = _Unwind_GetIP(ctx);
 	const char *name = NULL;
 	char tracestr[128];
-	static unsigned long lastlreg;
 
 	name = ksymname_of(lreg, &offset);
-	if (name == NULL)
+	if (!name)
 		return _URC_NO_REASON;
 
 	/* skip the backtrace() itself */
@@ -61,11 +65,11 @@ static _Unwind_Reason_Code __tracer(struct _Unwind_Context *ctx, void *d)
 	if (sizeof(long) == sizeof(int))
 		snprintf(tracestr, sizeof(tracestr),
 			"#%d        <%lx>                        (%s + 0x%lx)\n",
-			*depth, lreg, name ? name : "null", offset);
+			bt->depth, lreg, name, offset);
 	else
 		snprintf(tracestr, sizeof(tracestr),
 			"#%d        <%lx>                (%s + 0x%lx)\n",
-			*depth, lreg, name ? name : "null", offset);
+			bt->depth, lreg, name, offset);
 
 #if defined(BACKTRACE_SERIAL_ONLY)
 	uart_early_puts(tracestr, strlen(tracestr));
@@ -73,18 +77,18 @@ static _Unwind_Reason_Code __tracer(struct _Unwind_Context *ctx, void *d)
 	printk_raw(tracestr, strlen(tracestr));
 #endif
 
-	if (lastlreg == lreg)
+	if (bt->lastlreg == lreg)
 		return _URC_END_OF_STACK;
 
-	lastlreg = lreg;
-	*depth += 1;
+	bt->lastlreg = lreg;
+	bt->depth += 1;
 
 	return _URC_NO_REASON;
 }
 
 void backtrace(void)
 {
-	int depth = 0;
+	struct backtrace_data bt = {0, 0};
 	char *name = current->name;
 
 	local_irq_disable();
@@ -92,11 +96,11 @@ void backtrace(void)
 #if defined(BACKTRACE_SERIAL_ONLY)
 	uart_early_puts(name, strnlen(name, THREAD_NAME_LEN));
 	uart_early_puts(" kbacktrace\n", 12);
-	_Unwind_Backtrace(&__tracer, &depth);
+	_Unwind_Backtrace(&__tracer, &bt);
 #else
 	printk_raw(name, strnlen(name, THREAD_NAME_LEN));
 	printk_raw(" kbacktrace\n", 12);
-	_Unwind_Backtrace(&__tracer, &depth);
+	_Unwind_Backtrace(&__tracer, &bt);
 #endif
 }
 

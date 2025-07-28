@@ -14,6 +14,7 @@
 extern void uart_early_puts(const char *str, size_t cnt);
 #endif
 
+/* for kernel */
 void assert_func(int line, const char *func, const char *expr)
 {
 	char tracestr[200];
@@ -22,7 +23,7 @@ void assert_func(int line, const char *func, const char *expr)
 
 	snprintf(tracestr, sizeof(tracestr),
 			"\n!!oops-%s@CPU%d %s() L%d expr: %s\n",
-			current->name, percpu_id(), func, line, expr);
+			current->name, sched_getcpu(), func, line, expr);
 
 #if defined(ASSERT_SERIAL_ONLY)
 	uart_early_puts(tracestr, strlen(tracestr));
@@ -34,3 +35,4 @@ void assert_func(int line, const char *func, const char *expr)
 
 	deadloop();
 }
+

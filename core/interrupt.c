@@ -75,7 +75,7 @@ struct irq_controller *irq_parent_controller(struct device_node *dn)
 	struct device_node *parent = of_irq_find_parent(dn);
 	unsigned long flags = 0;
 
-	if (parent == NULL)
+	if (!parent)
 		return NULL;
 
 	spin_lock_irqsave(&__controllers_lock, flags);
@@ -129,7 +129,7 @@ static int __irq_free(struct irq_desc *d)
 	struct irq_controller *ic = d->controller;
 	const char *name = ic->dn ? ic->dn->id.name : ic->ops->name;
 
-	if (d->childcnt) {
+	if (d->childcnt != 0) {
 		WMSG("irq %d hwirq %d @ %s - %d child inuse\n",
 			irq, hwirq, name, d->childcnt);
 		return -EBUSY;
@@ -175,7 +175,7 @@ static int __irq_unregister(struct irq_desc *d)
 
 	/* free the child */
 	ret = __irq_free(d);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	/* parent present ? */
@@ -186,7 +186,8 @@ static int __irq_unregister(struct irq_desc *d)
 		/* skip controller's irq */
 		if (d->flags & IRQ_IS_CONTROLLER)
 			break;
-		__irq_free(d);
+		if (__irq_free(d) != 0)
+			break;
 	}
 
 	return ret;
@@ -201,7 +202,7 @@ int irq_unregister(unsigned int irq)
 	spin_lock_irqsave(&__irq_lock, flags);
 
 	d = __irq_to_desc(irq);
-	if (d == NULL) {
+	if (!d) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -219,7 +220,7 @@ static struct irq_desc *__irq_alloc_desc(void)
 	struct irq_desc *desc = NULL;
 
 	desc = kzalloc(sizeof(struct irq_desc));
-	if (desc == NULL)
+	if (!desc)
 		return NULL;
 
 	irq = bitmap_next_zero(__irqida, IRQ_MAX, __irq_idnext);
@@ -245,7 +246,7 @@ static struct irq_desc *__irq_alloc(	struct irq_controller *ic,
 	struct irq_desc *d = NULL;
 
 	d = __irq_alloc_desc();
-	if (d == NULL)
+	if (!d)
 		return NULL;
 
 	d->hwirq = hwirq;
@@ -269,15 +270,15 @@ static struct irq_desc *__irq_alloc(	struct irq_controller *ic,
 static void __irq_enable(struct irq_controller *ic,
 	struct irq_desc *d, bool force_affinity)
 {
-	if (d->handler == NULL)
+	if (!d->handler)
 		return;
 
 	if (d->parent)
 		__irq_enable(d->parent->controller, d->parent, false);
 
-	if (IRQ_IS_PERCPU(ic, d))
+	if (IRQ_IS_PERCPU(ic, d)) {
 		cpu_affinity_set(d->affinity, percpu_id());
-	else {
+	} else {
 		if (ic->ops->irq_set_affinity)
 			ic->ops->irq_set_affinity(d, d->affinity, force_affinity);
 
@@ -303,16 +304,16 @@ static int __irq_register(struct irq_controller *ic,
 	struct irq_controller *parent = NULL;
 
 	/* only check the linear mapping controller */
-	if (ic->nr_irqs && hwirq >= ic->nr_irqs)
+	if (ic->nr_irqs != 0 && hwirq >= ic->nr_irqs)
 		return -EINVAL;
 
 	/* already registered */
 	d = irq_to_desc_hw(ic, hwirq);
-	if (d != NULL)
+	if (d)
 		goto reenable;
 
 	d = __irq_alloc(ic, hwirq, type, handler, data);
-	if (d == NULL)
+	if (!d)
 		return -ENOMEM;
 
 	dchild = d;
@@ -329,7 +330,7 @@ static int __irq_register(struct irq_controller *ic,
 		 */
 		if (parent->ops->irq_parent_alloc) {
 			dparent = __irq_alloc(parent, -1, 0, handler, data);
-			if (dparent == NULL) {
+			if (!dparent) {
 				ret = -ENOMEM;
 				goto out;
 			}
@@ -343,11 +344,11 @@ static int __irq_register(struct irq_controller *ic,
 			/*
 			 * Current controller is able to translate the parent-irq-num ?
 			 */
-			if (curr->ops->irq_translate)
+			if (curr->ops->irq_translate) {
 				ret = curr->ops->irq_translate(dchild, &hwirq, &type);
-			else {
+			} else {
 				ret = of_irq_parse_one(curr->dn, curr->irqidx, &hwirq, &type);
-				if (ret) {
+				if (ret != 0) {
 					EMSG("Unable to parse interrupt idx %d @ %s\n",
 							curr->irqidx, curr->dn->id.name);
 					EMSG("wrong chained setting @ %s\n", curr->ops->name);
@@ -358,9 +359,9 @@ static int __irq_register(struct irq_controller *ic,
 
 			/* alreay registered ? */
 			dparent = irq_to_desc_hw(parent, hwirq);
-			if (dparent == NULL) {
+			if (!dparent) {
 				dparent = __irq_alloc(parent, hwirq, type, handler, data);
-				if (dparent == NULL) {
+				if (!dparent) {
 					ret = -ENOMEM;
 					goto out;
 				}
@@ -383,7 +384,7 @@ out:
 		__irq_free(d);
 
 		/* free the parents we just allocated */
-		while (((d = dparent) != NULL) && depth) {
+		while (((d = dparent) != NULL) && depth != 0) {
 			depth--;
 			dparent = d->parent;
 			d->childcnt--;
@@ -403,11 +404,11 @@ int irq_indexed_register(struct device_node *dn,
 	unsigned int hwirq = 0, type = 0;
 	struct irq_controller *ic = irq_parent_controller(dn);
 
-	if (ic == NULL)
+	if (!ic)
 		return -EINVAL;
 
 	ret = of_irq_parse_one(dn, idx, &hwirq, &type);
-	if (ret) {
+	if (ret != 0) {
 		EMSG("Unable to parse interrupt idx %d @ %s\n",
 				idx, dn->id.name);
 		return ret;
@@ -433,11 +434,11 @@ int irq_register_simple(struct irq_controller *ic,
 	int ret = -1;
 	unsigned long flags = 0;
 
-	if (ic == NULL)
+	if (!ic)
 		ic = list_first_entry_or_null(&__controllers,
 			struct irq_controller, node);
 
-	if (ic == NULL)
+	if (!ic)
 		return -EINVAL;
 
 	IMSG("%d -> %s\n", hwirq, ic->ops->name);
@@ -461,7 +462,7 @@ struct irq_controller *__irq_create_controller(struct device_node *dn,
 		return NULL;
 
 	ic = kzalloc(sizeof(struct irq_controller));
-	if (ic == NULL)
+	if (!ic)
 		return NULL;
 
 	ic->dn = dn;
@@ -470,9 +471,9 @@ struct irq_controller *__irq_create_controller(struct device_node *dn,
 	ic->irqidx = -1u;
 	ic->nr_irqs = nr_irqs;
 	ic->parent = irq_parent_controller(dn);
-	if (nr_irqs) {
+	if (nr_irqs != 0) {
 		ic->irqs = kzalloc(nr_irqs * sizeof(struct irq_desc *));
-		if (ic->irqs == NULL) {
+		if (!ic->irqs) {
 			kfree(ic);
 			return NULL;
 		}
@@ -498,7 +499,7 @@ void irq_remove_controller(struct irq_controller *ic)
 
 	for (i = 0; i < ic->nr_irqs; i++) {
 		d = ic->irqs[i];
-		if (d != NULL) {
+		if (d) {
 			WMSG("irq %d hwirq %d @ %s still inuse\n",
 				d->irq, d->hwirq, ic->dn ?
 				ic->dn->id.name : ic->ops->name);
@@ -535,7 +536,7 @@ void irq_disable(unsigned int irq)
 	spin_lock_irqsave(&__irq_lock, flags);
 
 	d = __irq_to_desc(irq);
-	if (d == NULL || (d->handler == NULL))
+	if (!d || !d->handler)
 		goto out;
 
 	ic = d->controller;
@@ -546,8 +547,9 @@ void irq_disable(unsigned int irq)
 			cpu_affinity_clear(d->affinity, percpu_id());
 			if (cpu_affinity_empty(d->affinity))
 				irq_clear_enable(d);
-		} else
+		} else {
 			irq_clear_enable(d);
+		}
 	}
 
 	/* disable the parent if d is the only child of its parent */
@@ -574,7 +576,7 @@ out:
  */
 void irq_generic_handle(struct irq_desc *desc)
 {
-	if (desc == NULL)
+	if (!desc)
 		return;
 
 	/* increase the irq count */
@@ -594,6 +596,8 @@ void *irq_handler(struct thread_ctx *regs)
 
 	root_controller = list_first_entry_or_null(
 		&__controllers, struct irq_controller, node);
+
+	assert(root_handler);
 
 	root_handler(root_controller, regs);
 
@@ -623,7 +627,7 @@ static int __irq_set_affinity(struct irq_controller *ic,
 	if (dparent && (dparent->childcnt == 1)) {
 		parent = dparent->controller;
 		ret = __irq_set_affinity(parent, dparent, affinity);
-		if (parent->ops->irq_set_affinity && ret)
+		if (parent->ops->irq_set_affinity && (ret != 0))
 			return ret;
 	}
 
@@ -753,22 +757,22 @@ void __init irq_init(void)
 	end = __irq_init_end();
 
 	for (oci = start; oci < end; oci++) {
-		if (oci->init == NULL)
+		if (!oci->init)
 			continue;
 
 		from = NULL;
 
 		do {
 			dn = of_find_compatible_node(from, oci->compat);
-			if (dn == NULL)
+			if (!dn)
 				break;
 
 			if (!of_property_read_bool(dn, "interrupt-controller"))
 				break;
 
 			d = kmalloc(sizeof(struct of_irq_init_desc));
-			if (d == NULL)
-				return;
+			if (!d)
+				goto out;
 
 			parent = of_irq_find_parent(dn);
 
@@ -777,7 +781,7 @@ void __init irq_init(void)
 			d->parent = parent;
 
 			/* root controller, init it directly */
-			if (parent == NULL) {
+			if (!parent) {
 				oci->init(dn);
 				list_add_tail(&d->node, &finished);
 			} else {
@@ -802,10 +806,16 @@ void __init irq_init(void)
 		}
 
 		/* finished all, or children has no parents */
-	} while (needworking);
+	} while (needworking != 0);
 
 	list_for_each_entry_safe(d, _d, &unfinished, node) {
 		EMSG("%s has no parents\n", d->oci->compat);
+		list_del(&d->node);
+		kfree(d);
+	}
+
+out:
+	list_for_each_entry_safe(d, _d, &unfinished, node) {
 		list_del(&d->node);
 		kfree(d);
 	}
@@ -834,7 +844,7 @@ static struct softint_desc {
 	irq_softint_handler_t handlers[SOFTINT_MAX];
 
 	void *datas[SOFTINT_MAX];
-} softint_desc = {NULL};
+} softint_desc;
 
 /*
  * set the HW interrupt sources for the softint
@@ -897,8 +907,10 @@ static void softint_rpc_handler(void *data)
 
 	handler = softint->handlers[SOFTINT_RPC_CALLEE];
 	handlerdata = softint->datas[SOFTINT_RPC_CALLEE];
-	cnt += handler(handlerdata);
-	softint->percpucnt[cpu][SOFTINT_RPC_CALLEE] += cnt;
+	if (handler) {
+		cnt += handler(handlerdata);
+		softint->percpucnt[cpu][SOFTINT_RPC_CALLEE] += cnt;
+	}
 }
 
 /*
@@ -909,7 +921,8 @@ int softint_register(unsigned int id,
 	irq_softint_handler_t handler, void *data)
 {
 	unsigned int hwirq = 0;
-	unsigned long flags = 0, ret = 0;
+	unsigned long flags = 0;
+	int ret = 0;
 	struct irq_desc *d = NULL;
 	struct irq_controller *ic = NULL;
 	struct softint_desc *softint = &softint_desc;
@@ -921,7 +934,7 @@ int softint_register(unsigned int id,
 	spin_lock_irqsave(&__irq_lock, flags);
 
 	ic = softint->controller;
-	if (ic == NULL)
+	if (!ic)
 		goto out;
 
 	hwirq = softint->hwirqs[id];
@@ -936,20 +949,17 @@ int softint_register(unsigned int id,
 			goto out; /* already registered */
 	}
 
-	if (id == SOFTINT_RPC_CALLER)
-		handlerwrap = NULL;
-
 	d = irq_to_desc_hw(ic, hwirq);
-	if (d == NULL) {
+	if (!d) {
 		IMSG("%d -> %s\n", hwirq, ic->ops->name);
 		d = __irq_alloc(ic, hwirq, 0, handlerwrap, softint);
-		if (d == NULL) {
+		if (!d) {
 			ret = -ENOMEM;
 			goto out;
 		}
 	}
 
-	if (ic->ops->irq_enable && (id != SOFTINT_RPC_CALLER)) {
+	if (ic->ops->irq_enable) {
 		ic->ops->irq_enable(d);
 		irq_set_enable(d);
 	}
@@ -973,7 +983,7 @@ void softint_unregister(unsigned int id)
 	if (id >= SOFTINT_MAX)
 		return;
 
-	if (softint->controller == NULL)
+	if (!softint->controller)
 		return;
 
 	spin_lock_irqsave(&__irq_lock, flags);
@@ -996,7 +1006,7 @@ void softint_unregister(unsigned int id)
 
 /*
  * Raise a softint on the
- * processor specified by @cpu (except RPC_CALLER)
+ * processor specified by @cpu
  */
 void softint_raise(unsigned int id, unsigned int cpu)
 {
@@ -1009,7 +1019,7 @@ void softint_raise(unsigned int id, unsigned int cpu)
 	if (!VALID_CPUID(cpu) || (id >= SOFTINT_MAX))
 		return;
 
-	if (softint->controller == NULL)
+	if (!softint->controller)
 		return;
 
 	spin_lock_irqsave(&__irq_lock, flags);
@@ -1018,24 +1028,12 @@ void softint_raise(unsigned int id, unsigned int cpu)
 	hwirq = softint->hwirqs[id];
 	d = irq_to_desc_hw(ic, hwirq);
 
-	if (d != NULL) {
-		if (id == SOFTINT_RPC_CALLER) {
-			/* counting the RPC caller */
-			softint->percpucnt[cpu][id] += 1;
-
-			/*
-			 * RPC calls to Peer Execution Environment - todo
-			 */
-			if (IS_ENABLED(CONFIG_RISCV) && IS_ENABLED(CONFIG_RPC)) {
-				extern int rpc_calleeid(void);
-				cpu = rpc_calleeid();
-			}
-		} else
-			 atomic_inc(&softint->raising[cpu][id]);
-
+	if (d) {
+		atomic_inc(&softint->raising[cpu][id]);
 		ic->ops->irq_send(d, cpu);
-	} else
+	} else {
 		WMSG("%d @ %s is unregistered ?\n", hwirq, ic->ops->name);
+	}
 
 	spin_unlock_irqrestore(&__irq_lock, flags);
 }
@@ -1050,7 +1048,7 @@ static void irq_print_nr(struct debugfs_file *d,
 	char tmp[32] = {0};
 
 	len = snprintf(tmp, sizeof(tmp), "%ld", val);
-	if (len < nrchars) {
+	if (len < nrchars && nrchars < sizeof(tmp)) {
 		memset(tmp + len, ' ', nrchars - len);
 		debugfs_printf(d, "%s", tmp);
 	}
@@ -1062,6 +1060,10 @@ static int irq_debugfs_read(struct debugfs_file *d)
 	unsigned long flags = 0, total = 0;
 	struct irq_desc *irqd = NULL;
 	struct irq_controller *ic = NULL;
+	struct softint_desc *softint = &softint_desc;
+	const char *softint_names[SOFTINT_MAX] = {
+		"RPC_CALLEE: ", "IPI:   "
+	};
 
 	debugfs_printf(d, "irq\thwirq\tparent\tchilds\tenabled\taffinity");
 	debugfs_printf(d, "  total-cnt   percpu-cnt         controller\n");
@@ -1112,12 +1114,6 @@ static int irq_debugfs_read(struct debugfs_file *d)
 		debugfs_printf(d, "\n");
 	}
 
-	struct softint_desc *softint = &softint_desc;
-
-	const char *softint_names[SOFTINT_MAX] = {
-		"RPC_CALLER: ", "RPC_CALLEE: ", "IPI:   "
-	};
-
 	for (i = SOFTINT_MAX - 1; i >= 0; i--) {
 		debugfs_printf(d, "%s", softint_names[i]);
 
@@ -1130,7 +1126,7 @@ static int irq_debugfs_read(struct debugfs_file *d)
 
 	for_each_online_cpu(cpu) {
 		for (i = SOFTINT_MAX - 1; i >= 0; i--) {
-			if (i == 2)
+			if (i == SOFTINT_MAX - 1)
 				debugfs_printf(d, "CPU%02d: ", cpu);
 			else
 				debugfs_printf(d, "CPU%02d:      ", cpu);

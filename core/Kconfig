@@ -32,7 +32,7 @@ config VMALLOC
 	default y
 	depends on MMU
 	help
-		Say Y to enable usage the on the contiguous
+		Say Y to enable use of the contiguous
 		virtual address space mmaped with scattered pages
 
 config STACK_PROTECTOR
@@ -59,9 +59,7 @@ config DTB_ADDR
 	depends on !EMBEDDED_DTB
 	help
 		Configure the external DTB address
-		in case of EMBEDDED_DTB is not enabled.
-
-source "core/elf/Kconfig"
+		when EMBEDDED_DTB is not enabled.
 
 config OS_ADDR
 	hex "OS link address"
@@ -76,5 +74,37 @@ config OS_ADDR
 	default 0xFFFFFFC000000000 if AARCH64 && USER
 	help
 		Configure the OS destination link address.
+
+choice
+	prompt "Kernel Heap Allocator"
+	default KMALLOC_SLAB
+	help
+		Select the kernel heap sub-page allocator.
+
+config KMALLOC_SLAB
+	bool "Slab allocator"
+	help
+		Use a pure SLAB allocator for all sub-page allocations.
+		Objects are served from per-class freelists (up to 1024 bytes).
+		Uses O(1) multi-list approach (partial/full) for high performance.
+		Larger requests are served directly by the page allocator.
+
+config KMALLOC_SLAB_BUDDY
+	bool "Slab + Buddy allocator"
+	help
+		Use the SLAB allocator for sub-page allocations.
+		Objects are served from per-class freelists
+		backed by a buddy allocator for larger requests.
+
+config KMALLOC_BITMAP_BUDDY
+	bool "Bitmap + Buddy allocator"
+	help
+		Use the bitmap allocator for sub-page allocations.
+		Small objects are tracked via per-page bitmaps,
+		larger requests use a buddy allocator.
+
+endchoice
+
+source "core/elf/Kconfig"
 
 endmenu

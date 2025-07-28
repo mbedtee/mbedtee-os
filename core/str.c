@@ -30,19 +30,21 @@ void str_suspend(void)
 	end = (void *)__str_end();
 
 	for (op = end - 1; op >= start; op--) {
-		if (op->suspend == NULL)
+		if (!op->suspend)
 			continue;
 
 		IMSG("%s\n", op->name);
 		ret = op->suspend(op->data);
-		if (ret)
+		if (ret != 0)
 			EMSG("%s error\n", op->name);
 	}
 }
 
-static void str_post_resume(void *arg)
+static long str_post_resume(void *arg)
 {
 	fs_resume();
+
+	return 0;
 }
 
 void str_resume(void)
@@ -63,12 +65,12 @@ void str_resume(void)
 	end = (void *)__str_end();
 
 	for (op = start; op < end; op++) {
-		if (op->resume == NULL)
+		if (!op->resume)
 			continue;
 
 		IMSG("%s\n", op->name);
 		ret = op->resume(op->data);
-		if (ret)
+		if (ret != 0)
 			EMSG("%s error\n", op->name);
 	}
 

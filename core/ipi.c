@@ -20,6 +20,7 @@
 #include <kmalloc.h>
 #include <spinlock.h>
 #include <interrupt.h>
+#include <atomic.h>
 
 #include <ipi.h>
 
@@ -53,16 +54,16 @@ static struct percpu_ipi {
 	unsigned short size;
 	struct spinlock sl;
 	unsigned char *mem;
-} __percpu_ipi[CONFIG_NR_CPUS] __aligned(64) = {0};
+} __percpu_ipi[CONFIG_NR_CPUS] __aligned(64);
 
 static inline struct percpu_ipi *ipi_ringof(int cpu)
 {
-	return (struct percpu_ipi *)&__percpu_ipi[cpu];
+	return &__percpu_ipi[cpu];
 }
 
 /*
- * check if the remain ring-buff is
- * enough or not for current call
+ * Check if the remaining ring buffer is
+ * large enough for the current call.
  */
 static int ipi_ring_enough(struct percpu_ipi *ring,
 	unsigned int size)
@@ -71,15 +72,14 @@ static int ipi_ring_enough(struct percpu_ipi *ring,
 	unsigned int wr = 0, rd = 0;
 
 	/*
-	 * ring->rd is possibly updating by other CPUs,
-	 * make sure the it is visible and update to date
+	 * ring->rd may be updated by other CPUs;
+	 * make sure it is visible and up to date.
 	 */
-	smp_mb();
 	wr = ring->wr;
-	rd = ring->rd;
+	rd = smp_load_acquire(&ring->rd);
 
 	/* ipi down */
-	if (ring->mem == NULL)
+	if (!ring->mem)
 		return false;
 
 	if (rd <= wr)
@@ -91,7 +91,7 @@ static int ipi_ring_enough(struct percpu_ipi *ring,
 }
 
 /*
- * copy into the ring-buff and update the write ptr
+ * Copy data into the ring buffer and advance the write pointer.
  */
 static void ipi_ring_write(struct percpu_ipi *ring,
 	const void *data, unsigned int size)
@@ -109,10 +109,8 @@ static void ipi_ring_write(struct percpu_ipi *ring,
 		wr += size;
 	}
 
-	ring->wr = wr;
-
-	/* make sure the updates to #ring are visible to others */
-	smp_mb();
+	/* Publish write pointer after payload bytes are visible. */
+	smp_store_release(&ring->wr, wr);
 }
 
 static bool ipi_is_valid_func(void *func)
@@ -139,20 +137,76 @@ int ipi_call(void *func, unsigned int cpu,
 	if ((size > IPI_MSG_MAX_SIZE) || !cpu_online(cpu))
 		return -EINVAL;
 
-	if (!data && size)
+	if (!data && size != 0)
 		return -EINVAL;
 
 	ring = ipi_ringof(cpu);
 
 	while (++retrycnt < 20 && !ipi_ring_enough(ring,
-			sizeof(struct ipi_hdr) + size))
-		udelay(5);
+			sizeof(struct ipi_hdr) + size)) {
+		if (retrycnt == 1)
+			softint_raise(SOFTINT_IPI, cpu);
+		udelay(10);
+	}
 
 	spin_lock_irqsave(&ring->sl, flags);
 
 	if (!ipi_ring_enough(ring, sizeof(struct ipi_hdr) + size)) {
 		EMSG("%d ipi ring not enough, wr %d rd %d\n",
 			cpu, ring->wr, ring->rd);
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	/* similar as TLV (NAME + SIZE + DATA) */
+
+	/* enqueue the ipi_hdr + DATA */
+	hdr.func = func;
+	hdr.size = size;
+	hdr.tid = 0; /* tid == 0, means for async-ipi */
+	ipi_ring_write(ring, (void *)&hdr, sizeof(hdr));
+
+	if (data)
+		ipi_ring_write(ring, data, size);
+
+	ret = 0;
+
+out:
+	if (ret == 0)
+		softint_raise(SOFTINT_IPI, cpu);
+	spin_unlock_irqrestore(&ring->sl, flags);
+	return ret;
+}
+
+/*
+ * ipi try-call, non-blocking asynchronous mode
+ *
+ * Same as ipi_call() but returns immediately
+ * if the target ring buffer is full (no retry).
+ * Used by callers that implement their own retry logic.
+ */
+int ipi_try_call(void *func, unsigned int cpu,
+	const void *data, size_t size)
+{
+	unsigned long flags = 0;
+	struct ipi_hdr hdr;
+	struct percpu_ipi *ring = NULL;
+	int ret = -EPERM;
+
+	if (!ipi_is_valid_func(func))
+		return -EINVAL;
+
+	if ((size > IPI_MSG_MAX_SIZE) || !cpu_online(cpu))
+		return -EINVAL;
+
+	if (!data && size != 0)
+		return -EINVAL;
+
+	ring = ipi_ringof(cpu);
+
+	spin_lock_irqsave(&ring->sl, flags);
+
+	if (!ipi_ring_enough(ring, sizeof(struct ipi_hdr) + size)) {
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -194,6 +248,7 @@ int ipi_call_sync(void *func, unsigned int cpu,
 
 	ring = ipi_ringof(cpu);
 
+retry:
 	while (!ipi_ring_enough(ring, sizeof(struct ipi_hdr))) {
 		if (!cpu_online(cpu))
 			return -EINVAL;
@@ -205,8 +260,10 @@ int ipi_call_sync(void *func, unsigned int cpu,
 
 	spin_lock_irqsave(&ring->sl, flags);
 
-	while (!ipi_ring_enough(ring, sizeof(struct ipi_hdr)))
-		;
+	if (!ipi_ring_enough(ring, sizeof(struct ipi_hdr))) {
+		spin_unlock_irqrestore(&ring->sl, flags);
+		goto retry;
+	}
 
 	t->wait_q.condi = false;
 
@@ -223,7 +280,8 @@ int ipi_call_sync(void *func, unsigned int cpu,
 	softint_raise(SOFTINT_IPI, cpu);
 	spin_unlock_irqrestore(&ring->sl, flags);
 
-	wait(&t->wait_q);
+	while (wait_timeout(&t->wait_q, 5000000) == 0)
+		EMSG("ipi wait timeout - cpu %d tid %d\n", cpu, t->id);
 	return ret;
 }
 
@@ -251,12 +309,11 @@ static inline size_t ipi_available_size(
 	unsigned int shm_size = ring->size;
 
 	/*
-	 * ring->wr is possibly updating by other CPUs,
-	 * make sure the it is visible and update to date
+	 * ring->wr may be updated by other CPUs;
+	 * make sure it is visible and up to date.
 	 */
-	smp_mb();
 	rd = ring->rd;
-	wr = ring->wr;
+	wr = smp_load_acquire(&ring->wr);
 
 	if (wr >= rd)
 		return wr - rd;
@@ -275,17 +332,17 @@ static void ipi_ring_read(
 	rd = ring->rd;
 	if (rd + size <= shm_size) {
 		memcpy(data, &ring->mem[rd], size);
-		ring->rd += size;
+		rd += size;
 	} else {
 		remain = rd + size - shm_size;
 		memcpy(data, &ring->mem[rd], size - remain);
 		memcpy((unsigned char *)data + size - remain,
 				&ring->mem[0], remain);
-		ring->rd = remain;
+		rd = remain;
 	}
 
-	/* make sure the update to ring->rd is visible to others */
-	smp_mb();
+	/* Publish consumer pointer after ring payload has been consumed. */
+	smp_store_release(&ring->rd, rd);
 }
 
 static struct ipi_work *ipi_pick_next(
@@ -300,12 +357,14 @@ static struct ipi_work *ipi_pick_next(
 
 	ipi_ring_read(ring, &hdr, sizeof(hdr));
 
-	if (hdr.size > ring->size)
+	if (hdr.size > ring->size) {
 		EMSG("invalid hdr %d ??\n", hdr.size);
+		return NULL;
+	}
 
 	if (hdr.tid == 0) {
 		/* async ipi notification from peer */
-		if (hdr.size) {
+		if (hdr.size != 0) {
 			while (ipi_available_size(ring) < hdr.size)
 				udelay(1);
 			c->data = inlinebuffer;
@@ -344,12 +403,12 @@ static int ipi_isr(void *unused)
 	unsigned char buffer[IPI_MSG_MAX_SIZE];
 	struct percpu_ipi *ring = ipi_ringof(percpu_id());
 
-	while (atomic_read_x(&ring->wr) != ring->rd) {
+	while (smp_load_acquire(&ring->wr) != ring->rd) {
 		c = ipi_pick_next(ring, &iw, buffer);
-		if (c == NULL)
+		if (!c)
 			break;
 
-		if (c->func == NULL)
+		if (!c->func)
 			continue;
 
 		/* no peer is waiting, it's asynchronous ipi */
@@ -376,7 +435,9 @@ void ipi_init(void)
 	spin_lock_irqsave(&ring->sl, flags);
 
 	ring->rd = ring->wr = 0;
-	ring->size = sizeof(long) * 512;
+	ring->size = sizeof(long) * 128;
+	if (IS_ENABLED(CONFIG_RISCV))
+		ring->size = PAGE_SIZE;
 	ring->mem = kmalloc(ring->size);
 
 	spin_unlock_irqrestore(&ring->sl, flags);
@@ -384,7 +445,7 @@ void ipi_init(void)
 	if (softint_register(SOFTINT_IPI, ipi_isr, NULL) < 0)
 		cpu_set_error();
 
-	if (ring->mem == NULL)
+	if (!ring->mem)
 		cpu_set_error();
 }
 

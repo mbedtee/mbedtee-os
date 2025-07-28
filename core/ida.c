@@ -17,11 +17,11 @@
 
 int ida_init(struct ida *ida, unsigned int total)
 {
-	if ((total == 0) || (ida->bitmap != NULL))
+	if ((total == 0) || ida->bitmap)
 		return -EINVAL;
 
 	ida->bitmap = bitmap_zalloc(total);
-	if (ida->bitmap == NULL)
+	if (!ida->bitmap)
 		return -ENOMEM;
 
 	ida->next = 0;
@@ -30,19 +30,29 @@ int ida_init(struct ida *ida, unsigned int total)
 	return 0;
 }
 
-int ida_alloc_range(struct ida *ida, unsigned int start, unsigned int end)
+/* must be called with ida->lock held */
+static int __ida_alloc_range(struct ida *ida,
+	unsigned int start, unsigned int end)
 {
-	int id = 0, ret = -ENOSPC, max = 0;
-	unsigned long flags = 0;
-
-	spin_lock_irqsave(&ida->lock, flags);
+	int id = 0, max = 0;
 
 	max = min(ida->nbits, end);
 	id = bitmap_next_zero(ida->bitmap, max, start);
 	if (id < max) {
 		bitmap_set_bit(ida->bitmap, id);
-		ret = id;
+		return id;
 	}
+
+	return -ENOSPC;
+}
+
+int ida_alloc_range(struct ida *ida, unsigned int start, unsigned int end)
+{
+	int ret = -ENOSPC;
+	unsigned long flags = 0;
+
+	spin_lock_irqsave(&ida->lock, flags);
+	ret = __ida_alloc_range(ida, start, end);
 	spin_unlock_irqrestore(&ida->lock, flags);
 
 	return ret;
@@ -51,13 +61,18 @@ int ida_alloc_range(struct ida *ida, unsigned int start, unsigned int end)
 int ida_alloc(struct ida *ida)
 {
 	int id = -1;
+	unsigned long flags = 0;
 
-	id = ida_alloc_range(ida, ida->next, ida->nbits);
+	spin_lock_irqsave(&ida->lock, flags);
+
+	id = __ida_alloc_range(ida, ida->next, ida->nbits);
 	if (id < 0)
-		id = ida_alloc_range(ida, 0, ida->next);
+		id = __ida_alloc_range(ida, 0, ida->next);
 
 	if (id >= 0)
 		ida->next = id + 1;
+
+	spin_unlock_irqrestore(&ida->lock, flags);
 
 	return id;
 }

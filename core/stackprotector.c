@@ -5,7 +5,6 @@
  */
 
 #include <panic.h>
-#include <thread.h>
 
 unsigned long __stack_chk_guard = 0x1314a55a;
 
