@@ -3,11 +3,13 @@
 
 fs-cflags-y +=
 
-fs-$(CONFIG_FS) += fs.o file.o
+fs-$(CONFIG_FS) += fs.o file.o dirent.o
 fs-$(CONFIG_FATFS) += fatfs/fatfs.o
 fs-$(CONFIG_DEVFS) += devfs/devfs.o
 fs-$(CONFIG_RAMFS) += ramfs/ramfs.o
 fs-$(CONFIG_REEFS) += reefs/reefs.o reefs/reefs_rpc.o
+fs-$(CONFIG_REEFS_ANTIROLLBACK_RPMB) += reefs/reefs_rpmb.o
+fs-$(CONFIG_RPMBFS) += rpmbfs/rpmbfs.o
 
 ifeq ($(CONFIG_REEFS),y)
 fs-$(CONFIG_RAMFS) += ramfs/ramfs_ta.o

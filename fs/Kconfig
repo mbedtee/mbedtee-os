@@ -7,43 +7,55 @@ config FS
 	bool
 	default y
 	help
-		Say Y here to enable support the file systems.
+		Say Y here to enable support for the file systems.
 		By default this option is essential.
 
 if FS
+
+menu "I/O Multiplexing"
+
+config POLL
+	bool "Enable poll()"
+	default y
+	help
+		Enable poll() support.
+		- Kernel: provides poll() implementation (and do_syscall_poll backend).
+		- Userspace: enables the poll syscall wrapper and libc API.
+
+config EPOLL
+	bool "Enable epoll"
+	depends on SYSCALL && TMPFS
+	help
+		Enable epoll support.
+		Requires the userspace syscall layer and tmpfs (epoll uses tfs nodes).
+
+endmenu
 
 config DEVFS
 	bool "Support the devfs file system"
 	default y
 	help
-		Say Y here to enable support the devfs
+		Say Y here to enable support for the devfs
 		/dev for the devices drivers.
 		By default this option is essential.
 
 config FATFS
 	bool "Support the fatfs (fat12/16/32)"
 	help
-		Say Y here to enable support the FATFS.
+		Say Y here to enable support for FATFS.
 		By default this option is essential.
 
 config RAMFS
 	bool "Support the ramfs (based on fatfs)"
 	depends on FATFS
 	help
-		Say Y here to enable support the RAMFS.
+		Say Y here to enable support for RAMFS.
 		By default this option is essential.
-
-config REEFS
-	bool "Support the REE file system"
-	depends on RPC && REE
-	help
-		Say Y here to enable support the REEFS
-		for the TA Trusted Storage.
 
 config TMPFS
 	bool "Support the tmpfs"
 	help
-		Say Y here to enable support the tmpfs,
+		Say Y here to enable support for tmpfs,
 		POSIX Shared Memory, message queue and debugfs etc. depend on it.
 		By default this option is essential.
 
@@ -53,6 +65,75 @@ config DEBUGFS
 	help
 		Say Y here to support the debugfs for OS or OS driver modules.
 
+config FILE_DEBUG
+	bool "File open/close tracking"
+	depends on DEBUGFS
+	help
+		Track all open files in a global list with owner names.
+		When enabled, creates /debugfs/files to show all open files.
+		Say N for production builds to save memory and reduce locking.
+
+config REEFS
+	bool "Support the REE file system"
+	depends on RPC && KERNEL_MBEDCRYPTO
+	help
+		Say Y here to enable support for REEFS
+		for the TA Trusted Storage.
+
+config REEFS_ANTIROLLBACK_RPMB
+	bool "REEFS anti-rollback protection via RPMB"
+	depends on REEFS && RPMBFS
+	help
+		Say Y here to enable anti-rollback protection for REEFS.
+		This mirrors file headers to RPMB to detect and prevent
+		rollback attacks on REE-stored files.
+
+config RPMBFS
+	bool "Support the RPMB file system"
+	depends on RPC && KERNEL_MBEDCRYPTO
+	help
+		Say Y here to enable support for the RPMB FS
+		for the Secure Storage.
+
+config RPMB_FS_MAX_FILES
+	int "Maximum number of files in RPMB"
+	depends on RPMBFS
+	default 128
+	help
+		Define the maximum number of files that can be stored in RPMB.
+		This affects the memory usage (RAM) and the reserved area on RPMB.
+		Each entry takes 256 bytes in RAM and on Disk.
+
+config RPMB_FS_CACHE_ENTRIES
+	int "Number of FAT entries to cache in RAM"
+	depends on RPMBFS
+	default 128
+	range 0 1024
+	help
+		Cache FAT entries in RAM for performance.
+		CRITICAL: This value MUST be >= number of files in RPMB.
+		Files in FAT slots beyond cache size will be inaccessible!
+		Set to CONFIG_RPMB_FS_MAX_FILES to ensure all files are cached.
+		Memory usage: N x 256 bytes (e.g., 128 entries = 32KB RAM).
+		Set to 0 to disable caching (slow, reads FAT from RPMB on demand).
+
+config RPMB_FS_READ_BATCH
+	int "RPMB read batch size (blocks)"
+	depends on RPMBFS
+	default 32
+	range 1 32
+	help
+		Maximum number of RPMB blocks to read in a single operation.
+		Each block is 256 bytes. Maximum batch: 32 blocks = 8KB.
+
+config RPMB_FS_WRITE_BATCH
+	int "RPMB write batch size (blocks)"
+	depends on RPMBFS
+	default 32
+	range 1 32
+	help
+		Maximum number of RPMB blocks to write in a single operation.
+		Each block is 256 bytes. Maximum batch: 32 blocks = 8KB.
 endif
 
 endmenu

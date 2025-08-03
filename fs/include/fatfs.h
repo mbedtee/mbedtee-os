@@ -7,9 +7,17 @@
 #ifndef _FATFS_H
 #define _FATFS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <fs.h>
 
 int fat_mount(struct file_system *fs);
 int fat_umount(struct file_system *fs);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

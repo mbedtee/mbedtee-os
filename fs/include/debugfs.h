@@ -7,6 +7,10 @@
 #ifndef _DEBUGFS_H
 #define _DEBUGFS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <tfs.h>
 
 /*
@@ -74,11 +78,15 @@ int debugfs_remove(const char *path);
 #else
 
 static inline void debugfs_printf(struct debugfs_file *d, const char *fmt, ...) {}
-static inline int debugfs_create_dir(const char *path) {return -ENOTSUP; }
+static inline int debugfs_create_dir(const char *path) { return -ENOTSUP; }
 static inline int debugfs_create(const char *path,
-	const struct debugfs_fops *fops) {return -ENOTSUP; }
-static inline int debugfs_remove(const char *path) {return -ENOTSUP; }
+	const struct debugfs_fops *fops) { return -ENOTSUP; }
+static inline int debugfs_remove(const char *path) { return -ENOTSUP; }
 
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif

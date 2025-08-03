@@ -7,6 +7,10 @@
 #ifndef _FS_H
 #define _FS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <errno.h>
 #include <string.h>
 
@@ -16,6 +20,8 @@
 #include <list.h>
 #include <file.h>
 #include <ktime.h>
+#include <defs.h>
+#include <dirent.h>
 
 #define FS_PATH_MAX			(512u)
 #define FS_MNT_MAX			(32u)
@@ -53,7 +59,7 @@ struct file_system {
 	/* FS specific callbacks */
 	int (*mount)(struct file_system *fs);
 	int (*umount)(struct file_system *fs);
-	size_t (*getfree)(struct file_system *fs);
+	void (*getsize)(struct file_system *fs, size_t *total, size_t *idle);
 	int (*getpath)(struct file_path *path);
 	void (*putpath)(struct file_path *path);
 	void (*suspend)(struct file_system *fs);
@@ -83,7 +89,7 @@ static inline char *dirname(char *path)
 	int i = 0;
 	unsigned int l = 0;
 
-	if (path == NULL || *path == 0)
+	if (!path || *path == 0)
 		return NULL;
 
 	l = strlen(path);
@@ -103,38 +109,67 @@ static inline char *dirname(char *path)
 	return (i < 0 || *path == 0) ? "/" : path;
 }
 
-/* extract the directory and name from path */
-static inline void fspath_directory_name(
-	const char *path, char *directory, char *name)
+/*
+ * Helper function to format a directory entry into the user buffer.
+ * This provides a unified way for all filesystems to populate dirent structures.
+ *
+ * Parameters:
+ *   d_ptr:    Pointer to pointer of dirent buffer (will be advanced)
+ *   buflen:   Pointer to remaining buffer size (will be decreased)
+ *   name:     File/directory name
+ *   type:     Entry type (DT_REG, DT_DIR, etc.)
+ *   off:      Directory offset for next entry
+ *
+ * Returns:    Number of bytes written on success (reclen)
+ *             -ENOSPC if buffer is too small
+ */
+static inline ssize_t fs_format_dirent(
+	struct dirent **d_ptr, size_t *buflen,
+	const char *name, uint8_t type, uint64_t off)
 {
-	int i = 0;
-	unsigned int l = strnlen(path, FS_PATH_MAX);
+	struct dirent *d = *d_ptr;
+	size_t name_len = strlen(name);
+	size_t reclen = sizeof(struct dirent) + name_len + 1;
 
-	if (l == 0)
-		return;
+	reclen = roundup(reclen, sizeof(long));
 
-	memcpy(directory, path, l + 1);
+	if (reclen > *buflen)
+		return -ENOSPC;
 
-	if (directory[l - 1] == '/')
-		directory[--l] = 0;
+	d->d_off = off;
+	d->d_reclen = reclen;
+	d->d_type = type;
+	memcpy(d->d_name, name, name_len);
+	d->d_name[name_len] = 0;
 
-	for (i = l - 1; i >= 0; i--) {
-		if (directory[i] == '/') {
-			directory[i] = 0;
-			break;
-		}
-	}
+	*d_ptr = (struct dirent *)((char *)d + reclen);
+	*buflen -= reclen;
+	return reclen;
+}
 
-	memcpy(name, directory + i + 1, min(FS_NAME_MAX - 1, l - i));
+/*
+ * Update file timestamps.
+ * Common helper used by devfs, tmpfs, and other sub-filesystems.
+ */
+static inline void fs_update_time(time_t *atime,
+	time_t *mtime, time_t *ctime)
+{
+	time_t tsec = 0;
 
-	if (i < 0) /* root dir */
-		directory[0] = 0;
+	get_systime(&tsec, NULL);
+
+	if (atime)
+		*atime = tsec;
+	if (mtime)
+		*mtime = tsec;
+	if (ctime)
+		*ctime = tsec;
 }
 
 void fs_create(const char *name);
 
+int alloc_kpath(const char *src, struct file_path *p);
 int alloc_path(const char *src, struct file_path *p);
-
 void free_path(struct file_path *p);
 
 /* mount / unmount the known FS */
@@ -152,5 +187,9 @@ void fs_resume(void);
 /* reference counter will be increased / decreased */
 struct file_system *fs_get(const char *path);
 void fs_put(struct file_system *fs);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

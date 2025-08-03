@@ -7,6 +7,10 @@
 #ifndef _TMP_FS_H
 #define _TMP_FS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <fs.h>
 
 #define TFS_ATTR_RO			0x01
@@ -76,6 +80,9 @@ ssize_t tfs_readdir(struct tfs *fs, struct tfs_node *dir,
 	off_t *pos,	struct dirent *d, size_t cnt);
 off_t tfs_seekdir(struct tfs *fs, struct tfs_node *dir,
 	off_t *pos, off_t off, int whence);
+int tfs_unlink(struct tfs *fs, const char *path);
+int tfs_rmdir(struct tfs *fs, const char *path);
+int tfs_rename(struct tfs *fs, const char *oldpath, const char *newpath);
 
 /*
  * default common security check, each
@@ -98,22 +105,13 @@ static inline int tfs_security_check(struct tfs *fs,
 
 static inline struct tfs *file2tfs(struct file *f)
 {
-	return (struct tfs *)f->fs->priv;
+	return f->fs->priv;
 }
 
-static inline void tfs_update_time(time_t *atime,
-	time_t *mtime, time_t *ctime)
-{
-	time_t tsec = 0;
+#define tfs_update_time fs_update_time
 
-	get_systime(&tsec, NULL);
-
-	if (atime)
-		*atime = tsec;
-	if (mtime)
-		*mtime = tsec;
-	if (ctime)
-		*ctime = tsec;
+#ifdef __cplusplus
 }
+#endif
 
 #endif
