@@ -111,20 +111,7 @@ extern "C"
 #define FAT_SFN_EXT			3
 #define FAT_MAX_SFN			(FAT_SFN_NAME + FAT_SFN_EXT)
 
-#define LOCK_MAX_REFC		(INT_MAX)
-
-struct f_lock {
-	int refc;
-	bool unlink; /* for unlink file */
-	bool freefn; /* for rmdir */
-
-	struct direnty *dir;
-
-	/* node entry in the cached-lock-list */
-	struct list_head node;
-	/* opened f_info on this lock */
-	struct list_head files;
-};
+#define INODE_MAX_REFC		(INT_MAX)
 
 struct direnty {
 	char name[FAT_SFN_NAME];
@@ -155,7 +142,7 @@ struct ldirenty {
 
 struct fatfs {
 	char *membase;
-	int memsize;
+	int total_sec;
 
 	uint8_t type;
 	uint8_t nr_fats;	 /* nr_fats (1 or 2) @ per drive */
@@ -175,7 +162,7 @@ struct fatfs {
 	int dirbase;		 /* Root directory base sector/cluster */
 	int database;		 /* Data base sector */
 
-	struct list_head llocks; /* list of cached locks */
+	struct list_head inodes; /* list of cached inodes */
 
 	struct mutex lock;	/* exclusion access */
 
@@ -208,56 +195,32 @@ struct d_info {
 	struct fatfs *fs;
 };
 
+struct f_inode {
+	int refc;
+	int sclst; /* shared cluster chain starter */
+	bool unlink; /* for unlink file */
+	bool freefn; /* for rmdir */
+
+	struct direnty *dir;
+
+	/* node entry in the cached inode list */
+	struct list_head node;
+	/* opened f_info on this inode */
+	struct list_head files;
+};
+
 struct f_info {
 	struct fatfs *fs;
-	int sclst; /* cluster chain starter */
 	int clst; /* current cluster */
-	int hole; /* seek hole clusters beyond file size*/
 
 	int flags; /* open flag */
 
 	int offset; /* current file offset */
 
 	struct direnty *dir; /* file @ which dir */
-	struct f_lock *lock; /* read/write collide detection */
-	struct list_head node; /* node in a cached-lock */
+	struct f_inode *inode; /* per-file inode */
+	struct list_head node; /* node in inode's file list */
 };
-
-static inline uint8_t load8h(void *x)
-{
-	return *(__volatile uint8_t *)x;
-}
-
-static inline uint16_t load16h(void *x)
-{
-	uint16_t c = load8h(x + 1);
-
-	return (c << 8) | load8h(x);
-}
-
-static inline uint32_t load32h(void *x)
-{
-	uint32_t c = load16h(x + 2);
-
-	return (c << 16) | load16h(x);
-}
-
-static inline void store8h(uint8_t c, void *x)
-{
-	*(__volatile uint8_t *)x = c;
-}
-
-static inline void store16h(uint16_t c, void *x)
-{
-	store8h(c, x);
-	store8h(c >> 8, x + 1);
-}
-
-static inline void store32h(uint32_t c, void *x)
-{
-	store16h(c, x);
-	store16h(c >> 16, x + 2);
-}
 
 #define invalid_ss(x) ((x) != 512 && (x) != 1024 && (x) != 2048 && (x) != 4096)
 #define invalid_clst(x) (((x) < 2) || ((x) >= fs->nr_fatent))

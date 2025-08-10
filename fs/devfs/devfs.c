@@ -54,22 +54,7 @@ struct devfs {
 
 static inline struct devfs *file2devfs(struct file *f)
 {
-	return (struct devfs *)f->fs->priv;
-}
-
-static void devfs_update_time(time_t *atime,
-	time_t *mtime, time_t *ctime)
-{
-	time_t tsec = 0;
-
-	get_systime(&tsec, NULL);
-
-	if (atime)
-		*atime = tsec;
-	if (mtime)
-		*mtime = tsec;
-	if (ctime)
-		*ctime = tsec;
+	return f->fs->priv;
 }
 
 static struct devfs_node *devfs_find_node(
@@ -95,7 +80,7 @@ static struct devfs_node *devfs_create_node(
 	struct devfs_node *f = NULL;
 
 	n = kzalloc(sizeof(struct devfs_node));
-	if (n == NULL)
+	if (!n)
 		return NULL;
 
 	n->refc = 1;
@@ -106,14 +91,14 @@ static struct devfs_node *devfs_create_node(
 	dir->refc++;
 	dir->sub_nodes++;
 
-	devfs_update_time(&n->atime, &n->mtime, &n->ctime);
+	fs_update_time(&n->atime, &n->mtime, &n->ctime);
 
 	t = list_last_entry_or_null(&dir->nodes, struct devfs_node, node);
-	if (t != NULL) {
+	if (t) {
 		n->idx = t->idx + 1;
-		if (n->idx < ULONG_MAX) {
+		if (n->idx < ULONG_MAX)
 			list_add_tail(&n->node, &dir->nodes);
-		} else { /* ? never meet ? */
+		else { /* ? never meet ? */
 			while (++n->idx) {
 				list_for_each_entry(t, &dir->nodes, node) {
 					if (t->idx == n->idx)
@@ -123,7 +108,7 @@ static struct devfs_node *devfs_create_node(
 						break;
 					}
 				}
-				if (f != NULL)
+				if (f)
 					break;
 			}
 			list_add(&n->node, &f->node);
@@ -172,14 +157,14 @@ static struct devfs_node *devfs_get_node(
 		p++;
 
 	for (;;) {
-		if (*p && *p != '/') {
+		if (*p && *p != '/')
 			name[len++] = *p++;
-		} else {
+		else {
 			if (len == 0)
 				break;
 			name[len] = 0;
 			n = devfs_find_node(n, name);
-			if (n == NULL) {
+			if (!n) {
 				LMSG("%s not exist\n\n", name);
 				break;
 			}
@@ -191,7 +176,7 @@ static struct devfs_node *devfs_get_node(
 		}
 	}
 
-	if (n != NULL)
+	if (n)
 		n->refc++;
 
 	return n;
@@ -229,16 +214,16 @@ static int devfs_mknodes(struct devfs *fs,
 
 			n = devfs_find_node(dir, name);
 
-			if (n == NULL && !isfinal) {
+			if (!n && !isfinal) {
 				n = devfs_create_node(dir, name);
-				if (n == NULL) {
+				if (!n) {
 					ret = -ENOMEM;
 					goto out;
 				}
 				n->attr |= DEVFS_ATTR_DIR;
 			}
 
-			if (n != NULL && isfinal) {
+			if (n && isfinal) {
 				ret = -EEXIST;
 				goto out;
 			}
@@ -250,7 +235,7 @@ static int devfs_mknodes(struct devfs *fs,
 				}
 
 				n = devfs_create_node(dir, name);
-				if (n == NULL) {
+				if (!n) {
 					ret = -ENOMEM;
 					goto out;
 				}
@@ -322,15 +307,9 @@ static int devfs_security_check(const char *name)
 		return 0;
 
 	/*
-	 * null is permitted for all
-	 */
-	if (strcmp("/dev/null", name) == 0)
-		return 0;
-
-	/*
 	 * permission permitted
 	 */
-	if (strstr_delimiter(proc->c->dev_acl, name, ','))
+	if (strstr_token(proc->c->dev_acl, name, ','))
 		return 0;
 
 	WMSG("%s access %s denied\n", t->name, name);
@@ -345,11 +324,11 @@ static int devfs_getpath(struct file_path *p)
 	if (name_len > DEV_MAX_NAME)
 		return -ENAMETOOLONG;
 
-	if (devfs_security_check(p->path))
+	if (devfs_security_check(p->path) != 0)
 		return -EACCES;
 
 	dst = kmalloc(name_len);
-	if (dst == NULL)
+	if (!dst)
 		return -ENOMEM;
 
 	strlcpy(dst, p->path, name_len);
@@ -373,21 +352,21 @@ static int devfs_open(struct file *f, mode_t mode, void *arg)
 
 	lock_devfs(fs);
 	n = devfs_get_node(fs, f->path);
-	if (n == NULL) {
+	if (!n) {
 		ret = -ENOENT;
 		goto out;
 	}
 
 	if (n->attr & DEVFS_ATTR_DEV) {
 		isdir = fspath_isdir(f->path);
-		if (isdir | (flags & O_DIRECTORY)) {
+		if (isdir || (flags & O_DIRECTORY)) {
 			ret = -ENOTDIR;
 			goto out;
 		}
 
 		dev = n->priv;
 		f->dev = dev;
-		if (dev->fops->open == NULL) {
+		if (!dev->fops->open) {
 			ret = -ENXIO;
 			goto out;
 		}
@@ -431,7 +410,7 @@ static int devfs_close(struct file *f)
 	if (dev) {
 		n = dev->fs_data;
 
-		if (dev->fops->close == NULL)
+		if (!dev->fops->close)
 			return -ENXIO;
 
 		ret = dev->fops->close(f);
@@ -456,17 +435,17 @@ static ssize_t devfs_read(struct file *f, void *buf, size_t cnt)
 	ssize_t ret = -1;
 	struct device *dev = f->dev;
 
-	if (dev == NULL)
+	if (!dev)
 		return -EBADF;
 
-	if (dev->fops->read == NULL)
+	if (!dev->fops->read)
 		return -ENXIO;
 
 	ret = dev->fops->read(f, buf, cnt);
 	if (ret > 0) {
 		struct devfs_node *n = dev->fs_data;
 
-		devfs_update_time(&n->mtime, NULL, NULL);
+		fs_update_time(&n->atime, NULL, NULL);
 	}
 
 	return ret;
@@ -477,17 +456,17 @@ static ssize_t devfs_write(struct file *f, const void *buf, size_t cnt)
 	ssize_t ret = -1;
 	struct device *dev = f->dev;
 
-	if (dev == NULL)
+	if (!dev)
 		return -EBADF;
 
-	if (dev->fops->write == NULL)
+	if (!dev->fops->write)
 		return -ENXIO;
 
 	ret = dev->fops->write(f, buf, cnt);
 	if (ret > 0) {
 		struct devfs_node *n = dev->fs_data;
 
-		devfs_update_time(NULL, &n->mtime, &n->ctime);
+		fs_update_time(NULL, &n->mtime, &n->ctime);
 	}
 
 	return ret;
@@ -497,10 +476,10 @@ static int devfs_mmap(struct file *f, struct vm_struct *vm)
 {
 	struct device *dev = f->dev;
 
-	if (dev == NULL)
+	if (!dev)
 		return -EBADF;
 
-	if (dev->fops->mmap == NULL)
+	if (!dev->fops->mmap)
 		return -ENXIO;
 
 	return dev->fops->mmap(f, vm);
@@ -510,10 +489,10 @@ static int devfs_ioctl(struct file *f, int request, unsigned long arg)
 {
 	struct device *dev = f->dev;
 
-	if (dev == NULL)
+	if (!dev)
 		return -EBADF;
 
-	if (dev->fops->ioctl == NULL)
+	if (!dev->fops->ioctl)
 		return -ENXIO;
 
 	return dev->fops->ioctl(f, request, arg);
@@ -527,9 +506,9 @@ static int devfs_poll(struct file *f, struct poll_table *wait)
 	/*
 	 * return the default mask for poll/epoll
  	 */
-	if (dev == NULL)
+	if (!dev)
 		return mask;
-	if (dev->fops->poll == NULL)
+	if (!dev->fops->poll)
 		return mask;
 
 	return dev->fops->poll(f, wait);
@@ -542,7 +521,7 @@ static off_t devfs_seekdir(struct file *f, off_t off, int whence)
 	struct devfs *fs = file2devfs(f);
 	struct devfs_node *n = NULL;
 
-	if (dir == NULL)
+	if (!dir)
 		return -EBADF;
 
 	lock_devfs(fs);
@@ -551,7 +530,7 @@ static off_t devfs_seekdir(struct file *f, off_t off, int whence)
 
 	ops = (whence != SEEK_SET) ? f->pos : off;
 
-	if (n == NULL || n->idx < ops)
+	if (!n || n->idx < ops)
 		goto out;
 
 	list_for_each_entry(n, &dir->nodes, node) {
@@ -559,10 +538,10 @@ static off_t devfs_seekdir(struct file *f, off_t off, int whence)
 			break;
 	}
 
-	if (whence == SEEK_SET) {
+	if (whence == SEEK_SET)
 		goto outset;
-	} else if (whence == SEEK_CUR) {
-		while (off && (&n->node != &dir->nodes)) {
+	else if (whence == SEEK_CUR) {
+		while (off != 0 && (&n->node != &dir->nodes)) {
 			if (off < 0) {
 				n = list_prev_entry(n, node);
 				off++;
@@ -572,15 +551,13 @@ static off_t devfs_seekdir(struct file *f, off_t off, int whence)
 			}
 		}
 	} else if (whence == SEEK_END) {
-		while (off && (&n->node != &dir->nodes)) {
-			if (off < 0) {
-				n = list_prev_entry(n, node);
-				off++;
-			}
+		while (off < 0 && (&n->node != &dir->nodes)) {
+			n = list_prev_entry(n, node);
+			off++;
 		}
 	}
 
-	if (off)
+	if (off != 0)
 		goto out;
 
 outset:
@@ -595,10 +572,10 @@ static off_t devfs_lseek(struct file *f, off_t off, int whence)
 {
 	struct device *dev = f->dev;
 
-	if (dev == NULL)
+	if (!dev)
 		return devfs_seekdir(f, off, whence);
 
-	if (dev->fops->lseek == NULL)
+	if (!dev->fops->lseek)
 		return -ENXIO;
 
 	return dev->fops->lseek(f, off, whence);
@@ -609,17 +586,17 @@ static int devfs_truncate(struct file *f, off_t length)
 	int ret = -1;
 	struct device *dev = f->dev;
 
-	if (dev == NULL)
+	if (!dev)
 		return -EBADF;
 
-	if (dev->fops->ftruncate == NULL)
+	if (!dev->fops->ftruncate)
 		return -ENXIO;
 
 	ret = dev->fops->ftruncate(f, length);
 	if (ret == 0) {
 		struct devfs_node *n = dev->fs_data;
 
-		devfs_update_time(NULL, &n->mtime, &n->ctime);
+		fs_update_time(NULL, &n->mtime, &n->ctime);
 	}
 
 	return ret;
@@ -630,13 +607,13 @@ static int devfs_fstat(struct file *f, struct stat *st)
 	struct device *dev = f->dev;
 	struct devfs_node *n = NULL;
 
-	if (dev != NULL) {
+	if (dev) {
 		n = dev->fs_data;
 
-		if (dev->fops->fstat != NULL)
+		if (dev->fops->fstat)
 			return dev->fops->fstat(f, st);
 
-		st->st_mode = S_IFREG;
+		st->st_mode = S_IFCHR;
 	} else {
 		n = f->priv;
 		st->st_mode = S_IFDIR;
@@ -654,17 +631,19 @@ static int devfs_fstat(struct file *f, struct stat *st)
 
 static ssize_t devfs_readdir(struct file *f, struct dirent *d, size_t count)
 {
-	ssize_t rdbytes = -1, pos = 0;
-	ssize_t reclen = 0, dsize = 0;
+	ssize_t init_cnt = count;
+	ssize_t err = 0;
+	uint8_t type = 0;
+	uint64_t next_off = 0;
 	struct devfs *fs = file2devfs(f);
 	struct devfs_node *dir = f->priv;
 	struct devfs_node *n = NULL;
 	struct devfs_node *last = NULL;
 
-	if ((dir == NULL) || f->dev)
+	if (!dir || f->dev)
 		return -EBADF;
 
-	if (d == NULL)
+	if (!d)
 		return -EINVAL;
 
 	lock_devfs(fs);
@@ -678,33 +657,25 @@ static ssize_t devfs_readdir(struct file *f, struct dirent *d, size_t count)
 			break;
 	}
 
-	dsize = sizeof(d->d_type) + sizeof(d->d_reclen) + sizeof(d->d_off);
-
 	while (n && (&n->node != &dir->nodes)) {
-		rdbytes = strlen(n->name) + 1;
-		reclen = roundup(rdbytes + dsize, (ssize_t)BYTES_PER_LONG);
-		if (pos + reclen > count)
+		type = (n->attr & DEVFS_ATTR_DEV) ? DT_CHR : DT_DIR;
+		next_off = (n != last) ? list_next_entry(n, node)->idx : LONG_MAX;
+
+		err = fs_format_dirent(&d, &count, n->name, type, next_off);
+		if (err < 0)
 			break;
-		d->d_type = (n->attr & DEVFS_ATTR_DEV) ? DT_CHR : DT_DIR;
-		d->d_reclen = reclen;
-		memcpy(d->d_name, n->name, rdbytes);
 
-		pos += reclen;
-
-		if (n != last) {
-			n = list_next_entry(n, node);
-			f->pos = d->d_off = n->idx;
-		} else {
-			f->pos = d->d_off = LONG_MAX;
+		f->pos = next_off;
+		if (n == last)
 			break;
-		}
-
-		d = (void *)d + reclen;
+		n = list_next_entry(n, node);
 	}
 
 out:
 	unlock_devfs(fs);
-	return pos;
+	if (!(init_cnt - count) && err < 0)
+		return err;
+	return init_cnt - count;
 }
 
 static inline int devfs_mkdir(struct file_system *pfs, const char *path, mode_t mode)
@@ -733,7 +704,7 @@ static inline int devfs_rmdir(struct file_system *pfs, const char *path)
 	lock_devfs(fs);
 
 	n = devfs_get_node(fs, path);
-	if (n == NULL) {
+	if (!n) {
 		ret = -ENOENT;
 		goto out;
 	}
@@ -792,7 +763,7 @@ static int devfs_mount(struct file_system *pfs)
 	struct devfs *fs = NULL;
 
 	fs = kzalloc(sizeof(struct devfs));
-	if (fs == NULL)
+	if (!fs)
 		return -ENOMEM;
 
 	mutex_init(&fs->lock);
@@ -803,7 +774,7 @@ static int devfs_mount(struct file_system *pfs)
 	fs->root.attr |= DEVFS_ATTR_DIR | DEVFS_ATTR_VOL;
 	INIT_LIST_HEAD(&fs->root.node);
 	INIT_LIST_HEAD(&fs->root.nodes);
-	devfs_update_time(&fs->root.atime,
+	fs_update_time(&fs->root.atime,
 		&fs->root.mtime, &fs->root.ctime);
 	pfs->fops = &devfs_ops;
 	pfs->priv = fs;
@@ -826,7 +797,7 @@ static void suspend_dir(struct devfs_node *dir)
 			if (dev->sops && dev->sops->suspend) {
 				IMSG("suspend %s\n", dev->path);
 				ret = dev->sops->suspend(dev);
-				if (ret)
+				if (ret != 0)
 					EMSG("suspend %s error\n", dev->path);
 			}
 		}
@@ -847,7 +818,7 @@ static void resume_dir(struct devfs_node *dir)
 			if (dev->sops && dev->sops->resume) {
 				IMSG("resume %s\n", dev->path);
 				ret = dev->sops->resume(dev);
-				if (ret)
+				if (ret != 0)
 					EMSG("resume %s error\n", dev->path);
 			}
 		}

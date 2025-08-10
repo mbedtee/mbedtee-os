@@ -29,7 +29,7 @@ static struct tfs_node *debugfs_alloc_node(struct tfs *fs)
 {
 	struct debugfs_fnode *d = kzalloc(sizeof(*d));
 
-	if (d == NULL)
+	if (!d)
 		return NULL;
 
 	return &d->node;
@@ -40,6 +40,31 @@ static void debugfs_free_node(struct tfs_node *n)
 	struct debugfs_fnode *d = debugfs_fnode_of(n);
 
 	kfree(d);
+}
+
+static int debugfs_alloc(struct debugfs_file *d)
+{
+	kvfree(d->buf);
+
+	/* target might be growing..., so add a page-size */
+	d->size = d->required + PAGE_SIZE;
+	d->cnt = d->required = 0;
+	d->buf = kmalloc(d->size);
+
+	if (!d->buf)
+		d->buf = vmalloc(d->size);
+
+	return d->buf ? 0 : -ENOMEM;
+}
+
+static void debugfs_free(struct debugfs_file *d)
+{
+	d->pos = 0;
+	d->cnt = 0;
+	d->required = 0;
+
+	kvfree(d->buf);
+	d->buf = NULL;
 }
 
 static int debugfs_do_open(struct tfs *fs,
@@ -66,7 +91,7 @@ static int debugfs_do_open(struct tfs *fs,
 			goto out;
 		}
 		f->flags |= O_DIRECTORY;
-	} else if (isdir | (flags & O_DIRECTORY)) {
+	} else if (isdir || (flags & O_DIRECTORY)) {
 		ret = -ENOTDIR;
 		goto out;
 	}
@@ -92,13 +117,13 @@ static int debugfs_open(struct file *f,
 		return -EINVAL;
 
 	df = kzalloc(sizeof(*df));
-	if (df == NULL)
+	if (!df)
 		return -ENOMEM;
 
 	tfs_lock(fs);
 
 	df->n = tfs_get_node(fs, f->path);
-	if (df->n == NULL) {
+	if (!df->n) {
 		ret = -ENOENT;
 		goto out;
 	}
@@ -131,16 +156,17 @@ out:
 static int debugfs_close(struct file *f)
 {
 	struct debugfs_file *df = f->priv;
-	struct debugfs_fnode *dn = debugfs_fnode_of(df->n);
+	struct debugfs_fnode *dn = NULL;
 	struct tfs *fs = file2tfs(f);
 
 	if (df->n->attr & TFS_ATTR_ARC) {
 		dn = debugfs_fnode_of(df->n);
-		if (dn->fops->close != NULL)
+		if (dn->fops->close)
 			dn->fops->close(df);
 	}
 
 	tfs_lock(fs);
+	debugfs_free(df);
 	tfs_put_node(fs, df->n);
 	tfs_unlock(fs);
 
@@ -153,7 +179,7 @@ static void debugfs_rmdir(struct tfs *fs,
 {
 	struct tfs_node *n = NULL;
 	off_t pos = 0, rdbytes = 0;
-	unsigned char dbuf[256];
+	unsigned char dbuf[512];  /* Larger buffer for flexible array dirent */
 	struct dirent *d = (struct dirent *)dbuf;
 
 	rdbytes = tfs_readdir(fs, dir, &pos, d, sizeof(dbuf));
@@ -161,7 +187,7 @@ static void debugfs_rmdir(struct tfs *fs,
 	while (rdbytes > 0) {
 		n = tfs_lookup_node(dir, d->d_name);
 
-		assert(n != NULL);
+		assert(n);
 
 		if (n->attr & TFS_ATTR_ARC) {
 			list_del(&n->node);
@@ -187,7 +213,7 @@ int debugfs_remove(const char *path)
 	tfs_lock(fs);
 
 	n = tfs_get_node(fs, path);
-	if (n == NULL) {
+	if (!n) {
 		ret = -ENOENT;
 		goto out;
 	}
@@ -259,6 +285,10 @@ void debugfs_printf(struct debugfs_file *d, const char *fmt, ...)
 		d->size - d->cnt, fmt, ap);
 	va_end(ap);
 
+/* discard error */
+	if (len < 0)
+		len = 0;
+
 	d->required += len;
 
 /* add 1 bytes for terminal null byte */
@@ -270,32 +300,6 @@ void debugfs_printf(struct debugfs_file *d, const char *fmt, ...)
 	d->cnt = d->size;
 }
 
-static int debugfs_alloc(struct debugfs_file *d)
-{
-	if (d->buf)
-		kvfree(d->buf);
-
-	/* target might be growing..., so add a page-size */
-	d->size = d->required + PAGE_SIZE;
-	d->cnt = d->required = 0;
-	d->buf = kmalloc(d->size);
-
-	if (!d->buf)
-		d->buf = vmalloc(d->size);
-
-	return d->buf ? 0 : -ENOMEM;
-}
-
-static void debugfs_free(struct debugfs_file *d)
-{
-	d->pos = 0;
-	d->cnt = 0;
-	d->required = 0;
-
-	kvfree(d->buf);
-	d->buf = NULL;
-}
-
 static ssize_t debugfs_read(struct file *f, void *buf, size_t cnt)
 {
 	ssize_t ret = 0;
@@ -303,12 +307,12 @@ static ssize_t debugfs_read(struct file *f, void *buf, size_t cnt)
 	struct tfs_node *n = d->n;
 	struct debugfs_fnode *dn = debugfs_fnode_of(n);
 
-	if (buf == NULL)
+	if (!buf)
 		return -EINVAL;
 
 	tfs_lock_node(n);
 
-	if (d->buf == NULL) {
+	if (!d->buf) {
 		ret = debugfs_alloc(d);
 		if (ret != 0)
 			goto out;
@@ -347,9 +351,11 @@ static ssize_t debugfs_read(struct file *f, void *buf, size_t cnt)
 		debugfs_free(d);
 
 out:
-	tfs_update_time(&n->atime, NULL, NULL);
 	if (ret < 0)
 		debugfs_free(d);
+	else
+		tfs_update_time(&n->atime, NULL, NULL);
+
 	tfs_unlock_node(n);
 	return ret;
 }
@@ -361,10 +367,10 @@ static ssize_t debugfs_write(struct file *f, const void *buf, size_t cnt)
 	struct tfs_node *n = d->n;
 	struct debugfs_fnode *dn = debugfs_fnode_of(n);
 
-	if (buf == NULL)
+	if (!buf)
 		return ret;
 
-	if (dn->fops->write == NULL)
+	if (!dn->fops->write)
 		return -ENXIO;
 
 	tfs_lock_node(n);
@@ -383,7 +389,7 @@ static int debugfs_fstat(struct file *f, struct stat *st)
 	struct debugfs_file *df = f->priv;
 	struct tfs_node *n = df->n;
 
-	if (st == NULL)
+	if (!st)
 		return -EINVAL;
 
 	tfs_lock_node(n);
@@ -424,7 +430,7 @@ static ssize_t debugfs_readdir(struct file *f, struct dirent *d, size_t cnt)
 	struct tfs *fs = file2tfs(f);
 	struct debugfs_file *df = f->priv;
 
-	if (d == NULL)
+	if (!d)
 		return -EINVAL;
 
 	tfs_lock(fs);

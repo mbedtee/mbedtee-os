@@ -45,14 +45,14 @@ static inline uint8_t sfnsum(char *s)
 
 static inline struct fatfs *file2fatfs(struct file *f)
 {
-	return (struct fatfs *)f->fs->priv;
+	return f->fs->priv;
 }
 
 static inline int clst_get(struct fatfs *fs,
 	struct direnty *dir)
 {
 	if (fs->type == FAT32)
-		return (((int)dir->starthi << 16) | dir->startlo);
+		return ((unsigned int)dir->starthi << 16) | dir->startlo;
 	else
 		return dir->startlo;
 }
@@ -75,7 +75,7 @@ static inline int clst2sect(struct fatfs *fs, int clst)
 
 static inline char *sect2mem(struct fatfs *fs, int sect)
 {
-	if (sect < 0)
+	if ((unsigned int)sect >= fs->total_sec)
 		return NULL;
 
 	return fs->membase + fs->ssize * sect;
@@ -314,7 +314,7 @@ static int sfnget(struct direnty *e, char *sfn)
 
 	sfn[i] = 0;
 
-	return strlen(sfn) + 1;
+	return i + 1;
 }
 
 static void sync_freeclst(struct fatfs *fs, int freed)
@@ -351,7 +351,7 @@ static int clst_alloc(struct fatfs *fs, int clst)
 {
 	int sclst = 0, nclst = 0, tclst = 0;
 
-	if (clst) {
+	if (clst != 0) {
 		/* already have next valid clst ? */
 		sclst = fatent_get(fs, clst);
 		if (!invalid_clst(sclst))
@@ -380,11 +380,11 @@ static int clst_alloc(struct fatfs *fs, int clst)
 	}
 
 	/* not found */
-	if (tclst && (nclst == sclst))
+	if (tclst != 0 && (nclst == sclst))
 		return -ENOSPC;
 
 	fatent_set(fs, nclst, -1);
-	if (clst)
+	if (clst != 0)
 		fatent_set(fs, clst, nclst);
 
 	fs->last_clst = nclst;
@@ -419,20 +419,20 @@ static void clst_free(struct fatfs *fs, int clst, int parent)
 	sync_freeclst(fs, freed);
 }
 
-static struct f_lock *list_cached_lock_clst(struct fatfs *fs,
+static struct f_inode *find_inode_by_clst(struct fatfs *fs,
 	int clst)
 {
-	struct f_lock *l = NULL, *n = NULL;
+	struct f_inode *inode = NULL, *n = NULL;
 
-	/* check the caching list */
-	list_for_each_entry(n, &fs->llocks, node) {
+	/* check the cached inode list */
+	list_for_each_entry(n, &fs->inodes, node) {
 		if (n->dir && (clst_get(fs, n->dir) == clst)) {
-			l = n;
+			inode = n;
 			break;
 		}
 	}
 
-	return l;
+	return inode;
 }
 
 static void fnclst_free(struct fatfs *fs,
@@ -442,19 +442,19 @@ static void fnclst_free(struct fatfs *fs,
 	int num = fs->cbytes / sizeof(struct ldirenty), n = 0;
 	int prev = sclst, clst = 0, next = 0;
 	off_t off = rounddown(fnstart, fs->cbytes);
-	struct f_lock *l = NULL;
+	struct f_inode *inode = NULL;
 
 	if ((prev == 0) && (fs->type == FAT32))
 		prev = fs->dirbase;
 
 	if (!invalid_clst(prev)) {
-		l = list_cached_lock_clst(fs, prev);
-		if (l != NULL) {
+		inode = find_inode_by_clst(fs, prev);
+		if (inode) {
 			/*
 			 * parent dir was opened,
 			 * postpone the free to parent dir close()
 			 */
-			l->freefn = true;
+			inode->freefn = true;
 			return;
 		}
 	}
@@ -490,120 +490,169 @@ static void fnclst_free(struct fatfs *fs,
 	}
 }
 
-static struct f_lock *list_cached_lock(struct fatfs *fs,
+static struct f_inode *find_inode(struct fatfs *fs,
 	struct direnty *dir)
 {
-	struct f_lock *l = NULL, *n = NULL;
+	struct f_inode *inode = NULL, *n = NULL;
 
-	if (dir == NULL)
+	if (!dir)
 		return NULL;
 
-	/* check the caching list */
-	list_for_each_entry(n, &fs->llocks, node) {
+	/* check the cached inode list */
+	list_for_each_entry(n, &fs->inodes, node) {
 		if (n->dir == dir) {
-			l = n;
+			inode = n;
 			break;
 		}
 	}
-	return l;
+	return inode;
 }
 
-static int chk_cached_lock(struct fatfs *fs,
+static int chk_inode(struct fatfs *fs,
 	struct direnty *dir)
 {
-	struct f_lock *l = list_cached_lock(fs, dir);
+	struct f_inode *inode = find_inode(fs, dir);
 
-	/* check the caching list */
-	if (l != NULL) {
-		if (l->unlink)
+	/* check the cached inode list */
+	if (inode) {
+		if (inode->unlink)
 			return -ENOENT;
 
-		if (l->refc + 1 == LOCK_MAX_REFC)
-			return -ENFILE;
+		if (inode->refc + 1 == INODE_MAX_REFC)
+			return -EMFILE;
 	}
 
 	return 0;
 }
 
-static struct f_lock *alloc_lock(struct fatfs *fs,
+static struct f_inode *alloc_inode(struct fatfs *fs,
 	struct direnty *dir)
 {
-	struct f_lock *l = NULL;
+	struct f_inode *inode = NULL;
 
-	l = list_cached_lock(fs, dir);
-	if (l == NULL) {
-		l = kzalloc(sizeof(struct f_lock));
-		if (l != NULL) {
-			INIT_LIST_HEAD(&l->files);
-			INIT_LIST_HEAD(&l->node);
+	inode = find_inode(fs, dir);
+	if (!inode) {
+		inode = kzalloc(sizeof(struct f_inode));
+		if (inode) {
+			INIT_LIST_HEAD(&inode->files);
+			INIT_LIST_HEAD(&inode->node);
 		}
 	}
 
-	return l;
+	return inode;
 }
 
-static void get_lock(struct fatfs *fs, struct f_info *fi)
+static void get_inode(struct fatfs *fs, struct f_info *fi)
 {
-	struct f_lock *l = fi->lock;
+	struct f_inode *inode = fi->inode;
 
-	l->refc++;
-	l->dir = fi->dir;
-	list_add_tail(&fi->node, &l->files);
+	inode->refc++;
+	inode->dir = fi->dir;
+	list_add_tail(&fi->node, &inode->files);
 
-	if (list_empty(&l->node))
-		list_add_tail(&l->node, &fs->llocks);
+	if (list_empty(&inode->node))
+		list_add_tail(&inode->node, &fs->inodes);
 }
 
-static void put_lock(struct fatfs *fs, struct f_info *fi)
+static void put_inode(struct fatfs *fs, struct f_info *fi)
 {
-	struct f_lock *l = fi->lock;
+	struct f_inode *inode = fi->inode;
 
 	list_del(&fi->node);
 
-	if (--l->refc <= 0) {
-		list_del(&l->node);
+	if (--inode->refc <= 0) {
+		list_del(&inode->node);
 
-		if (l->unlink) { /* free clsts of file content */
-			clst_free(fs, fi->sclst, 0);
-			kfree(l->dir);
+		if (inode->unlink) { /* free clsts of file content */
+			clst_free(fs, inode->sclst, 0);
+			kfree(inode->dir);
 		}
 
-		if (l->freefn) /* free clsts of dir's file name */
-			fnclst_free(fs, fi->sclst, 0);
+		if (inode->freefn) /* free clsts of dir's file name */
+			fnclst_free(fs, inode->sclst, 0);
 
-		kfree(l);
+		kfree(inode);
 	}
-}
-
-static inline int calc_seekhole(size_t filesize,
-	size_t cbytes, size_t off)
-{
-	size_t ext = 0, hole = 0;
-
-	ext = roundup(filesize, cbytes);
-	if (off > ext) {
-		ext = roundup(off - ext, cbytes);
-		hole = ext / cbytes;
-	}
-	return hole;
 }
 
 /*
- * free the superfluous seek holes
+ * Free clusters beyond the file's recorded size.
+ * Ensures the cluster chain matches the filesize.
  */
-static inline void free_seekhole(struct f_info *fi)
+static void clst_truncate(struct f_info *fi)
+{
+	int clst = fi->inode->sclst;
+	struct fatfs *fs = fi->fs;
+	off_t off = fi->dir->filesize;
+
+	if (off == 0) {
+		if (clst != 0) {
+			clst_free(fs, clst, 0);
+			clst_set(fs, fi->dir, 0);
+			fi->inode->sclst = 0;
+		}
+		return;
+	}
+
+	if (clst == 0)
+		return;
+
+	while (off > (off_t)fs->cbytes) {
+		off -= fs->cbytes;
+		clst = fatent_get(fs, clst);
+		if (invalid_clst(clst))
+			return;
+	}
+
+	clst_free(fs, fatent_get(fs, clst), clst);
+}
+
+/*
+ * Extend the cluster chain to cover the given offset.
+ * Returns 0 on success, negative errno on failure.
+ */
+static int clst_extend(struct f_info *fi, off_t off)
 {
 	int clst = 0;
-	off_t off = 0;
 	struct fatfs *fs = fi->fs;
+	struct direnty *dir = fi->dir;
+	off_t seek = 0, end = 0;
 
-	off = max((int)fi->dir->filesize, fi->offset);
-	clst = off ? fi->sclst : 0;
-	while (off > 0) {
-		off -= fs->cbytes;
-		clst = off > 0 ? fatent_get(fs, clst) : clst;
+	if (off <= (off_t)dir->filesize)
+		return 0;
+
+	end = roundup(dir->filesize, (uint32_t)fs->cbytes);
+
+	if ((off > end) && !clst_enough(fs, roundup(off - end,
+		(off_t)fs->cbytes) / fs->cbytes))
+		return -ENOSPC;
+
+	if (fi->inode->sclst == 0) {
+		clst = clst_alloc(fs, 0);
+		if (invalid_clst(clst))
+			return -ENOSPC;
+		fi->inode->sclst = clst;
+		fi->clst = clst;
+		clst_set(fs, dir, clst);
 	}
-	clst_free(fs, fatent_get(fs, clst), clst);
+
+	fi->offset = 0;
+	fi->clst = fi->inode->sclst;
+	clst = fi->clst;
+	while (off != 0) {
+		seek = min((off_t)fs->cbytes, off);
+		off -= seek;
+		fi->offset += seek;
+
+		if (off != 0 && (fi->offset % fs->cbytes == 0)) {
+			clst = clst_alloc(fs, clst);
+			if (invalid_clst(clst))
+				return -ENOSPC;
+			fi->clst = clst;
+		}
+	}
+
+	return 0;
 }
 
 static struct ldirenty *dirent_next(struct d_info *di,
@@ -628,10 +677,10 @@ static struct ldirenty *dirent_next(struct d_info *di,
 		ldir = sect2dir(fs, di->sect);
 
 		/* next cluster ? */
-		if (di->clst && ((off & (fs->cbytes - 1)) == 0)) {
+		if (di->clst != 0 && ((off & (fs->cbytes - 1)) == 0)) {
 			clst = fatent_get(fs, di->clst);
 			if (invalid_clst(clst)) {
-				if (grow == false)
+				if (!grow)
 					return NULL;
 				clst = clst_alloc(fs, di->clst);
 				if (invalid_clst(clst))
@@ -681,7 +730,7 @@ static struct ldirenty *dirent_renew(struct d_info *di, off_t offset)
 	if ((clst == 0) && invalid_rootdir(off))
 		return NULL;
 
-	if (off && clst) {
+	if (off != 0 && clst != 0) {
 		while (off >= fs->cbytes) {
 			clst = fatent_get(fs, clst);
 			if (invalid_clst(clst))
@@ -694,7 +743,7 @@ static struct ldirenty *dirent_renew(struct d_info *di, off_t offset)
 	sect += off / fs->ssize;
 
 	mem = sect2mem(fs, sect);
-	if (mem == NULL)
+	if (!mem)
 		return NULL;
 
 	mem += off % fs->ssize;
@@ -723,14 +772,14 @@ static int follow_dir(struct d_info *di)
 
 	/* is the root directory */
 	if (di->fn_size == 0) {
-		if (di->sclst || di->offset)
+		if (di->sclst != 0 || di->offset != 0)
 			return -ENOENT;
 		di->dir = &di->fs->root;
 		return 0;
 	}
 
 	ldir = dirent_renew(di, 0);
-	if (ldir == NULL)
+	if (!ldir)
 		return -ENOENT;
 
 	do {
@@ -858,7 +907,7 @@ static int sfn_addnum(struct d_info *di)
 			c = (num % 10) + '0';
 			seq_c[seq_i--] = c;
 			num /= 10;
-		} while (num);
+		} while (num != 0);
 		seq_c[seq_i] = '~';
 
 		while ((sfn_i < seq_i) && (di->sfn[sfn_i] != ' '))
@@ -919,7 +968,7 @@ static int dirent_alloc(struct d_info *di)
 		num = 1;
 
 	ldir = dirent_renew(di, 0);
-	if (ldir != NULL) {
+	if (ldir) {
 		do {
 			n += ((ldir->ord == 0) || (ldir->ord == DIRENT_DEM)) ? 1 : -n;
 		} while ((n != num) && ((ldir = dirent_next(di, true)) != NULL));
@@ -938,7 +987,7 @@ static void dirent_remove(struct d_info *di)
 		di->sclst, start, end + sizeof(*ldir));
 
 	ldir = dirent_renew(di, start);
-	if (ldir != NULL) {
+	if (ldir) {
 		do {
 			memset(ldir, 0, sizeof(struct ldirenty));
 			ldir->ord = DIRENT_DEM;
@@ -981,7 +1030,7 @@ static void dirent_fill(struct d_info *di)
 
 	sum = sfnsum(di->sfn);
 
-	while (ldir && --num) {
+	while (ldir && --num != 0) {
 		lfnfill(ldir, di->lfn, num, sum);
 		ldir = dirent_next(di, false);
 	}
@@ -1008,7 +1057,7 @@ static void dir_register(struct d_info *di, int clst)
 	struct direnty *dir = NULL;
 
 	dir = (struct direnty *)clst2mem(fs, clst);
-	if (dir == NULL)
+	if (!dir)
 		return;
 
 	memset(dir, 0, sizeof(struct direnty));
@@ -1067,650 +1116,6 @@ static int dirent_register(struct d_info *di)
 	return 0;
 }
 
-static void file_fi(struct d_info *di, struct f_info *fi)
-{
-	fi->fs = di->fs;
-	fi->flags = di->flags;
-	fi->dir = di->dir;
-	fi->sclst = clst_get(di->fs, di->dir);
-	fi->clst = fi->sclst;
-	fi->offset = 0;
-	fi->hole = 0;
-
-	get_lock(di->fs, fi);
-}
-
-static void file_append(struct f_info *fi)
-{
-	struct fatfs *fs = fi->fs;
-	off_t off = fi->dir->filesize;
-	int clst = fi->sclst;
-
-	while (off > 0) {
-		off -= fs->cbytes;
-		clst = off > 0 ? fatent_get(fs, clst) : clst;
-	}
-	fi->clst = clst;
-	fi->offset = fi->dir->filesize;
-}
-
-static void file_trunc(struct f_info *fi)
-{
-	struct fatfs *fs = fi->fs;
-
-	if (fi->dir->filesize) {
-		struct direnty *dir = fi->dir;
-
-		dir->filesize = 0;
-		fatfs_update_time(&dir->date, &dir->time);
-		dir->cdate = dir->date;
-		dir->ctime = dir->time;
-		clst_free(fs, fi->sclst, 0);
-		clst_set(fs, dir, 0);
-		fi->sclst = 0;
-		fi->clst = 0;
-		fi->offset = 0;
-		fi->hole = 0;
-	}
-}
-
-static int file_create(struct file *f,
-	struct d_info *di, struct f_info *fi, mode_t mode)
-{
-	int ret = -EPERM;
-	int flags = f->flags;
-
-	if ((flags & O_CREAT) == 0)
-		return -ENOENT;
-
-	if (di->directory)
-		return -EISDIR;
-
-	if (flags & O_DIRECTORY)
-		return -ENOTDIR;
-
-	di->flags = flags;
-	di->mode = mode;
-
-	fi->lock = alloc_lock(di->fs, NULL);
-	if (fi->lock == NULL)
-		return -ENOMEM;
-
-	ret = dirent_register(di);
-	if (ret != 0) {
-		put_lock(di->fs, fi);
-		return ret;
-	}
-
-	file_fi(di, fi);
-
-	return ret;
-}
-
-static int file_open(struct file *f,
-	struct d_info *di, struct f_info *fi)
-{
-	int ret = -EPERM;
-	int flags = f->flags;
-	int wrflag = flags & O_ACCMODE;
-	struct direnty *dir = di->dir;
-
-	/* O_EXCL always alongside O_CREAT ? */
-	if (flags & O_EXCL)
-		return -EEXIST;
-
-	if (dir->attr & ATTR_DIR) {
-		if (flags & (O_ACCMODE | O_CREAT))
-			return -EISDIR;
-
-		if (flags & (O_TRUNC | O_APPEND))
-			return -EISDIR;
-
-		f->flags |= O_DIRECTORY;
-	} else if (di->directory | (flags & O_DIRECTORY))
-		return -ENOTDIR;
-
-	if (wrflag && (dir->attr & ATTR_RO))
-		return -EACCES;
-
-	ret = chk_cached_lock(di->fs, dir);
-	if (ret != 0)
-		return ret;
-
-	fi->lock = alloc_lock(di->fs, dir);
-	if (fi->lock == NULL)
-		return -ENOMEM;
-
-	di->flags = f->flags;
-
-	file_fi(di, fi);
-
-	if (wrflag && (flags & O_TRUNC))
-		file_trunc(fi);
-
-	return 0;
-}
-
-static int fat_open(struct file *f, mode_t mode, void *arg)
-{
-	int ret = -1;
-	struct fatfs *fs = file2fatfs(f);
-	struct d_info _di, *di = &_di;
-	struct f_info *fi = NULL;
-
-	fi = kzalloc(sizeof(struct f_info));
-	if (fi == NULL)
-		return -ENOMEM;
-
-	memset(di, 0, sizeof(struct d_info));
-
-	INIT_LIST_HEAD(&fi->node);
-
-	lock_fatfs(fs);
-	di->fs = fs;
-	ret = follow_path(di, f->path);
-
-	if (di->abort || (ret == -ENAMETOOLONG))
-		goto out;
-
-	if (ret == 0)
-		ret = file_open(f, di, fi);
-	else if (ret == -ENOENT)
-		ret = file_create(f, di, fi, mode);
-
-	f->priv = fi;
-
-out:
-	unlock_fatfs(fs);
-	if (ret != 0)
-		kfree(fi);
-	return ret;
-}
-
-static int fat_close(struct file *f)
-{
-	struct f_info *fi = f->priv;
-	struct fatfs *fs = file2fatfs(f);
-
-	if (fi == NULL)
-		return -EBADF;
-
-	lock_fatfs(fs);
-
-	if (f->flags & O_ACCMODE) {
-		fi->offset = 0;
-		free_seekhole(fi);
-	}
-
-	put_lock(fs, fi);
-
-	unlock_fatfs(fs);
-
-	kfree(fi);
-
-	return 0;
-}
-
-static ssize_t fat_read(struct file *f, void *buf, size_t cnt)
-{
-	char *mem = NULL;
-	off_t rd_off = 0, clst = 0;
-	size_t rd_bytes = 0, unalign = 0, remain = 0;
-	struct f_info *fi = f->priv;
-	struct fatfs *fs = file2fatfs(f);
-
-	if (fi == NULL)
-		return -EBADF;
-
-	if (cnt == 0)
-		return 0;
-
-	if (buf == NULL)
-		return -EINVAL;
-
-	lock_fatfs(fs);
-
-	if (fi->dir->filesize <= (size_t)fi->offset)
-		goto out;
-
-	remain = min(cnt, (size_t)(fi->dir->filesize - fi->offset));
-
-	FMSG("clst %d offset 0x%x\n", fi->clst, fi->offset);
-
-	clst = fi->clst;
-	while (remain) {
-		unalign = fi->offset % fs->cbytes;
-
-		if (fi->offset && !unalign) {
-			clst = fatent_get(fs, clst);
-			if (invalid_clst(clst))
-				goto out;
-			fi->clst = clst;
-		}
-
-		mem = clst2mem(fs, clst);
-		if (mem == NULL)
-			goto out;
-
-		rd_bytes = min((size_t)fs->cbytes - unalign, remain);
-		memcpy(buf + rd_off, mem + unalign, rd_bytes);
-
-		FMSG("clst %d @ %p %d\n", (int)clst,
-			(void *)(mem - fs->membase), (int)unalign);
-
-		remain -= rd_bytes;
-		rd_off += rd_bytes;
-		fi->offset += rd_bytes;
-	}
-
-out:
-	if (rd_off > 0)
-		fatfs_update_time(&fi->dir->adate, NULL);
-
-	unlock_fatfs(fs);
-	return rd_off;
-}
-
-static ssize_t fat_write(struct file *f, const void *buf, size_t cnt)
-{
-	ssize_t wr_off = 0;
-	size_t wr_bytes = 0, unalign = 0;
-	struct f_info *fi = f->priv;
-	struct fatfs *fs = file2fatfs(f);
-	char *mem = NULL;
-	int clst = 0;
-
-	if (fi == NULL)
-		return -EBADF;
-
-	if (cnt == 0)
-		return 0;
-
-	if (buf == NULL)
-		return -EINVAL;
-
-	lock_fatfs(fs);
-
-	if (f->flags & O_APPEND) {
-		file_append(fi);
-		free_seekhole(fi);
-		fi->hole = 0;
-	}
-
-	if (fi->sclst == 0) {
-		clst = clst_alloc(fs, 0);
-		if (invalid_clst(clst))
-			goto out;
-
-		fi->sclst = clst;
-		fi->clst = clst;
-		clst_set(fs, fi->dir, clst);
-	}
-
-	clst = fi->clst;
-	while (cnt) {
-		unalign = fi->offset % fs->cbytes;
-		if (fi->offset && !unalign) {
-			clst = clst_alloc(fs, clst);
-			if (invalid_clst(clst))
-				goto out;
-			fi->clst = clst;
-		}
-
-		mem = clst2mem(fs, clst);
-		if (mem == NULL)
-			goto out;
-
-		wr_bytes = min((size_t)fs->cbytes - unalign, cnt);
-		memcpy(mem + unalign, buf + wr_off, wr_bytes);
-		cnt -= wr_bytes;
-		wr_off += wr_bytes;
-		fi->offset += wr_bytes;
-	}
-
-out:
-	if (wr_off == 0)
-		wr_off = -ENOSPC;
-
-	if (wr_off > 0) {
-		if (fi->dir->filesize < fi->offset)
-			fi->dir->filesize = fi->offset;
-		fi->hole = 0;
-		fatfs_update_time(&fi->dir->date, &fi->dir->time);
-	}
-	unlock_fatfs(fs);
-	return wr_off;
-}
-
-static off_t file_seek(struct f_info *fi, off_t off, int whence)
-{
-	int wrflag = 0, clst = 0, hole = 0;
-	struct fatfs *fs = fi->fs;
-	off_t ret = -1, seek = 0;
-	struct direnty *dir = fi->dir;
-
-	if (whence == SEEK_CUR)
-		off += fi->offset;
-	else if (whence == SEEK_END)
-		off += (off_t)fi->dir->filesize;
-	else if (whence != SEEK_SET)
-		return -EINVAL;
-
-	if (off < 0)
-		return -EINVAL;
-
-	/* extend cluster chain */
-	wrflag = fi->flags & O_ACCMODE;
-	if (off > dir->filesize) {
-		if (wrflag) {
-			hole = calc_seekhole(dir->filesize, fs->cbytes, off);
-			if (!clst_enough(fs, hole - fi->hole)) {
-				ret = -ENOSPC;
-				goto out;
-			}
-		} else
-			off = dir->filesize;
-	}
-
-	if (off && wrflag && (fi->sclst == 0)) {
-		clst = clst_alloc(fs, 0);
-		fi->sclst = clst;
-		fi->clst = clst;
-		clst_set(fs, dir, clst);
-	}
-
-	fi->offset = 0;
-	fi->clst = fi->sclst;
-	clst = fi->clst;
-	while (off) {
-		seek = fs->cbytes < off ? fs->cbytes : off;
-		off -= seek;
-		fi->offset += seek;
-
-		if (off && (fi->offset % fs->cbytes == 0)) {
-			clst = wrflag ? clst_alloc(fs, clst)
-					 : fatent_get(fs, clst);
-			if (invalid_clst(clst))	{
-				ret = fi->offset;
-				goto out;
-			}
-			fi->clst = clst;
-		}
-	}
-
-	ret = fi->offset;
-
-	/* refresh the ceiling of the seek hole */
-	if (fi->offset > dir->filesize)
-		fi->hole = max(hole, fi->hole);
-
-	/* shrink the superfluous seek holes */
-	if (hole < fi->hole) {
-		free_seekhole(fi);
-		fi->hole = hole;
-	}
-
-out:
-	return ret;
-}
-
-static off_t dir_seek(struct f_info *fi, off_t off, int whence)
-{
-	if (whence != SEEK_SET)
-		return -EINVAL;
-
-	if (off & (sizeof(struct direnty) - 1))
-		return -EINVAL;
-
-	fi->offset = off;
-
-	return off;
-}
-
-static off_t fat_seek(struct file *f, off_t off, int whence)
-{
-	off_t ret = -1;
-	struct f_info *fi = f->priv;
-	struct fatfs *fs = file2fatfs(f);
-
-	if (fi == NULL)
-		return -EBADF;
-
-	lock_fatfs(fs);
-
-	if (fi->dir->attr & ATTR_DIR)
-		ret = dir_seek(fi, off, whence);
-	else
-		ret = file_seek(fi, off, whence);
-
-	unlock_fatfs(fs);
-	return ret;
-}
-
-static int fat_ftruncate(struct file *f, off_t length)
-{
-	int clst = 0, ret = 0;
-	struct f_info *fi = f->priv;
-	struct fatfs *fs = file2fatfs(f);
-	off_t off = 0, seek = 0;
-
-	if (fi == NULL)
-		return -EBADF;
-
-	if (length < 0)
-		return -EFBIG;
-
-	lock_fatfs(fs);
-
-	if (length <= fi->dir->filesize) {
-		/* shrink cluster chain */
-		fi->dir->filesize = length;
-		free_seekhole(fi);
-	} else {
-		/* extend cluster chain */
-		clst = fi->clst;
-		off = fi->offset;
-		seek = file_seek(fi, length, SEEK_SET);
-		fi->clst = clst;
-		fi->offset = off;
-		if (seek < 0) {
-			ret = seek;
-			goto out;
-		}
-		fi->dir->filesize = length;
-	}
-
-	fi->hole = calc_seekhole(length, fs->cbytes, fi->offset);
-	fatfs_update_time(&fi->dir->date, &fi->dir->time);
-	fi->dir->cdate = fi->dir->date;
-	fi->dir->ctime = fi->dir->time;
-
-out:
-	unlock_fatfs(fs);
-	return ret;
-}
-
-static int fat_fstat(struct file *f, struct stat *st)
-{
-	struct f_info *fi = f->priv;
-	struct fatfs *fs = file2fatfs(f);
-	struct direnty *dir = NULL;
-
-	if (fi == NULL)
-		return -EBADF;
-
-	if (st == NULL)
-		return -EINVAL;
-
-	lock_fatfs(fs);
-
-	dir = fi->dir;
-	st->st_size = dir->filesize;
-	st->st_blksize = fs->ssize;
-	st->st_blocks = dir->filesize / fs->ssize;
-	if (dir->filesize % fs->ssize)
-		st->st_blocks++;
-
-	if (dir->attr & ATTR_DIR)
-		st->st_mode = S_IFDIR;
-	else
-		st->st_mode = S_IFREG;
-
-	st->st_atime = date2time(1980 + (dir->adate >> 9),
-		(dir->adate >> 5) & 0x000F, dir->adate & 0x001F,
-		0, 0, 0);
-
-	st->st_mtime = date2time(1980 + (dir->date >> 9),
-		(dir->date >> 5) & 0x000F, dir->date & 0x001F,
-		 dir->time >> 11, (dir->time >> 5) & 0x003F,
-		(dir->time & 0x001F) << 1);
-
-	st->st_ctime = date2time(1980 + (dir->cdate >> 9),
-		(dir->cdate >> 5) & 0x000F, dir->cdate & 0x001F,
-		 dir->ctime >> 11, (dir->ctime >> 5) & 0x003F,
-		(dir->ctime & 0x001F) << 1);
-
-	unlock_fatfs(fs);
-	return 0;
-}
-
-static int fat_rename(struct file_system *pfs,
-	const char *oldpath, const char *newpath)
-{
-	int ret = -1;
-	struct f_lock *l = NULL;
-	struct f_info *fi = NULL;
-	struct direnty *odir = NULL;
-	struct d_info _di, _ndi;
-	struct d_info *di = &_di, *ndi = &_ndi;
-
-	if (!newpath || !oldpath)
-		return -EINVAL;
-
-	memset(di, 0, sizeof(struct d_info));
-	memset(ndi, 0, sizeof(struct d_info));
-
-	di->fs = pfs->priv;
-	ndi->fs = di->fs;
-
-	lock_fatfs(di->fs);
-	ret = follow_path(di, oldpath);
-	if (ret != 0)
-		goto out;
-
-	odir = di->dir;
-
-	/* mount point not to be renamed */
-	if (odir->attr & ATTR_VOL) {
-		ret = -EBUSY;
-		goto out;
-	}
-
-	if ((odir->attr & ATTR_DIR) &&
-		(odir->attr & ATTR_RO)) {
-		ret = -EACCES;
-		goto out;
-	}
-
-	ret = follow_path_exclusion(ndi, newpath, odir);
-	if (ret == 0) {
-		ret = -EEXIST;
-		goto out;
-	}
-
-	/* ndi->abort -> parent directory does not exist */
-	if (ndi->abort || (ret != -ENOENT))
-		goto out;
-
-	if (!(odir->attr & ATTR_DIR) && ndi->directory) {
-		ret = -ENOTDIR;
-		goto out;
-	}
-
-	if (odir->attr & ATTR_DIR)
-		ndi->directory = DIRENT_DIR;
-
-	ret = dirent_register(ndi);
-	if (ret != 0)
-		goto out;
-
-	/* update dirent for each opend f_info */
-	l = list_cached_lock(di->fs, odir);
-	if (l != NULL) {
-		l->dir = ndi->dir;
-		list_for_each_entry(fi, &l->files, node)
-			fi->dir = ndi->dir;
-	}
-
-	memcpy(&ndi->dir->attr, &odir->attr,
-		sizeof(struct direnty) - FAT_MAX_SFN);
-	dirent_remove(di);
-
-	fatfs_update_time(&ndi->dir->cdate, &ndi->dir->ctime);
-
-out:
-	unlock_fatfs(di->fs);
-	return ret;
-}
-
-static int fat_unlink(struct file_system *pfs, const char *path)
-{
-	int ret = 0, sclst = 0;
-	struct f_lock *l = NULL;
-	struct f_info *fi = NULL;
-	struct direnty *dir = NULL;
-	struct d_info _di, *di = &_di;
-
-	if (!path)
-		return -EINVAL;
-
-	memset(di, 0, sizeof(struct d_info));
-
-	di->fs = pfs->priv;
-
-	lock_fatfs(di->fs);
-
-	ret = follow_path(di, path);
-	if (ret != 0)
-		goto out;
-
-	if (di->directory || (di->dir->attr & ATTR_DIR)) {
-		ret = -EISDIR;
-		goto out;
-	}
-
-	l = list_cached_lock(di->fs, di->dir);
-	if (l != NULL) {
-		/*
-		 * original dir is located in fat,
-		 * so we shall not use it anymore, use tmp for read()/write()
-		 */
-		dir = kmalloc(sizeof(*dir));
-		if (dir == NULL) {
-			ret = -ENOMEM;
-			goto out;
-		}
-
-		memcpy(dir, di->dir, sizeof(*dir));
-		l->unlink = true;
-		l->dir = dir;
-		dirent_remove(di);
-		list_for_each_entry(fi, &l->files, node)
-			fi->dir = dir;
-		goto out;
-	}
-
-	/* free file content clusters */
-	sclst = clst_get(di->fs, di->dir);
-	clst_free(di->fs, sclst, 0);
-	/* remove filename(fn) in the parent dir */
-	dirent_remove(di);
-
-out:
-	unlock_fatfs(di->fs);
-	return ret;
-}
-
 /*
  * read a file name in current DIR
  * return the name length in bytes
@@ -1723,7 +1128,7 @@ static int read_dir(struct d_info *di)
 	struct ldirenty *ldir = NULL;
 
 	ldir = dirent_renew(di, di->offset);
-	if (ldir == NULL)
+	if (!ldir)
 		return -ENOENT;
 
 	do {
@@ -1773,51 +1178,834 @@ static int read_dir(struct d_info *di)
 	return -ENOENT;
 }
 
+static off_t file_seek(struct f_info *fi, off_t off, int whence)
+{
+	struct fatfs *fs = fi->fs;
+	struct direnty *dir = fi->dir;
+	off_t ret = -1;
+	off_t seek = 0;
+	int clst = 0;
+
+	if (whence == SEEK_CUR)
+		off += fi->offset;
+	else if (whence == SEEK_END)
+		off += dir->filesize;
+	else if (whence != SEEK_SET)
+		return -EINVAL;
+
+	if (off < 0)
+		return -EINVAL;
+
+	if (off > (off_t)dir->filesize) {
+		fi->offset = off;
+		return off;
+	}
+
+	/*
+	 * For off <= EOF we must also update fi->clst, because read()/write()
+	 * uses fi->clst as the starting cluster for the current offset.
+	 */
+	fi->offset = 0;
+	fi->clst = fi->inode->sclst;
+	clst = fi->clst;
+
+	while (off != 0) {
+		seek = min((off_t)fs->cbytes, off);
+		off -= seek;
+		fi->offset += seek;
+
+		if (off != 0 && (fi->offset % fs->cbytes == 0)) {
+			clst = fatent_get(fs, clst);
+			if (invalid_clst(clst)) {
+				ret = fi->offset;
+				goto out;
+			}
+			fi->clst = clst;
+		}
+	}
+
+	ret = fi->offset;
+
+out:
+	return ret;
+}
+
+static void file_fi(struct d_info *di, struct f_info *fi)
+{
+	fi->fs = di->fs;
+	fi->flags = di->flags;
+	fi->dir = di->dir;
+	fi->offset = 0;
+
+	get_inode(di->fs, fi);
+
+	fi->inode->sclst = clst_get(di->fs, di->dir);
+	fi->clst = fi->inode->sclst;
+}
+
+static void file_append(struct f_info *fi)
+{
+	struct fatfs *fs = fi->fs;
+	off_t off = fi->dir->filesize;
+	int clst = fi->inode->sclst;
+
+	if (fi->offset == off && fi->clst != 0)
+		return;
+
+	while (off > 0) {
+		off -= fs->cbytes;
+		clst = off > 0 ? fatent_get(fs, clst) : clst;
+	}
+	fi->clst = clst;
+	fi->offset = fi->dir->filesize;
+}
+
+static void file_trunc(struct f_info *fi)
+{
+	struct fatfs *fs = fi->fs;
+
+	if (fi->dir->filesize != 0) {
+		struct direnty *dir = fi->dir;
+		struct f_info *tmp = NULL;
+
+		dir->filesize = 0;
+		fatfs_update_time(&dir->date, &dir->time);
+		dir->cdate = dir->date;
+		dir->ctime = dir->time;
+		clst_free(fs, fi->inode->sclst, 0);
+		clst_set(fs, dir, 0);
+		fi->inode->sclst = 0;
+		fi->clst = 0;
+		fi->offset = 0;
+
+		list_for_each_entry(tmp, &fi->inode->files, node)
+			tmp->clst = 0;
+	}
+}
+
+static int file_create(struct file *f,
+	struct d_info *di, struct f_info *fi, mode_t mode)
+{
+	int ret = -EPERM;
+	int flags = f->flags;
+
+	if ((flags & O_CREAT) == 0)
+		return -ENOENT;
+
+	if (di->directory)
+		return -EISDIR;
+
+	if (flags & O_DIRECTORY)
+		return -ENOTDIR;
+
+	di->flags = flags;
+	di->mode = mode;
+
+	fi->inode = alloc_inode(di->fs, NULL);
+	if (!fi->inode)
+		return -ENOMEM;
+
+	ret = dirent_register(di);
+	if (ret != 0) {
+		put_inode(di->fs, fi);
+		return ret;
+	}
+
+	file_fi(di, fi);
+
+	return ret;
+}
+
+static int file_open(struct file *f,
+	struct d_info *di, struct f_info *fi)
+{
+	int ret = -EPERM;
+	int flags = f->flags;
+	int wrflag = flags & O_ACCMODE;
+	struct direnty *dir = di->dir;
+
+	/* O_EXCL always alongside O_CREAT ? */
+	if (flags & O_EXCL)
+		return -EEXIST;
+
+	if (dir->attr & ATTR_DIR) {
+		if (flags & (O_ACCMODE | O_CREAT))
+			return -EISDIR;
+
+		if (flags & (O_TRUNC | O_APPEND))
+			return -EISDIR;
+
+		f->flags |= O_DIRECTORY;
+	} else if (di->directory || (flags & O_DIRECTORY))
+		return -ENOTDIR;
+
+	if (wrflag && (dir->attr & ATTR_RO))
+		return -EACCES;
+
+	ret = chk_inode(di->fs, dir);
+	if (ret != 0)
+		return ret;
+
+	fi->inode = alloc_inode(di->fs, dir);
+	if (!fi->inode)
+		return -ENOMEM;
+
+	di->flags = f->flags;
+
+	file_fi(di, fi);
+
+	if (wrflag && (flags & O_TRUNC))
+		file_trunc(fi);
+
+	return 0;
+}
+
+static int fat_open(struct file *f, mode_t mode, void *arg)
+{
+	int ret = -1;
+	struct fatfs *fs = file2fatfs(f);
+	struct d_info _di, *di = &_di;
+	struct f_info *fi = NULL;
+
+	fi = kzalloc(sizeof(struct f_info));
+	if (!fi)
+		return -ENOMEM;
+
+	memset(di, 0, sizeof(struct d_info));
+
+	INIT_LIST_HEAD(&fi->node);
+
+	lock_fatfs(fs);
+	di->fs = fs;
+	ret = follow_path(di, f->path);
+
+	if (di->abort || (ret == -ENAMETOOLONG))
+		goto out;
+
+	if (ret == 0)
+		ret = file_open(f, di, fi);
+	else if (ret == -ENOENT)
+		ret = file_create(f, di, fi, mode);
+
+	f->priv = fi;
+
+out:
+	unlock_fatfs(fs);
+	if (ret != 0)
+		kfree(fi);
+	return ret;
+}
+
+static int fat_close(struct file *f)
+{
+	struct f_info *fi = f->priv;
+	struct fatfs *fs = file2fatfs(f);
+
+	if (!fi)
+		return -EBADF;
+
+	lock_fatfs(fs);
+
+	put_inode(fs, fi);
+
+	unlock_fatfs(fs);
+
+	kfree(fi);
+
+	return 0;
+}
+
+static ssize_t fat_read(struct file *f, void *buf, size_t cnt)
+{
+	char *mem = NULL;
+	off_t rd_off = 0, clst = 0;
+	size_t rd_bytes = 0, unalign = 0, remain = 0;
+	struct f_info *fi = f->priv;
+	struct fatfs *fs = file2fatfs(f);
+
+	if (!fi)
+		return -EBADF;
+
+	if (cnt == 0)
+		return 0;
+
+	if (!buf)
+		return -EINVAL;
+
+	lock_fatfs(fs);
+
+	/*
+	 * Sync fi->clst with the inode's sclst when reading from offset 0.
+	 * sclst lives on the inode - always authoritative, even after
+	 * truncate+rewrite through another fd.
+	 */
+	if (fi->offset == 0)
+		fi->clst = fi->inode->sclst;
+	else if (fi->clst == 0)
+		file_seek(fi, fi->offset, SEEK_SET);
+
+	if (fi->dir->filesize <= (size_t)fi->offset)
+		goto out;
+
+	remain = min(cnt, (size_t)(fi->dir->filesize - fi->offset));
+
+	FMSG("clst %d offset 0x%x\n", fi->clst, fi->offset);
+
+	clst = fi->clst;
+	while (remain) {
+		unalign = fi->offset % fs->cbytes;
+
+		if (fi->offset != 0 && unalign == 0) {
+			clst = fatent_get(fs, clst);
+			if (invalid_clst(clst))
+				goto out;
+			fi->clst = clst;
+		}
+
+		mem = clst2mem(fs, clst);
+		if (!mem)
+			goto out;
+
+		rd_bytes = min((size_t)fs->cbytes - unalign, remain);
+		memcpy(buf + rd_off, mem + unalign, rd_bytes);
+
+		FMSG("clst %d @ %p %d\n", (int)clst,
+			(void *)(mem - fs->membase), (int)unalign);
+
+		remain -= rd_bytes;
+		rd_off += rd_bytes;
+		fi->offset += rd_bytes;
+	}
+
+out:
+	if (rd_off > 0)
+		fatfs_update_time(&fi->dir->adate, NULL);
+
+	unlock_fatfs(fs);
+	return rd_off;
+}
+
+/*
+ * write(fd, 512) -> ftruncate(fd, 100)
+ * ftruncate(fd, 256) -> [100..255] must be zeroed
+ */
+static void clear_cluster_tail(struct f_info *fi,
+	off_t old_size, off_t new_end)
+{
+	struct fatfs *fs = fi->fs;
+	off_t end = 0, until = 0, tmp = 0;
+	size_t start = 0, zlen = 0;
+	char *mem = NULL;
+	int clst = 0;
+
+	if (old_size <= 0)
+		return;
+	if (new_end <= old_size)
+		return;
+
+	start = old_size % fs->cbytes;
+	if (start == 0)
+		return;
+
+	end = roundup(old_size, (size_t)fs->cbytes);
+	until = new_end < end ? new_end : end;
+	if (until <= old_size)
+		return;
+
+	/* Find the cluster containing old_size. */
+	tmp = old_size;
+	clst = fi->inode->sclst;
+	while (tmp >= (off_t)fs->cbytes) {
+		tmp -= (off_t)fs->cbytes;
+		clst = fatent_get(fs, clst);
+		if (invalid_clst(clst))
+			return;
+	}
+
+	mem = clst2mem(fs, clst);
+	if (!mem)
+		return;
+
+	zlen = until - old_size;
+	if (zlen != 0)
+		memset(mem + start, 0, zlen);
+}
+
+static ssize_t fat_write(struct file *f, const void *buf, size_t cnt)
+{
+	ssize_t wr_off = 0;
+	size_t wr_bytes = 0, unalign = 0;
+	struct f_info *fi = f->priv;
+	struct fatfs *fs = file2fatfs(f);
+	char *mem = NULL;
+	int clst = 0, old_size = 0;
+
+	if (!fi)
+		return -EBADF;
+
+	if (cnt == 0)
+		return 0;
+
+	if (!buf)
+		return -EINVAL;
+
+	lock_fatfs(fs);
+
+	old_size = fi->dir->filesize;
+
+	if (f->flags & O_APPEND)
+		file_append(fi);
+	else if (fi->clst == 0) {
+		if (fi->offset == 0)
+			fi->clst = fi->inode->sclst;
+		else
+			file_seek(fi, fi->offset, SEEK_SET);
+	}
+
+	if (fi->offset > old_size) {
+		off_t target = fi->offset;
+		if (clst_extend(fi, target) != 0) {
+			clst_truncate(fi);
+			goto out;
+		}
+
+		clear_cluster_tail(fi, old_size, target);
+	}
+
+	if (fi->inode->sclst == 0) {
+		clst = clst_alloc(fs, 0);
+		if (invalid_clst(clst))
+			goto out;
+
+		fi->inode->sclst = clst;
+		fi->clst = clst;
+		clst_set(fs, fi->dir, clst);
+	}
+
+	clst = fi->clst;
+	while (cnt != 0) {
+		unalign = fi->offset % fs->cbytes;
+		if (fi->offset != 0 && unalign == 0) {
+			clst = clst_alloc(fs, clst);
+			if (invalid_clst(clst))
+				goto out;
+			fi->clst = clst;
+		}
+
+		mem = clst2mem(fs, clst);
+		if (!mem)
+			goto out;
+
+		wr_bytes = min((size_t)fs->cbytes - unalign, cnt);
+		memcpy(mem + unalign, buf + wr_off, wr_bytes);
+		cnt -= wr_bytes;
+		wr_off += wr_bytes;
+		fi->offset += wr_bytes;
+	}
+
+out:
+	if (wr_off == 0)
+		wr_off = -ENOSPC;
+
+	if (wr_off > 0) {
+		if (fi->dir->filesize < fi->offset)
+			fi->dir->filesize = fi->offset;
+		fatfs_update_time(&fi->dir->date, &fi->dir->time);
+	}
+	unlock_fatfs(fs);
+	return wr_off;
+}
+
+static off_t dir_seek(struct f_info *fi, off_t off, int whence)
+{
+	if (whence != SEEK_SET)
+		return -EINVAL;
+
+	if (off & (sizeof(struct direnty) - 1))
+		return -EINVAL;
+
+	fi->offset = off;
+
+	return off;
+}
+
+static off_t fat_seek(struct file *f, off_t off, int whence)
+{
+	off_t ret = -1;
+	struct f_info *fi = f->priv;
+	struct fatfs *fs = file2fatfs(f);
+
+	if (!fi)
+		return -EBADF;
+
+	lock_fatfs(fs);
+
+	if (fi->dir->attr & ATTR_DIR)
+		ret = dir_seek(fi, off, whence);
+	else
+		ret = file_seek(fi, off, whence);
+
+	unlock_fatfs(fs);
+	return ret;
+}
+
+static int fat_ftruncate(struct file *f, off_t length)
+{
+	int clst = 0, ret = 0;
+	struct f_info *fi = f->priv;
+	struct fatfs *fs = file2fatfs(f);
+	off_t off = 0, old_size = 0;
+
+	if (!fi)
+		return -EBADF;
+
+	if (length < 0)
+		return -EFBIG;
+
+	lock_fatfs(fs);
+	old_size = fi->dir->filesize;
+
+	if (length <= fi->dir->filesize) {
+		struct f_info *tmp = NULL;
+		/* shrink cluster chain */
+		fi->dir->filesize = length;
+		clst_truncate(fi);
+
+		list_for_each_entry(tmp, &fi->inode->files, node) {
+			if (tmp->offset >= length)
+				tmp->clst = 0;
+		}
+	} else {
+		/* extend cluster chain */
+		clst = fi->clst;
+		off = fi->offset;
+		ret = clst_extend(fi, length);
+		fi->clst = clst;
+		fi->offset = off;
+		if (ret != 0) {
+			/* rollback: free clusters beyond original size */
+			clst_truncate(fi);
+			goto out;
+		}
+
+		clear_cluster_tail(fi, old_size, length);
+		fi->dir->filesize = length;
+	}
+
+	fatfs_update_time(&fi->dir->date, &fi->dir->time);
+	fi->dir->cdate = fi->dir->date;
+	fi->dir->ctime = fi->dir->time;
+
+out:
+	unlock_fatfs(fs);
+	return ret;
+}
+
+static int fat_fstat(struct file *f, struct stat *st)
+{
+	struct f_info *fi = f->priv;
+	struct fatfs *fs = file2fatfs(f);
+	struct direnty *dir = NULL;
+
+	if (!fi)
+		return -EBADF;
+
+	if (!st)
+		return -EINVAL;
+
+	lock_fatfs(fs);
+
+	dir = fi->dir;
+	st->st_size = dir->filesize;
+	st->st_blksize = fs->ssize;
+
+	if (dir->attr & ATTR_DIR) {
+		st->st_mode = S_IFDIR;
+		st->st_blocks = 1;
+	} else {
+		st->st_mode = S_IFREG;
+		st->st_blocks = dir->filesize / fs->ssize;
+		if (dir->filesize % fs->ssize)
+			st->st_blocks++;
+	}
+
+	st->st_atime = date2time(1980 + (dir->adate >> 9),
+		(dir->adate >> 5) & 0x000F, dir->adate & 0x001F,
+		0, 0, 0);
+
+	st->st_mtime = date2time(1980 + (dir->date >> 9),
+		(dir->date >> 5) & 0x000F, dir->date & 0x001F,
+		 dir->time >> 11, (dir->time >> 5) & 0x003F,
+		(dir->time & 0x001F) << 1);
+
+	st->st_ctime = date2time(1980 + (dir->cdate >> 9),
+		(dir->cdate >> 5) & 0x000F, dir->cdate & 0x001F,
+		 dir->ctime >> 11, (dir->ctime >> 5) & 0x003F,
+		(dir->ctime & 0x001F) << 1);
+
+	unlock_fatfs(fs);
+	return 0;
+}
+
+static int file_dir_remove(struct d_info *di)
+{
+	struct f_inode *inode = NULL;
+	struct f_info *fi = NULL;
+	struct d_info _cdi, *cdi = &_cdi;
+	struct direnty *dir = di->dir, *tdir = NULL;
+	int is_dir = dir->attr & ATTR_DIR;
+	int ret = -1, sclst = 0;
+
+	/* mount point is not removable */
+	if (dir->attr & ATTR_VOL) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	if (is_dir) {
+		/* check current DIR empty or not */
+		cdi->fs = di->fs;
+		cdi->offset = 0;
+		cdi->sclst = clst_get(di->fs, dir);
+		ret = read_dir(cdi);
+		if (ret > 0) {
+			ret = -ENOTEMPTY;
+			goto out;
+		}
+	}
+
+	inode = find_inode(di->fs, di->dir);
+	if (inode) {
+		if (is_dir) {
+			list_for_each_entry(fi, &inode->files, node)
+				fi->offset = 0;
+			inode->sclst = -1;
+			/* dir is located in fat, so we shall not use it anymore */
+			inode->dir = NULL;
+		} else {
+			/*
+			 * original dir is located in fat,
+			 * so we shall not use it anymore, use tmp for read()/write()
+			 */
+			tdir = kmalloc(sizeof(*dir));
+			if (!tdir) {
+				ret = -ENOMEM;
+				goto out;
+			}
+
+			memcpy(tdir, dir, sizeof(*tdir));
+			inode->unlink = true;
+			inode->dir = tdir;
+			list_for_each_entry(fi, &inode->files, node)
+				fi->dir = tdir;
+		}
+	}
+
+	if (is_dir) /* free current DIR cluster */
+		clst_free(di->fs, cdi->sclst, 0);
+	else { /* free file content clusters if no opened refc */
+		if (!inode) {
+			sclst = clst_get(di->fs, dir);
+			clst_free(di->fs, sclst, 0);
+		}
+	}
+
+	/* remove current DIR/File's name in their parent dir */
+	dirent_remove(di);
+
+	ret = 0;
+
+out:
+	return ret;
+}
+
+static int fat_rename(struct file_system *pfs,
+	const char *oldpath, const char *newpath)
+{
+	int ret = -1;
+	struct f_inode *inode = NULL;
+	struct f_info *fi = NULL;
+	struct direnty *odir = NULL;
+	struct d_info _di, _ndi;
+	struct d_info *di = &_di, *ndi = &_ndi;
+
+	if (!newpath || !oldpath)
+		return -EINVAL;
+
+	memset(di, 0, sizeof(struct d_info));
+	memset(ndi, 0, sizeof(struct d_info));
+
+	di->fs = pfs->priv;
+	ndi->fs = di->fs;
+
+	lock_fatfs(di->fs);
+	ret = follow_path(di, oldpath);
+	if (ret != 0)
+		goto out;
+
+	odir = di->dir;
+
+	/* mount point not to be renamed */
+	if (odir->attr & ATTR_VOL) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	if ((odir->attr & ATTR_DIR) &&
+		(odir->attr & ATTR_RO)) {
+		ret = -EACCES;
+		goto out;
+	}
+
+	/* Check source path semantics early */
+	ret = follow_path_exclusion(ndi, newpath, odir);
+
+	/* ndi->abort -> parent directory does not exist */
+	if (ndi->abort)
+		goto out;
+	/* If source is file but target path ends with '/', it's invalid */
+	if (!(odir->attr & ATTR_DIR) && ndi->directory) {
+		ret = -ENOTDIR;
+		goto out;
+	}
+
+	if (ret == 0) {
+		struct direnty *target_dir = ndi->dir;
+		int is_dir = target_dir->attr & ATTR_DIR;
+
+		/* POSIX: Cannot rename file over directory or vice versa */
+		if ((odir->attr & ATTR_DIR) != is_dir) {
+			ret = is_dir ? -EISDIR : -ENOTDIR;
+			goto out;
+		}
+
+		ret = file_dir_remove(ndi);
+		if (ret != 0)
+			goto out;
+
+		/*
+		 * file_dir_remove(ndi) -> dirent_remove(ndi) -> fnclst_free()
+		 *
+		 * If the source and destination are in the same directory, and the
+		 * destination is removed, the directory cluster chain might be shrunk
+		 * (empty cluster reclaimed), which invalidates the offset(fn_start) in old
+		 * 'di'. We must refresh 'di' to ensure correct removal of the source later.
+		 */
+		if (di->sclst == ndi->sclst) {
+			memset(di, 0, sizeof(struct d_info));
+			di->fs = ndi->fs;
+			ret = follow_path(di, oldpath);
+			if (ret != 0)
+				goto out;
+			odir = di->dir;
+		}
+	}
+
+	if (odir->attr & ATTR_DIR)
+		ndi->directory = DIRENT_DIR;
+
+	ret = dirent_register(ndi);
+	if (ret != 0)
+		goto out;
+
+	/* update dirent for each opened f_info */
+	inode = find_inode(di->fs, odir);
+	if (inode) {
+		inode->dir = ndi->dir;
+		list_for_each_entry(fi, &inode->files, node)
+			fi->dir = ndi->dir;
+	}
+
+	memcpy(&ndi->dir->attr, &odir->attr,
+		sizeof(struct direnty) - FAT_MAX_SFN);
+
+	dirent_remove(di);
+
+	fatfs_update_time(&ndi->dir->cdate, &ndi->dir->ctime);
+
+out:
+	unlock_fatfs(di->fs);
+	return ret;
+}
+
+static int fat_unlink(struct file_system *pfs, const char *path)
+{
+	int ret = 0;
+	struct d_info _di, *di = &_di;
+
+	if (!path)
+		return -EINVAL;
+
+	memset(di, 0, sizeof(struct d_info));
+
+	di->fs = pfs->priv;
+
+	lock_fatfs(di->fs);
+
+	ret = follow_path(di, path);
+	if (ret != 0)
+		goto out;
+
+	if (di->directory || (di->dir->attr & ATTR_DIR)) {
+		ret = -EISDIR;
+		goto out;
+	}
+
+	ret = file_dir_remove(di);
+
+out:
+	unlock_fatfs(di->fs);
+	return ret;
+}
+
 /*
  * read one or multiple object name/type in current DIR
  * return the length in bytes
  */
 static ssize_t fat_readdir(struct file *f, struct dirent *d, size_t count)
 {
-	ssize_t rdbytes = -1, pos = 0;
-	ssize_t reclen = 0, dsize = 0;
+	int err = 0;
+	uint8_t type = 0;
+	ssize_t rdbytes = -1, init_cnt = count;
 	struct f_info *fi = f->priv;
 	struct d_info _di, *di = &_di;
 	struct fatfs *fs = file2fatfs(f);
 
-	if (fi == NULL)
+	if (!fi)
 		return -EBADF;
 
-	if (d == NULL)
+	if (!d)
 		return -EINVAL;
 
 	lock_fatfs(fs);
 	di->fs = fs;
-	di->sclst = fi->sclst;
+	di->sclst = fi->inode->sclst;
 	di->offset = fi->offset;
-	dsize = sizeof(d->d_type) + sizeof(d->d_reclen) + sizeof(d->d_off);
 
 	FMSG("sclst %d offset 0x%x\n", di->sclst, di->offset);
 
 	while ((rdbytes = read_dir(di)) > 0) {
-		reclen = roundup(rdbytes + dsize, (ssize_t)BYTES_PER_LONG);
-		if (pos + reclen > count)
-			break;
-
 		di->offset += sizeof(struct direnty);
 
-		d->d_off = fi->offset = di->offset;
-		d->d_type = (di->dir->attr & ATTR_ARC) ? DT_REG : DT_DIR;
-		d->d_reclen = reclen;
-		memcpy(d->d_name, di->lfn, rdbytes);
-		memset(di->lfn, 0, sizeof(di->lfn));
+		type = (di->dir->attr & ATTR_DIR) ? DT_DIR : DT_REG;
+		err = fs_format_dirent(&d, &count, di->lfn, type, di->offset);
+		if (err < 0)
+			break;
 
-		pos += reclen;
-		d = (void *)d + reclen;
+		fi->offset = di->offset;
+		memset(di->lfn, 0, sizeof(di->lfn));
 	}
 
+	/* EOF */
+	if (rdbytes == -ENOENT)
+		rdbytes = 0;
+
 	unlock_fatfs(fs);
-	return pos;
+
+	if (rdbytes < 0 && init_cnt == count)
+		return rdbytes;
+
+	return init_cnt - count;
 }
 
 static int fat_mkdir(struct file_system *pfs, const char *path, mode_t mode)
@@ -1860,10 +2048,7 @@ out:
 static int fat_rmdir(struct file_system *pfs, const char *path)
 {
 	int ret = -1;
-	struct f_lock *l = NULL;
-	struct f_info *fi = NULL;
 	struct d_info _di, *di = &_di;
-	struct d_info _cdi, *cdi = &_cdi;
 
 	if (!path)
 		return -EINVAL;
@@ -1883,38 +2068,7 @@ static int fat_rmdir(struct file_system *pfs, const char *path)
 		goto out;
 	}
 
-	/* mount point is not removable */
-	if (di->dir->attr & ATTR_VOL) {
-		ret = -EBUSY;
-		goto out;
-	}
-
-	/* check current DIR empty or not */
-	cdi->fs = di->fs;
-	cdi->offset = 0;
-	cdi->sclst = clst_get(di->fs, di->dir);
-	ret = read_dir(cdi);
-	if (ret > 0) {
-		ret = -ENOTEMPTY;
-		goto out;
-	}
-
-	ret = 0;
-
-	l = list_cached_lock(di->fs, di->dir);
-	if (l != NULL) {
-		list_for_each_entry(fi, &l->files, node) {
-			fi->offset = 0;
-			fi->sclst = -1;
-		}
-		/* dir is located in fat, so we shall not use it anymore */
-		l->dir = NULL;
-	}
-
-	/* free current DIR cluster */
-	clst_free(di->fs, cdi->sclst, 0);
-	/* remove current DIR name in the parent dir */
-	dirent_remove(di);
+	ret = file_dir_remove(di);
 
 out:
 	unlock_fatfs(di->fs);
@@ -1941,18 +2095,20 @@ static const struct file_operations fatfs_ops = {
 	.rmdir = fat_rmdir,
 };
 
-static size_t fat_getfree(struct file_system *pfs)
+static void fat_getsize(struct file_system *pfs,
+	size_t *total, size_t *idle)
 {
 	struct fatfs *fs = pfs->priv;
 
-	return (size_t)fs->free_clst * fs->cbytes;
+	*total = (size_t)fs->total_sec * fs->ssize;
+	*idle = (size_t)fs->free_clst * fs->cbytes;
 }
 
 int fat_umount(struct file_system *pfs)
 {
 	struct fatfs *fs = pfs->priv;
 
-	assert(list_empty(&fs->llocks));
+	assert(list_empty(&fs->inodes));
 
 	mutex_destroy(&fs->lock);
 
@@ -1990,7 +2146,6 @@ int fat_mount(struct file_system *pfs)
 	memset(fs, 0, sizeof(struct fatfs));
 
 	fs->membase = img;
-	fs->memsize = img_size;
 
 	/*
 	 * number of bytes per sector
@@ -2027,6 +2182,7 @@ int fat_mount(struct file_system *pfs)
 
 	if ((size_t)total_sec * fs->ssize != img_size)
 		return -EINVAL;
+	fs->total_sec = total_sec;
 
 	/*
 	 * number of FAT - must be 1 or 2
@@ -2123,17 +2279,17 @@ int fat_mount(struct file_system *pfs)
 		fs->free_clst, fs->last_clst);
 
 	fs = kmalloc(sizeof(struct fatfs));
-	if (fs == NULL)
+	if (!fs)
 		return -ENOMEM;
 
 	memcpy(fs, &__fs, sizeof(struct fatfs));
 
-	INIT_LIST_HEAD(&fs->llocks);
+	INIT_LIST_HEAD(&fs->inodes);
 	mutex_init(&fs->lock);
 	pfs->fops = &fatfs_ops;
 	pfs->priv = fs;
 	pfs->type = fat_type[fs->type] /* fatfs */;
-	pfs->getfree = fat_getfree;
+	pfs->getsize = fat_getsize;
 
 	return 0;
 }

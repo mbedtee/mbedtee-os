@@ -48,7 +48,7 @@ static int tfs_init_node(
 	mutex_init(&n->lock);
 
 	n->name = kmalloc(namel);
-	if (n->name == NULL)
+	if (!n->name)
 		return -ENOMEM;
 
 	strlcpy(n->name, name, namel);
@@ -58,11 +58,11 @@ static int tfs_init_node(
 	tfs_update_time(&n->atime, &n->mtime, &n->ctime);
 
 	t = list_last_entry_or_null(&dir->nodes, struct tfs_node, node);
-	if (t != NULL) {
+	if (t) {
 		n->idx = t->idx + 1;
-		if (n->idx < ULONG_MAX) {
+		if (n->idx < ULONG_MAX)
 			list_add_tail(&n->node, &dir->nodes);
-		} else { /* ? never meet ? */
+		else { /* ? never meet ? */
 			while (++n->idx) {
 				list_for_each_entry(t, &dir->nodes, node) {
 					if (t->idx == n->idx)
@@ -72,7 +72,7 @@ static int tfs_init_node(
 						break;
 					}
 				}
-				if (f != NULL)
+				if (f)
 					break;
 			}
 			list_add(&n->node, &f->node);
@@ -85,8 +85,7 @@ static int tfs_init_node(
 	return 0;
 }
 
-int tfs_put_node(struct tfs *fs,
-	struct tfs_node *n)
+int tfs_put_node(struct tfs *fs, struct tfs_node *n)
 {
 	struct tfs_node *dir = NULL;
 
@@ -132,14 +131,14 @@ struct tfs_node *tfs_get_node(
 		p++;
 
 	for (;;) {
-		if (*p && *p != '/') {
+		if (*p && *p != '/')
 			name[len++] = *p++;
-		} else {
+		else {
 			if (len == 0)
 				break;
 			name[len] = 0;
 			n = tfs_lookup_node(n, name);
-			if (n == NULL)
+			if (!n)
 				break;
 			while (*p == '/')
 				p++;
@@ -149,7 +148,7 @@ struct tfs_node *tfs_get_node(
 		}
 	}
 
-	if (n != NULL)
+	if (n)
 		n->refc++;
 
 	return n;
@@ -187,11 +186,11 @@ int tfs_make_node(struct tfs *fs,
 
 			n = tfs_lookup_node(dir, name);
 
-			if (n == NULL && !isfinal) {
+			if (!n && !isfinal) {
 				ret = -ENOENT;
 				goto out;
 			}
-			if (n != NULL && isfinal) {
+			if (n && isfinal) {
 				ret = -EEXIST;
 				goto out;
 			}
@@ -203,13 +202,13 @@ int tfs_make_node(struct tfs *fs,
 				}
 
 				n = fs->alloc(fs);
-				if (n == NULL) {
+				if (!n) {
 					ret = -ENOMEM;
 					goto out;
 				}
 
 				ret = tfs_init_node(dir, n, name);
-				if (ret) {
+				if (ret != 0) {
 					fs->free(n);
 					goto out;
 				}
@@ -234,18 +233,18 @@ ssize_t tfs_readdir(struct tfs *fs, struct tfs_node *dir,
 	off_t *pos, struct dirent *d, size_t count)
 {
 	off_t offset = *pos;
-	ssize_t rdbytes = -1, rd_off = 0;
-	ssize_t reclen = 0, dsize = 0;
+	size_t init_cnt = count;
+	int err = 0;
+	uint8_t type = 0;
+	uint64_t next_off = 0;
 	struct tfs_node *n = NULL, *last = NULL;
 
-	if (d == NULL)
+	if (!d)
 		return -EINVAL;
-
-	dsize = sizeof(d->d_type) + sizeof(d->d_reclen) + sizeof(d->d_off);
 
 	last = list_last_entry_or_null(&dir->nodes, struct tfs_node, node);
 	if (!last || last->idx < offset)
-		return rd_off;
+		return 0;
 
 	list_for_each_entry(n, &dir->nodes, node) {
 		if (n->idx >= offset)
@@ -253,28 +252,23 @@ ssize_t tfs_readdir(struct tfs *fs, struct tfs_node *dir,
 	}
 
 	while (n && (&n->node != &dir->nodes)) {
-		rdbytes = strlen(n->name) + 1;
-		reclen = roundup(rdbytes + dsize, (ssize_t)BYTES_PER_LONG);
-		if (rd_off + reclen > count)
-			break;
+		type = (n->attr & TFS_ATTR_ARC) ? DT_CHR : DT_DIR;
+		next_off = (n != last) ? list_next_entry(n, node)->idx : LONG_MAX;
 
-		d->d_type = (n->attr & TFS_ATTR_ARC) ? DT_CHR : DT_DIR;
-		d->d_reclen = reclen;
-		memcpy(d->d_name, n->name, rdbytes);
-		rd_off += reclen;
-
-		if (n != last) {
-			n = list_next_entry(n, node);
-			*pos = d->d_off = n->idx;
-		} else {
-			*pos = d->d_off = LONG_MAX;
+		err = fs_format_dirent(&d, &count, n->name, type, next_off);
+		if (err < 0) {
+			if (init_cnt == count)
+				return err;
 			break;
 		}
 
-		d = (void *)d + reclen;
+		*pos = next_off;
+		if (n == last)
+			break;
+		n = list_next_entry(n, node);
 	}
 
-	return rd_off;
+	return init_cnt - count;
 }
 
 off_t tfs_seekdir(struct tfs *fs, struct tfs_node *dir,
@@ -293,10 +287,10 @@ off_t tfs_seekdir(struct tfs *fs, struct tfs_node *dir,
 	if (!n || (&n->node == &dir->nodes))
 		goto out;
 
-	if (whence == SEEK_SET) {
+	if (whence == SEEK_SET)
 		goto outset;
-	} else if (whence == SEEK_CUR) {
-		while (off && (&n->node != &dir->nodes)) {
+	else if (whence == SEEK_CUR) {
+		while (off != 0 && (&n->node != &dir->nodes)) {
 			if (off < 0) {
 				n = list_prev_entry(n, node);
 				off++;
@@ -306,15 +300,13 @@ off_t tfs_seekdir(struct tfs *fs, struct tfs_node *dir,
 			}
 		}
 	} else if (whence == SEEK_END) {
-		while (off && (&n->node != &dir->nodes)) {
-			if (off < 0) {
-				n = list_prev_entry(n, node);
-				off++;
-			}
+		while (off < 0 && (&n->node != &dir->nodes)) {
+			n = list_prev_entry(n, node);
+			off++;
 		}
 	}
 
-	if (off)
+	if (off != 0)
 		goto out;
 
 outset:
@@ -333,7 +325,7 @@ int tfs_check(struct tfs_node *n)
 		return 0;
 
 	/* root directory is visible to all */
-	if (n->owner == NULL)
+	if (!n->owner)
 		return 0;
 
 	if (proc->c == n->owner)
@@ -347,7 +339,7 @@ int tfs_check(struct tfs_node *n)
 	 * check if current TA has permission
 	 * to access the target TA's file
 	 */
-	if (strstr_delimiter(proc->c->ipc_acl, n->owner->name, ','))
+	if (strstr_token(proc->c->ipc_acl, n->owner->name, ','))
 		return 0;
 
 err:
@@ -365,7 +357,7 @@ int tfs_getpath(struct file_path *p)
 		return -ENAMETOOLONG;
 
 	dst = kmalloc(name_len);
-	if (dst == NULL)
+	if (!dst)
 		return -ENOMEM;
 
 	strlcpy(dst, p->path, name_len);
@@ -402,7 +394,7 @@ int tfs_mount(struct file_system *pfs)
 	mutex_init(&fs->lock);
 
 	fs->root = fs->alloc(fs);
-	if (fs->root == NULL)
+	if (!fs->root)
 		return -ENOMEM;
 
 	fs->root->name = (char *)rootdir;
@@ -419,4 +411,225 @@ int tfs_mount(struct file_system *pfs)
 	pfs->priv = fs;
 
 	return 0;
+}
+
+int tfs_unlink(struct tfs *fs, const char *path)
+{
+	int ret = -1;
+	struct tfs_node *n = NULL;
+
+	if (!path)
+		return -EINVAL;
+
+	n = tfs_get_node(fs, path);
+	if (!n) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	if (n->attr & TFS_ATTR_DIR) {
+		ret = -EISDIR;
+		goto out;
+	}
+
+	if (fspath_isdir(path)) {
+		ret = -ENOTDIR;
+		goto out;
+	}
+
+	ret = tfs_security_check(fs, n);
+	if (ret != 0)
+		goto out;
+
+	list_del(&n->node);
+
+	tfs_put_node(fs, n);
+
+out:
+	tfs_put_node(fs, n);
+	return ret;
+}
+
+int tfs_rmdir(struct tfs *fs, const char *path)
+{
+	int ret = -1;
+	struct tfs_node *n = NULL;
+
+	if (!path)
+		return -EINVAL;
+
+	n = tfs_get_node(fs, path);
+	if (!n) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	if (!(n->attr & TFS_ATTR_DIR)) {
+		ret = -ENOTDIR;
+		goto out;
+	}
+
+	/* check current DIR empty or not */
+	if (!list_empty(&n->nodes)) {
+		ret = -ENOTEMPTY;
+		goto out;
+	}
+
+	/* mount point is not removable */
+	if (n->attr & TFS_ATTR_VOL) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	ret = tfs_security_check(fs, n);
+	if (ret != 0)
+		goto out;
+
+	list_del(&n->node);
+
+	tfs_put_node(fs, n);
+
+out:
+	tfs_put_node(fs, n);
+	return ret;
+}
+
+int tfs_rename(struct tfs *fs, const char *oldpath, const char *newpath)
+{
+	int ret = -1, name_l = 0;
+	struct tfs_node *oldn = NULL, *newn = NULL, *dir = NULL, *n = NULL;
+	struct tfs_node *old_parent = NULL;
+	struct tfs_node *last = NULL;
+	char *newname = NULL, *namebuf = NULL;
+	char npath[FS_PATH_MAX];
+
+	if (!newpath || !oldpath)
+		return -EINVAL;
+
+	oldn = tfs_get_node(fs, oldpath);
+	if (!oldn) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	/* mount point not to be renamed */
+	if (oldn->attr & TFS_ATTR_VOL) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	if ((oldn->attr & TFS_ATTR_DIR) &&
+		(oldn->attr & TFS_ATTR_RO)) {
+		ret = -EACCES;
+		goto out;
+	}
+
+	/* Get and check target parent directory */
+	strlcpy(npath, newpath, sizeof(npath));
+	dir = tfs_get_node(fs, dirname(npath));
+	if (!dir) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	if (!(dir->attr & TFS_ATTR_DIR)) {
+		ret = -ENOTDIR;
+		goto out;
+	}
+
+	/*
+	 * POSIX: Cannot rename to a subdirectory of itself
+	 */
+	n = dir;
+	while (n != fs->root) {
+		if (n == oldn) {
+			ret = -EINVAL;
+			goto out;
+		}
+		n = n->parent;
+	}
+
+	if (fspath_isdir(newpath) && !(oldn->attr & TFS_ATTR_DIR)) {
+		ret = -ENOTDIR;
+		goto out;
+	}
+
+	/* Now check if target exists and validate replacement conditions */
+	newn = tfs_get_node(fs, newpath);
+	if (newn) {
+		/* POSIX: Cannot rename file over directory or vice versa */
+		if ((oldn->attr & TFS_ATTR_DIR) != (newn->attr & TFS_ATTR_DIR)) {
+			ret = (newn->attr & TFS_ATTR_DIR) ? -EISDIR : -ENOTDIR;
+			goto out;
+		}
+
+		/* POSIX: If both are directories, target must be empty */
+		if ((newn->attr & TFS_ATTR_DIR) && !list_empty(&newn->nodes)) {
+			ret = -ENOTEMPTY;
+			goto out;
+		}
+
+		/* mount point cannot be overwritten */
+		if (newn->attr & TFS_ATTR_VOL) {
+			ret = -EBUSY;
+			goto out;
+		}
+
+		ret = tfs_security_check(fs, newn);
+		if (ret != 0)
+			goto out;
+
+		/* All checks passed - now safe to delete target */
+		list_del(&newn->node);
+		tfs_put_node(fs, newn);
+		tfs_put_node(fs, newn);
+		newn = NULL;
+	}
+
+	/* Allocate new name */
+	strlcpy(npath, newpath, sizeof(npath));
+	newname = basename(npath);
+	if (!*newname || strcmp(newname, "/") == 0) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	name_l = strlen(newname) + 1;
+	namebuf = kmalloc(name_l);
+	if (!namebuf) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	strlcpy(namebuf, newname, name_l);
+
+	/* Perform the rename */
+	kfree(oldn->name);
+	oldn->name = namebuf;
+
+	old_parent = oldn->parent;
+	if (old_parent != dir) {
+		/* Detach from old directory list and attach to destination */
+		list_del(&oldn->node);
+		old_parent->refc--;
+		old_parent->sub_nodes--;
+
+		last = list_last_entry_or_null(&dir->nodes, struct tfs_node, node);
+		oldn->idx = last ? (last->idx + 1) : 0;
+		list_add_tail(&oldn->node, &dir->nodes);
+
+		oldn->parent = dir;
+		dir->refc++;
+		dir->sub_nodes++;
+	}
+
+	tfs_update_time(NULL, NULL, &oldn->ctime);
+
+	ret = 0;
+
+out:
+	tfs_put_node(fs, dir);
+	tfs_put_node(fs, oldn);
+	/* newn already put if deleted */
+	return ret;
 }
