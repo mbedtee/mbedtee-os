@@ -109,7 +109,7 @@ static inline int pthread_cond_init_default(
 	pthread_cond_t defaultc = PTHREAD_COND_INITIALIZER;
 
 	ret = pthread_cond_init(&id, NULL);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	/*
@@ -152,7 +152,7 @@ int	__pthread_cond_signal(pthread_cond_t *cond,
 
 	if (*cond == PTHREAD_COND_INITIALIZER) {
 		ret = pthread_cond_init_default(cond);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -179,7 +179,7 @@ int	__pthread_cond_broadcast(pthread_cond_t *cond,
 
 	if (*cond == PTHREAD_COND_INITIALIZER) {
 		ret = pthread_cond_init_default(cond);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -199,15 +199,16 @@ int	__pthread_cond_wait(pthread_cond_t *cond,
 	pthread_mutex_t *mutex, void **notification)
 {
 	int ret = 0;
+	int lock_ret = 0;
 	struct __pthread_waitqueue *q = NULL;
-	__pthread_mutex_t *m = NULL;
+	struct __pthread_mutex *m = NULL;
 
 	if (!cond || !mutex)
 		return EINVAL;
 
 	if (*cond == PTHREAD_COND_INITIALIZER) {
 		ret = pthread_cond_init_default(cond);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -216,12 +217,14 @@ int	__pthread_cond_wait(pthread_cond_t *cond,
 		return EINVAL;
 
 	m = __pthread_object_of(*mutex);
+	if (!m)
+		return EINVAL;
 
 	ret = __pthread_wait(q, m, notification);
 
-	__pthread_mutex_lock(m);
+	lock_ret = __pthread_mutex_lock(m);
 
-	return ret;
+	return ret != 0 ? ret : lock_ret;
 }
 
 int	pthread_cond_wait(pthread_cond_t *cond,
@@ -236,17 +239,18 @@ int	__pthread_cond_timedwait(pthread_cond_t *cond,
 	pthread_mutex_t *mutex, const struct timespec *abstime,
 	void **notification)
 {
+	int lock_ret = 0;
 	int ret = 0;
 	long usecs = 0;
 	struct __pthread_waitqueue *q = NULL;
-	__pthread_mutex_t *m = NULL;
+	struct __pthread_mutex *m = NULL;
 
 	if (!cond || !abstime || !mutex)
 		return EINVAL;
 
 	if (*cond == PTHREAD_COND_INITIALIZER) {
 		ret = pthread_cond_init_default(cond);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -255,16 +259,23 @@ int	__pthread_cond_timedwait(pthread_cond_t *cond,
 		return EINVAL;
 
 	ret = __pthread_time2usecs(abstime, &usecs);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	m = __pthread_object_of(*mutex);
+	if (!m)
+		return EINVAL;
 
 	ret = __pthread_timedwait(q, m,	notification, usecs);
 
-	__pthread_mutex_lock(m);
+	lock_ret = __pthread_mutex_lock(m);
 
-	return ret < 0 ? -ret : (ret ? 0 : ETIMEDOUT);
+	if (ret < 0)
+		return -ret;
+	if (lock_ret != 0)
+		return lock_ret;
+
+	return ret != 0 ? 0 : ETIMEDOUT;
 }
 
 int	pthread_cond_timedwait(pthread_cond_t *cond,

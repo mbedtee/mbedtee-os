@@ -8,6 +8,10 @@
 #ifndef _PTHREAD_OBJECT_H
 #define	_PTHREAD_OBJECT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * alloc size of the memory, return the associated object ID
  */
@@ -23,5 +27,9 @@ int __pthread_object_free(int id);
  * the specified object ID
  */
 void *__pthread_object_of(int id);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

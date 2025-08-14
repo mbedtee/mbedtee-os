@@ -8,5 +8,5 @@
 
 struct __pthread_cleanup **__pthread_get_cleanup_stack(void)
 {
-	return &aux_of(__pthread_self)->cleanups;
+	return &pthread_aux(__pthread_self)->cleanups;
 }

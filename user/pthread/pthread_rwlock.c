@@ -68,7 +68,7 @@ int pthread_rwlock_init(pthread_rwlock_t *rwlock,
 	struct __pthread_rwlock *l = NULL;
 	pthread_rwlockattr_t dattr = DEFAULT_RWLOCKATTR;
 
-	if (attr && (attr->is_initialized == false))
+	if (attr && !attr->is_initialized)
 		return EINVAL;
 
 	id = __pthread_object_alloc(sizeof(
@@ -87,17 +87,14 @@ int pthread_rwlock_init(pthread_rwlock_t *rwlock,
 	return 0;
 }
 
-static inline int pthread_rwlock_init_default
-(
-	pthread_rwlock_t *rwlock
-)
+static inline int pthread_rwlock_init_default(pthread_rwlock_t *rwlock)
 {
 	int ret = 0;
 	pthread_rwlock_t id = 0;
 	pthread_rwlock_t defaultl = PTHREAD_RWLOCK_INITIALIZER;
 
 	ret = pthread_rwlock_init(&id, NULL);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	/*
@@ -121,7 +118,7 @@ int pthread_rwlock_destroy(pthread_rwlock_t *rwlock)
 		return __pthread_object_free(id);
 	}
 
-	return 0;
+	return EINVAL;
 }
 
 int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock)
@@ -131,9 +128,12 @@ int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock)
 	struct __pthread_rwlock *l = NULL;
 	struct __pthread *self = __pthread_self;
 
+	if (!rwlock)
+		return EINVAL;
+
 	if (*rwlock == PTHREAD_RWLOCK_INITIALIZER) {
 		ret = pthread_rwlock_init_default(rwlock);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -141,7 +141,7 @@ int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock)
 	if (!l)
 		return EINVAL;
 
-	pthread_enter_critical(self);
+	__pthread_enter_critical(self);
 
 	while ((val & PTHREAD_LOCK_WRLOCK) == 0) {
 		rdval = (val + PTHREAD_LOCK_READER) | PTHREAD_LOCK_RDLOCK;
@@ -157,21 +157,26 @@ int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock)
 		 */
 		val = __atomic_load_n(&l->lock, __ATOMIC_RELAXED);
 		if (val & PTHREAD_LOCK_WRLOCK) {
-			if (l->owner == gettid()) {
+			if (__atomic_load_n(&l->owner,
+				__ATOMIC_RELAXED) == gettid()) {
 				ret = EDEADLK;
 				goto out;
 			}
 
 			ret = __pthread_wait_rdlock(&l->lock);
-			if (ret)
+			if (ret == 0)
+				return 0;
+
+			if (ret != EINTR)
 				goto out;
 
-			return 0;
+			/* EINTR: reset val for CAS retry */
+			val = 0;
 		}
 	}
 
 out:
-	pthread_leave_critical(self);
+	__pthread_leave_critical(self);
 	return ret;
 }
 
@@ -182,9 +187,12 @@ int pthread_rwlock_tryrdlock(pthread_rwlock_t *rwlock)
 	struct __pthread_rwlock *l = NULL;
 	struct __pthread *self = __pthread_self;
 
+	if (!rwlock)
+		return EINVAL;
+
 	if (*rwlock == PTHREAD_RWLOCK_INITIALIZER) {
 		ret = pthread_rwlock_init_default(rwlock);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -192,16 +200,27 @@ int pthread_rwlock_tryrdlock(pthread_rwlock_t *rwlock)
 	if (!l)
 		return EINVAL;
 
-	pthread_enter_critical(self);
+	__pthread_enter_critical(self);
+
+	/*
+	 * Read the current lock state first, tryrdlock should
+	 * succeed when held by readers only (no writer).
+	 */
+	val = __atomic_load_n(&l->lock, __ATOMIC_RELAXED);
+	if (val & PTHREAD_LOCK_WRLOCK) {
+		__pthread_leave_critical(self);
+		return (__atomic_load_n(&l->owner,
+			__ATOMIC_RELAXED) == gettid()) ? EDEADLK : EBUSY;
+	}
 
 	rdval = (val + PTHREAD_LOCK_READER) | PTHREAD_LOCK_RDLOCK;
 	if (__atomic_compare_exchange_n(&l->lock, &val, rdval, 1,
 		__ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
 		return 0;
 
-	pthread_leave_critical(self);
+	__pthread_leave_critical(self);
 
-	return (l->owner == gettid()) ? EDEADLK : EBUSY;
+	return EBUSY;
 }
 
 int pthread_rwlock_timedrdlock(pthread_rwlock_t *rwlock,
@@ -213,9 +232,12 @@ int pthread_rwlock_timedrdlock(pthread_rwlock_t *rwlock,
 	struct __pthread_rwlock *l = NULL;
 	struct __pthread *self = __pthread_self;
 
+	if (!rwlock)
+		return EINVAL;
+
 	if (*rwlock == PTHREAD_RWLOCK_INITIALIZER) {
 		ret = pthread_rwlock_init_default(rwlock);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -223,7 +245,7 @@ int pthread_rwlock_timedrdlock(pthread_rwlock_t *rwlock,
 	if (!l)
 		return EINVAL;
 
-	pthread_enter_critical(self);
+	__pthread_enter_critical(self);
 
 	while ((val & PTHREAD_LOCK_WRLOCK) == 0) {
 		rdval = (val + PTHREAD_LOCK_READER) | PTHREAD_LOCK_RDLOCK;
@@ -239,25 +261,30 @@ int pthread_rwlock_timedrdlock(pthread_rwlock_t *rwlock,
 		 */
 		val = __atomic_load_n(&l->lock, __ATOMIC_RELAXED);
 		if (val & PTHREAD_LOCK_WRLOCK) {
-			if (l->owner == gettid()) {
+			if (__atomic_load_n(&l->owner,
+				__ATOMIC_RELAXED) == gettid()) {
 				ret = EDEADLK;
 				goto out;
 			}
 
 			ret = __pthread_time2usecs(abstime, &usecs);
-			if (ret)
+			if (ret != 0)
 				goto out;
 
 			ret = __pthread_timedwait_rdlock(&l->lock, usecs);
-			if (ret)
+			if (ret == 0)
+				return 0;
+
+			if (ret != EINTR)
 				goto out;
 
-			return 0;
+			/* EINTR: reset val, time2usecs will recompute */
+			val = 0;
 		}
 	}
 
 out:
-	pthread_leave_critical(self);
+	__pthread_leave_critical(self);
 	return ret;
 }
 
@@ -268,9 +295,12 @@ int pthread_rwlock_unlock(pthread_rwlock_t *rwlock)
 	struct __pthread_rwlock *l = NULL;
 	struct __pthread *self = __pthread_self;
 
+	if (!rwlock)
+		return EINVAL;
+
 	if (*rwlock == PTHREAD_RWLOCK_INITIALIZER) {
 		ret = pthread_rwlock_init_default(rwlock);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -283,38 +313,43 @@ int pthread_rwlock_unlock(pthread_rwlock_t *rwlock)
 	 */
 	val = __atomic_load_n(&l->lock, __ATOMIC_RELAXED);
 
-	if (l->owner == gettid()) {
-		if ((val & PTHREAD_LOCK_WRLOCK) != PTHREAD_LOCK_WRLOCK)
-			return EINVAL;
+	if (__atomic_load_n(&l->owner, __ATOMIC_RELAXED) == gettid()) {
+		if ((val & PTHREAD_LOCK_WRLOCK) != PTHREAD_LOCK_WRLOCK) {
+			ret = EINVAL;
+			goto out;
+		}
 		l->owner = 0;
 		val = __atomic_exchange_n(&l->lock, 0, __ATOMIC_RELEASE);
 		__pthread_wakeup_lock(&l->lock, val & PTHREAD_LOCK_WAITER);
-		pthread_leave_critical(self);
 	} else {
 		do {
-			if ((val & PTHREAD_LOCK_RDLOCK) != PTHREAD_LOCK_RDLOCK)
-				return EINVAL;
+			if ((val & PTHREAD_LOCK_RDLOCK) != PTHREAD_LOCK_RDLOCK) {
+				ret = EINVAL;
+				goto out;
+			}
 
 			rdval = val & PTHREAD_LOCK_READER_MASK;
-			if (rdval == 0)
-				return EINVAL;
+			if (rdval == 0) {
+				ret = EINVAL;
+				goto out;
+			}
 
 			rdval -= PTHREAD_LOCK_READER;
 			if (rdval != 0)
 				rdval = val - PTHREAD_LOCK_READER;
 
 			if (__atomic_compare_exchange_n(&l->lock, &val, rdval, 0,
-				__ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+				__ATOMIC_RELEASE, __ATOMIC_RELAXED))
 				break;
-		} while (val);
+		} while (val != 0);
 
 		if (rdval == 0)
 			__pthread_wakeup_lock(&l->lock,	val & PTHREAD_LOCK_WAITER);
-
-		pthread_leave_critical(self);
 	}
 
-	return 0;
+out:
+	__pthread_leave_critical(self);
+	return ret;
 }
 
 int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock)
@@ -324,9 +359,12 @@ int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock)
 	struct __pthread_rwlock *l = NULL;
 	struct __pthread *self = __pthread_self;
 
+	if (!rwlock)
+		return EINVAL;
+
 	if (*rwlock == PTHREAD_RWLOCK_INITIALIZER) {
 		ret = pthread_rwlock_init_default(rwlock);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -334,7 +372,7 @@ int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock)
 	if (!l)
 		return EINVAL;
 
-	pthread_enter_critical(self);
+	__pthread_enter_critical(self);
 
 	while (val == 0) {
 		if (__atomic_compare_exchange_n(&l->lock, &val,
@@ -349,16 +387,22 @@ int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock)
 		 * critical moment, just make sure of this
 		 */
 		val = __atomic_load_n(&l->lock, __ATOMIC_RELAXED);
-		if (val) {
-			if (l->owner == gettid()) {
+		if (val != 0) {
+			if (__atomic_load_n(&l->owner,
+				__ATOMIC_RELAXED) == gettid()) {
 				ret = EDEADLK;
 				goto out;
 			}
 
 			ret = __pthread_wait_wrlock(&l->lock, 0);
-			if (ret != 0)
+			if (ret == 0)
+				goto locked;
+
+			if (ret != EINTR)
 				goto out;
-			goto locked;
+
+			/* EINTR: reset val for CAS retry */
+			val = 0;
 		}
 	}
 
@@ -367,7 +411,7 @@ locked:
 	return 0;
 
 out:
-	pthread_leave_critical(self);
+	__pthread_leave_critical(self);
 	return ret;
 }
 
@@ -378,9 +422,12 @@ int pthread_rwlock_trywrlock(pthread_rwlock_t *rwlock)
 	struct __pthread_rwlock *l = NULL;
 	struct __pthread *self = __pthread_self;
 
+	if (!rwlock)
+		return EINVAL;
+
 	if (*rwlock == PTHREAD_RWLOCK_INITIALIZER) {
 		ret = pthread_rwlock_init_default(rwlock);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -388,7 +435,7 @@ int pthread_rwlock_trywrlock(pthread_rwlock_t *rwlock)
 	if (!l)
 		return EINVAL;
 
-	pthread_enter_critical(self);
+	__pthread_enter_critical(self);
 
 	if (__atomic_compare_exchange_n(&l->lock, &val,
 		PTHREAD_LOCK_WRLOCK, 1, __ATOMIC_SEQ_CST,
@@ -397,9 +444,10 @@ int pthread_rwlock_trywrlock(pthread_rwlock_t *rwlock)
 		return 0;
 	}
 
-	pthread_leave_critical(self);
+	__pthread_leave_critical(self);
 
-	return (l->owner == gettid()) ? EDEADLK : EBUSY;
+	return (__atomic_load_n(&l->owner,
+		__ATOMIC_RELAXED) == gettid()) ? EDEADLK : EBUSY;
 }
 
 int pthread_rwlock_timedwrlock(pthread_rwlock_t *rwlock,
@@ -411,9 +459,12 @@ int pthread_rwlock_timedwrlock(pthread_rwlock_t *rwlock,
 	struct __pthread_rwlock *l = NULL;
 	struct __pthread *self = __pthread_self;
 
+	if (!rwlock)
+		return EINVAL;
+
 	if (*rwlock == PTHREAD_RWLOCK_INITIALIZER) {
 		ret = pthread_rwlock_init_default(rwlock);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -421,7 +472,7 @@ int pthread_rwlock_timedwrlock(pthread_rwlock_t *rwlock,
 	if (!l)
 		return EINVAL;
 
-	pthread_enter_critical(self);
+	__pthread_enter_critical(self);
 
 	while (val == 0) {
 		if (__atomic_compare_exchange_n(&l->lock, &val,
@@ -436,20 +487,26 @@ int pthread_rwlock_timedwrlock(pthread_rwlock_t *rwlock,
 		 * critical moment, just make sure of this
 		 */
 		val = __atomic_load_n(&l->lock, __ATOMIC_RELAXED);
-		if (val) {
-			if (l->owner == gettid()) {
+		if (val != 0) {
+			if (__atomic_load_n(&l->owner,
+				__ATOMIC_RELAXED) == gettid()) {
 				ret = EDEADLK;
 				goto out;
 			}
 
 			ret = __pthread_time2usecs(abstime, &usecs);
-			if (ret)
+			if (ret != 0)
 				goto out;
 
 			ret = __pthread_timedwait_wrlock(&l->lock, 0, usecs);
-			if (ret != 0)
+			if (ret == 0)
+				goto locked;
+
+			if (ret != EINTR)
 				goto out;
-			goto locked;
+
+			/* EINTR: reset val, time2usecs will recompute */
+			val = 0;
 		}
 	}
 
@@ -458,6 +515,6 @@ locked:
 	return 0;
 
 out:
-	pthread_leave_critical(self);
+	__pthread_leave_critical(self);
 	return ret;
 }

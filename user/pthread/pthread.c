@@ -8,7 +8,8 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <errno.h>
-#include <time.h>
+#include <utrace.h>
+#include <signal.h>
 #include <syscall.h>
 
 #include "pthread_auxiliary.h"
@@ -18,18 +19,13 @@ int	pthread_create(pthread_t *pthread,
 	const pthread_attr_t *attr,
 	void *(*routine)(void *), void *arg)
 {
-	long ret = -1;
-
 	pthread_testcancel();
 
-	ret = __pthread_create(pthread, attr, routine, arg);
-
-	return ret;
+	return __pthread_create(pthread, attr, routine, arg);
 }
 
 int	pthread_join(pthread_t pthread, void **value_ptr)
 {
-	long ret = -1;
 	struct __pthread *t = NULL;
 	struct __pthread *self = __pthread_self;
 	struct __pthread_aux *aux = NULL;
@@ -37,33 +33,36 @@ int	pthread_join(pthread_t pthread, void **value_ptr)
 	pthread_testcancel();
 
 	t = __pthread_get(pthread);
-	if (!t) {
-		ret = ESRCH;
-		goto out;
-	}
+	if (!t)
+		return ESRCH;
 
 	if (t->detachstate != PTHREAD_CREATE_JOINABLE) {
-		ret = EINVAL;
-		goto out;
+		__pthread_put(t);
+		return EINVAL;
 	}
 
 	if (self == t) {
-		ret = EDEADLK;
-		goto out;
+		__pthread_put(t);
+		return EDEADLK;
 	}
 
-	aux = aux_of(t);
-	return __pthread_wait(&aux->join_q,
-			&aux->cancel_lock, value_ptr);
+	t->detachstate = PTHREAD_CREATE_DETACHED;
 
-out:
-	__pthread_put(t);
-	return ret;
+	aux = pthread_aux(t);
+
+	if (t->detaching) {
+		pthread_sigqueue(pthread, SIGCANCEL,
+				(union sigval)(aux->join_q.notification));
+	}
+
+	__pthread_join_wait(aux, value_ptr);
+
+	return 0;
 }
 
 int	pthread_detach(pthread_t pthread)
 {
-	long ret = -1;
+	int ret = -1;
 	struct __pthread *t = NULL;
 
 	t = __pthread_get(pthread);
@@ -78,6 +77,11 @@ int	pthread_detach(pthread_t pthread)
 	}
 
 	t->detachstate = PTHREAD_CREATE_DETACHED;
+
+	if (t->detaching)
+		pthread_kill(pthread, SIGCANCEL);
+
+	ret = 0;
 
 err:
 	__pthread_put(t);
@@ -141,10 +145,23 @@ int	pthread_once(pthread_once_t *once_control,
 	int *init_executed = &once_control->init_executed;
 	int init_val = 0;
 
-	/* there may be a race condition */
+	/*
+	 * POSIX requires: on return from pthread_once(),
+	 * init_routine shall have completed.
+	 *
+	 * State transitions: 0 (UNINIT) -> 1 (RUNNING) -> 2 (DONE)
+	 */
+	if (__atomic_load_n(init_executed, __ATOMIC_ACQUIRE) == 2)
+		return 0;
+
 	if (__atomic_compare_exchange_n(init_executed, &init_val,
-		1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+		1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
 		init_routine();
+		__atomic_store_n(init_executed, 2, __ATOMIC_RELEASE);
+	} else {
+		while (__atomic_load_n(init_executed, __ATOMIC_ACQUIRE) != 2)
+			pthread_yield();
+	}
 
 	return 0;
 }

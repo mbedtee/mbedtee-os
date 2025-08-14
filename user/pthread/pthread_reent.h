@@ -7,10 +7,18 @@
 #ifndef _PTHREAD_REENT_H
 #define _PTHREAD_REENT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <__pthread.h>
 
 #define PTHREAD_REENT_OFFSET sizeof(struct __pthread)
 
-#define reent_of(t) ((struct _reent *)((long)t + PTHREAD_REENT_OFFSET))
+#define reent_of(t) ((struct _reent *)((long)(t) + PTHREAD_REENT_OFFSET))
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

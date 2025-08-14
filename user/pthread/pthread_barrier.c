@@ -65,10 +65,10 @@ int pthread_barrier_init(pthread_barrier_t *barrier,
 	struct __pthread_barrier *b = NULL;
 	pthread_barrierattr_t dattr = DEFAULT_BARRIERATTR;
 
-	if (!count || (count >= BARRIER_MAX_COUNT))
+	if (count == 0 || (count >= BARRIER_MAX_COUNT))
 		return EINVAL;
 
-	if (attr && (attr->is_initialized == false))
+	if (attr && !attr->is_initialized)
 		return EINVAL;
 
 	id = __pthread_object_alloc(sizeof(
@@ -97,8 +97,10 @@ int pthread_barrier_destroy(pthread_barrier_t *barrier)
 		struct __pthread_barrier *b = NULL;
 
 		b = __pthread_object_of(id);
-		if (b)
+		if (b) {
+			*barrier = 0;
 			return __pthread_object_free(id);
+		}
 	}
 
 	return EINVAL;
@@ -106,22 +108,28 @@ int pthread_barrier_destroy(pthread_barrier_t *barrier)
 
 int pthread_barrier_wait(pthread_barrier_t *barrier)
 {
-	struct __pthread_barrier *b = __pthread_object_of(*barrier);
+	struct __pthread_barrier *b = NULL;
+
+	if (!barrier)
+		return EINVAL;
+
+	b = __pthread_object_of(*barrier);
 
 	if (!b)
 		return EINVAL;
 
 	pthread_testcancel();
 
-	if (__atomic_add_fetch(&b->waiters, 1,
-			__ATOMIC_SEQ_CST) == b->threshold) {
-		__atomic_exchange_n(&b->waiters, 0, __ATOMIC_ACQUIRE);
-		__pthread_wakeup_nr(&b->wq, b->threshold, NULL);
+	__pthread_mutex_lock(&b->wq.mutex);
+
+	if (++b->waiters == b->threshold) {
+		b->waiters = 0;
+		__pthread_wakeup_nr(&b->wq, b->threshold - 1, NULL);
+		__pthread_mutex_unlock(&b->wq.mutex);
 
 		return PTHREAD_BARRIER_SERIAL_THREAD;
 	}
 
-	__pthread_mutex_lock(&b->wq.mutex);
 	__pthread_wait(&b->wq, &b->wq.mutex, NULL);
 
 	return 0;

@@ -7,15 +7,17 @@
 #ifndef _PTHREAD_TIME_H
 #define	_PTHREAD_TIME_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/time.h>
 
 /*
  * convert the time to microseconds for timed waits.
  */
-static inline int __pthread_time2usecs
-(
-	const struct timespec *abstime,	long *usecs
-)
+static inline int __pthread_time2usecs(
+	const struct timespec *abstime, long *usecs)
 {
 	int ret = 0;
 	struct timespec now = {0};
@@ -36,7 +38,10 @@ static inline int __pthread_time2usecs
 		goto out;
 	}
 
-	*usecs = diff.tv_sec * 1000000UL + diff.tv_nsec/1000UL;
+	if (diff.tv_sec > __LONG_MAX__ / 1000000L)
+		*usecs = __LONG_MAX__;
+	else
+		*usecs = diff.tv_sec * 1000000UL + diff.tv_nsec/1000UL;
 
 	if (*usecs == 0)
 		ret = ETIMEDOUT;
@@ -44,5 +49,9 @@ static inline int __pthread_time2usecs
 out:
 	return ret;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

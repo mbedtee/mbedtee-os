@@ -24,17 +24,17 @@ int pthread_mutex_init(pthread_mutex_t *mutex,
 	const pthread_mutexattr_t *attr)
 {
 	int id = 0, ret = -1;
-	__pthread_mutex_t *m = NULL;
+	struct __pthread_mutex *m = NULL;
 
 	id = __pthread_object_alloc(sizeof(
-			__pthread_mutex_t));
+			struct __pthread_mutex));
 	if (id < 0)
 		return -id;
 
 	m = __pthread_object_of(id);
 
 	ret = __pthread_mutex_init(m, attr);
-	if (ret) {
+	if (ret != 0) {
 		__pthread_object_free(id);
 		return ret;
 	}
@@ -43,17 +43,14 @@ int pthread_mutex_init(pthread_mutex_t *mutex,
 	return 0;
 }
 
-static int pthread_mutex_init_default
-(
-	pthread_mutex_t *mutex
-)
+static int pthread_mutex_init_default(pthread_mutex_t *mutex)
 {
 	int ret = 0;
 	pthread_mutex_t id = 0;
 	pthread_mutex_t defaultm = PTHREAD_MUTEX_INITIALIZER;
 
 	ret = pthread_mutex_init(&id, NULL);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	/*
@@ -72,8 +69,10 @@ int	pthread_mutex_destroy(pthread_mutex_t *mutex)
 {
 	if (mutex) {
 		int id = *mutex;
+		struct __pthread_mutex *m = __pthread_object_of(id);
 
-		__pthread_mutex_t *m = __pthread_object_of(id);
+		if (m && m->rc != 0)
+			return EBUSY;
 
 		__pthread_mutex_destroy(m);
 		*mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -92,7 +91,7 @@ int pthread_mutex_lock(pthread_mutex_t *mutex)
 
 	if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
 		ret = pthread_mutex_init_default(mutex);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -108,7 +107,7 @@ int	pthread_mutex_trylock(pthread_mutex_t *mutex)
 
 	if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
 		ret = pthread_mutex_init_default(mutex);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -124,7 +123,7 @@ int	pthread_mutex_unlock(pthread_mutex_t *mutex)
 
 	if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
 		ret = pthread_mutex_init_default(mutex);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -141,7 +140,7 @@ int	pthread_mutex_timedlock(pthread_mutex_t *mutex,
 
 	if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
 		ret = pthread_mutex_init_default(mutex);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -151,14 +150,14 @@ int	pthread_mutex_timedlock(pthread_mutex_t *mutex,
 int pthread_mutex_consistent(pthread_mutex_t *mutex)
 {
 	int ret = 0;
-	__pthread_mutex_t *m = NULL;
+	struct __pthread_mutex *m = NULL;
 
 	if (!mutex)
 		return EINVAL;
 
 	if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
 		ret = pthread_mutex_init_default(mutex);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -177,17 +176,17 @@ int	pthread_mutex_setprioceiling(pthread_mutex_t *mutex,
 	int prioceiling, int *old_ceiling)
 {
 	int ret = 0;
-	__pthread_mutex_t *m = NULL;
+	struct __pthread_mutex *m = NULL;
 
 	if (MUTEX_INVALID_PRIOCEILING(prioceiling))
 		return EINVAL;
 
-	if (!mutex)
+	if (!mutex || !old_ceiling)
 		return EINVAL;
 
 	if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
 		ret = pthread_mutex_init_default(mutex);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
@@ -199,7 +198,7 @@ int	pthread_mutex_setprioceiling(pthread_mutex_t *mutex,
 		return EINVAL;
 
 	ret = pthread_mutex_lock(mutex);
-	if (ret)
+	if (ret != 0)
 		return ret;
 	*old_ceiling = m->attr.prio_ceiling;
 	m->attr.prio_ceiling = prioceiling;
@@ -209,17 +208,17 @@ int	pthread_mutex_setprioceiling(pthread_mutex_t *mutex,
 }
 
 int	pthread_mutex_getprioceiling(
-	pthread_mutex_t *mutex, int *prioceiling)
+	const pthread_mutex_t *mutex, int *prioceiling)
 {
 	int ret = 0;
-	__pthread_mutex_t *m = NULL;
+	struct __pthread_mutex *m = NULL;
 
 	if (!mutex)
 		return EINVAL;
 
 	if (*mutex == PTHREAD_MUTEX_INITIALIZER) {
-		ret = pthread_mutex_init_default(mutex);
-		if (ret)
+		ret = pthread_mutex_init_default((void *)mutex);
+		if (ret != 0)
 			return ret;
 	}
 
@@ -309,10 +308,13 @@ int	pthread_mutexattr_setprioceiling(
 int	pthread_mutexattr_getprioceiling(
 	const pthread_mutexattr_t *attr, int *prioceiling)
 {
+	if (!attr || !prioceiling)
+		return EINVAL;
+
 	if (!attr->is_initialized)
 		return EINVAL;
 
-	if (!attr->prio_ceiling)
+	if (attr->prio_ceiling == 0)
 		*prioceiling = sched_get_priority_max(SCHED_RR);
 	else
 		*prioceiling = attr->prio_ceiling;

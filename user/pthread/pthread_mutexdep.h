@@ -7,6 +7,10 @@
 #ifndef _PTHREAD_MUTEXDEP_H
 #define	_PTHREAD_MUTEXDEP_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sched.h>
 #include <stdbool.h>
 #include <errno.h>
@@ -90,15 +94,20 @@ struct __lock {
 	struct list_head node;
 };
 
-typedef struct __lock __pthread_mutex_t;
+/* Alias for internal pthread use (struct __lock kept for newlib retarget) */
+#define __pthread_mutex __lock
 
-int	__pthread_mutex_init(__pthread_mutex_t *m,
+int	__pthread_mutex_init(struct __pthread_mutex *m,
 	const pthread_mutexattr_t *attr);
-int	__pthread_mutex_destroy(__pthread_mutex_t *m);
-int __pthread_mutex_lock(__pthread_mutex_t *m);
-int	__pthread_mutex_trylock(__pthread_mutex_t *m);
-int	__pthread_mutex_unlock(__pthread_mutex_t *m);
-int	__pthread_mutex_timedlock(__pthread_mutex_t *m,
+int	__pthread_mutex_destroy(struct __pthread_mutex *m);
+int __pthread_mutex_lock(struct __pthread_mutex *m);
+int	__pthread_mutex_trylock(struct __pthread_mutex *m);
+int	__pthread_mutex_unlock(struct __pthread_mutex *m);
+int	__pthread_mutex_timedlock(struct __pthread_mutex *m,
 	const struct timespec *abstime);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

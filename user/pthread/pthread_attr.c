@@ -26,7 +26,7 @@ int	pthread_attr_destroy(pthread_attr_t *attr)
 int	pthread_attr_setstack(pthread_attr_t *attr,
 	void *stackaddr, size_t stacksize)
 {
-	if (pthread_attr_setstacksize(attr, stacksize))
+	if (pthread_attr_setstacksize(attr, stacksize) != 0)
 		return EINVAL;
 
 	return pthread_attr_setstackaddr(attr, stackaddr);

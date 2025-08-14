@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <string.h>
+#include <limits.h>
 
 #include "pthread_auxiliary.h"
 #include "pthread_waitdep.h"
@@ -19,7 +20,7 @@
 
 static const DECLARE_DEFAULT_PTHREAD_MUTEX_ATTR(local_mattr);
 
-int	__pthread_mutex_init(__pthread_mutex_t *m,
+int	__pthread_mutex_init(struct __pthread_mutex *m,
 	const pthread_mutexattr_t *attr)
 {
 	if (!m)
@@ -52,12 +53,32 @@ int	__pthread_mutex_init(__pthread_mutex_t *m,
 	return 0;
 }
 
-int	__pthread_mutex_destroy(__pthread_mutex_t *m)
+int	__pthread_mutex_destroy(struct __pthread_mutex *m)
 {
 	return 0;
 }
 
-int	__pthread_mutex_trylock(__pthread_mutex_t *m)
+/*
+ * Common post-lock actions: set ownership, update state, apply
+ * priority-ceiling protocol if needed.
+ */
+static inline int __pthread_mutex_post_lock(struct __pthread_mutex *m,
+	struct __pthread *self, int protocol, int prio_ceiling)
+{
+	m->rc++;
+	m->owner = self->pthread;
+	m->state = MUTEX_STATE_NORMAL;
+	list_add_tail(&m->node, &pthread_aux(self)->mutexes);
+	if ((protocol == PTHREAD_PRIO_PROTECT) &&
+		(self->priority != prio_ceiling)) {
+		if (self->priority_bak == 0)
+			self->priority_bak = self->priority;
+		pthread_setschedprio(self->pthread, prio_ceiling);
+	}
+	return 0;
+}
+
+int	__pthread_mutex_trylock(struct __pthread_mutex *m)
 {
 	uint32_t val = 0;
 	struct __pthread *self = __pthread_self;
@@ -77,7 +98,7 @@ int	__pthread_mutex_trylock(__pthread_mutex_t *m)
 		(DEFAULT_PRIORITY(self) > prio_ceiling))
 		return EINVAL;
 
-	pthread_enter_critical(self);
+	__pthread_enter_critical(self);
 
 	if (__atomic_compare_exchange_n(&m->lock, &val,
 		PTHREAD_LOCK_WRLOCK, 1, __ATOMIC_SEQ_CST,
@@ -86,6 +107,10 @@ int	__pthread_mutex_trylock(__pthread_mutex_t *m)
 
 	if (m->owner == self->pthread) {
 		if (type == PTHREAD_MUTEX_RECURSIVE) {
+			if (m->rc == UINT32_MAX) {
+				ret = EAGAIN;
+				goto out;
+			}
 			m->rc++;
 			goto out;
 		}
@@ -100,25 +125,14 @@ int	__pthread_mutex_trylock(__pthread_mutex_t *m)
 	goto out;
 
 locked:
-	m->rc++;
-	m->owner = self->pthread;
-	m->state = MUTEX_STATE_NORMAL;
-	list_add_tail(&m->node, &aux_of(self)->mutexs);
-	if ((protocol == PTHREAD_PRIO_PROTECT) &&
-		(self->priority != prio_ceiling)) {
-		if (!self->priority_bak)
-			self->priority_bak = self->priority;
-		pthread_setschedprio(self->pthread, prio_ceiling);
-	}
-
-	return 0;
+	return __pthread_mutex_post_lock(m, self, protocol, prio_ceiling);
 
 out:
-	pthread_leave_critical(self);
+	__pthread_leave_critical(self);
 	return ret;
 }
 
-int __pthread_mutex_lock(__pthread_mutex_t *m)
+int __pthread_mutex_lock(struct __pthread_mutex *m)
 {
 	uint32_t val = 0;
 	struct __pthread *self = __pthread_self;
@@ -138,7 +152,7 @@ int __pthread_mutex_lock(__pthread_mutex_t *m)
 		(DEFAULT_PRIORITY(self) > prio_ceiling))
 		return EINVAL;
 
-	pthread_enter_critical(self);
+	__pthread_enter_critical(self);
 
 	while (val == 0) {
 		if (__atomic_compare_exchange_n(&m->lock, &val,
@@ -153,9 +167,13 @@ int __pthread_mutex_lock(__pthread_mutex_t *m)
 		 * critical moment, just make sure of this
 		 */
 		val = __atomic_load_n(&m->lock, __ATOMIC_RELAXED);
-		if (val) {
+		if (val != 0) {
 			if (m->owner == self->pthread) {
 				if (type == PTHREAD_MUTEX_RECURSIVE) {
+					if (m->rc == UINT32_MAX) {
+						ret = EAGAIN;
+						goto out;
+					}
 					m->rc++;
 					goto out;
 				}
@@ -173,31 +191,26 @@ int __pthread_mutex_lock(__pthread_mutex_t *m)
 			ret = __pthread_wait_wrlock(&m->lock,
 					(protocol == PTHREAD_PRIO_INHERIT) ?
 						tid_of(m->owner) : 0);
-			if (ret != 0)
+			if (ret == 0)
+				goto locked;
+
+			if (ret != EINTR)
 				goto out;
-			goto locked;
+
+			/* EINTR: reset val for CAS retry */
+			val = 0;
 		}
 	}
 
 locked:
-	m->rc++;
-	m->owner = self->pthread;
-	m->state = MUTEX_STATE_NORMAL;
-	list_add_tail(&m->node, &aux_of(self)->mutexs);
-	if ((protocol == PTHREAD_PRIO_PROTECT) &&
-		(self->priority != prio_ceiling)) {
-		if (!self->priority_bak)
-			self->priority_bak = self->priority;
-		pthread_setschedprio(self->pthread, prio_ceiling);
-	}
-	return 0;
+	return __pthread_mutex_post_lock(m, self, protocol, prio_ceiling);
 
 out:
-	pthread_leave_critical(self);
+	__pthread_leave_critical(self);
 	return ret;
 }
 
-int	__pthread_mutex_timedlock(__pthread_mutex_t *m,
+int	__pthread_mutex_timedlock(struct __pthread_mutex *m,
 	const struct timespec *abstime)
 {
 	uint32_t val = 0;
@@ -219,7 +232,7 @@ int	__pthread_mutex_timedlock(__pthread_mutex_t *m,
 		(DEFAULT_PRIORITY(self) > prio_ceiling))
 		return EINVAL;
 
-	pthread_enter_critical(self);
+	__pthread_enter_critical(self);
 
 	while (val == 0) {
 		if (__atomic_compare_exchange_n(&m->lock, &val,
@@ -228,15 +241,19 @@ int	__pthread_mutex_timedlock(__pthread_mutex_t *m,
 			goto locked;
 
 		/*
-		 * val isn't NULL, increase the nr of waiter, goto wait.
+		 * val isn't 0, increase the nr of waiter, goto wait.
 		 * runs here, means the lock is possibly held by other
 		 * writer or readers, but condition maybe change at this
 		 * critical moment, just make sure of it
 		 */
 		val = __atomic_load_n(&m->lock, __ATOMIC_RELAXED);
-		if (val) {
+		if (val != 0) {
 			if (m->owner == self->pthread) {
 				if (type == PTHREAD_MUTEX_RECURSIVE) {
+					if (m->rc == UINT32_MAX) {
+						ret = EAGAIN;
+						goto out;
+					}
 					m->rc++;
 					goto out;
 				}
@@ -258,39 +275,32 @@ int	__pthread_mutex_timedlock(__pthread_mutex_t *m,
 			ret = __pthread_timedwait_wrlock(&m->lock,
 						(protocol == PTHREAD_PRIO_INHERIT) ?
 							tid_of(m->owner) : 0, usecs);
-			if (ret != 0)
+			if (ret == 0)
+				goto locked;
+
+			if (ret != EINTR)
 				goto out;
 
-			goto locked;
+			/* EINTR: reset val, time2usecs will recompute */
+			val = 0;
 		}
 	}
 
 locked:
-	m->rc++;
-	m->owner = self->pthread;
-	m->state = MUTEX_STATE_NORMAL;
-	list_add_tail(&m->node, &aux_of(self)->mutexs);
-	if ((protocol == PTHREAD_PRIO_PROTECT) &&
-		(self->priority != prio_ceiling)) {
-		if (!self->priority_bak)
-			self->priority_bak = self->priority;
-		pthread_setschedprio(self->pthread, prio_ceiling);
-	}
-
-	return 0;
+	return __pthread_mutex_post_lock(m, self, protocol, prio_ceiling);
 
 out:
-	pthread_leave_critical(self);
+	__pthread_leave_critical(self);
 	return ret;
 }
 
-int	__pthread_mutex_unlock(__pthread_mutex_t *m)
+int	__pthread_mutex_unlock(struct __pthread_mutex *m)
 {
 	uint32_t val = 0;
 	struct __pthread *self = __pthread_self;
 
 	if (!m || (m->rc == 0))
-		return EINVAL;
+		return EPERM;
 
 	if (m->owner != self->pthread)
 		return EPERM;
@@ -305,13 +315,13 @@ int	__pthread_mutex_unlock(__pthread_mutex_t *m)
 		val = __atomic_exchange_n(&m->lock, 0, __ATOMIC_RELEASE);
 		__pthread_wakeup_lock(&m->lock, val & PTHREAD_LOCK_WAITER);
 
-		if (self->priority_bak) {
+		if (self->priority_bak != 0) {
 			if (!self->exiting)
 				pthread_setschedprio(self->pthread, self->priority_bak);
 			self->priority_bak = 0;
 		}
 
-		pthread_leave_critical(self);
+		__pthread_leave_critical(self);
 	}
 
 	return 0;

@@ -138,26 +138,16 @@ int	pthread_setschedprio(pthread_t pthread, int prio)
 int	pthread_setaffinity(pthread_t pthread,
 	size_t cpusetsize, const cpu_set_t *cpuset)
 {
-	int ret = -1;
-
-	ret = sched_setaffinity(tid_of(pthread), cpusetsize, cpuset);
-	if (ret < 0)
-		return errno;
-
-	return 0;
+	sched_setaffinity(tid_of(pthread), cpusetsize, cpuset);
+	return errno;
 }
 
-/* Direct Scheduling Parameters Setting */
+/* Direct Scheduling Parameters Getting */
 int	pthread_getaffinity(pthread_t pthread,
 	size_t cpusetsize, cpu_set_t *cpuset)
 {
-	int ret = -1;
-
-	ret = sched_getaffinity(tid_of(pthread), cpusetsize, cpuset);
-	if (ret < 0)
-		return errno;
-
-	return 0;
+	sched_getaffinity(tid_of(pthread), cpusetsize, cpuset);
+	return errno;
 }
 
 void pthread_yield(void)

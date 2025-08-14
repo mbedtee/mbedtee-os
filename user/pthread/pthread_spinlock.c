@@ -34,7 +34,7 @@ int pthread_spin_lock(pthread_spinlock_t *lock)
 
 int pthread_spin_trylock(pthread_spinlock_t *lock)
 {
-	return __pthread_trylock(lock) ? EBUSY : 0;
+	return __pthread_trylock(lock) != 0 ? EBUSY : 0;
 }
 
 int pthread_spin_unlock(pthread_spinlock_t *lock)

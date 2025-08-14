@@ -7,6 +7,10 @@
 #ifndef _PTHREAD_SESS_H
 #define _PTHREAD_SESS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 #include <__pthread.h>
@@ -30,7 +34,7 @@ struct pthread_session {
 	bool cancel_mask;
 	/* Cancellation flag */
 	bool cancel_flag;
-	/* parameter types */
+	/* session pointer */
 	void *session;
 	/* parameter types */
 	uint32_t types;
@@ -49,5 +53,9 @@ struct pthread_session {
 bool pthread_session_cancel_flag(void);
 bool pthread_session_cancel_unmask(void);
 bool pthread_session_cancel_mask(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

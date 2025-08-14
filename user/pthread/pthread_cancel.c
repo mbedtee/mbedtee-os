@@ -26,32 +26,26 @@ int	pthread_cancel(pthread_t pthread)
 	struct __pthread *t = NULL;
 
 	t = __pthread_get(pthread);
-	if (t == NULL) {
+	if (!t) {
 		ret = ESRCH;
 		goto out;
 	}
 
-	if (t->cancel_pending) {
-		ret = EEXIST;
+	if (t->cancel_pending)
 		goto out;
-	}
 
 	t->cancel_pending = true;
 
-	if (t->cancel_state != PTHREAD_CANCEL_ENABLE) {
-		ret = EPERM;
+	if (t->cancel_state != PTHREAD_CANCEL_ENABLE)
 		goto out;
-	}
 
 	if (t->cancel_type == PTHREAD_CANCEL_ASYNCHRONOUS) {
 		t->cancel_state = PTHREAD_CANCEL_DISABLE;
 		if (t == __pthread_self) {
-			__pthread_exit(PTHREAD_CANCELED);
 			__pthread_put(t);
+			__pthread_exit(PTHREAD_CANCELED);
 		} else {
-			do {
-				ret = pthread_kill(pthread, SIGCANCEL);
-			} while (ret == EAGAIN);
+			pthread_kill(pthread, SIGCANCEL);
 		}
 	}
 
@@ -62,12 +56,7 @@ out:
 
 static void __pthread_testcancel(struct __pthread *t)
 {
-	int cancel_pending = false;
-
-	cancel_pending = (t->cancel_state == PTHREAD_CANCEL_ENABLE)
-					&& t->cancel_pending;
-
-	if (cancel_pending) {
+	if (t->cancel_state == PTHREAD_CANCEL_ENABLE && t->cancel_pending) {
 		t->cancel_state = PTHREAD_CANCEL_DISABLE;
 		__pthread_exit(PTHREAD_CANCELED);
 	}
@@ -76,7 +65,7 @@ static void __pthread_testcancel(struct __pthread *t)
 int pthread_setcancelstate(int state, int *old_state)
 {
 	struct __pthread *t = __pthread_self;
-	struct __pthread_aux *aux = aux_of(t);
+	struct __pthread_aux *aux = pthread_aux(t);
 
 	if (CANCEL_INVALID_STATE(state))
 		return EINVAL;
@@ -94,7 +83,7 @@ int pthread_setcancelstate(int state, int *old_state)
 int pthread_setcanceltype(int type, int *old_type)
 {
 	struct __pthread *t = __pthread_self;
-	struct __pthread_aux *aux = aux_of(t);
+	struct __pthread_aux *aux = pthread_aux(t);
 
 	if (CANCEL_INVALID_TYPE(type))
 		return EINVAL;
@@ -117,7 +106,7 @@ void __pthread_testcancelself(void)
 void pthread_testcancel(void)
 {
 	struct __pthread *t = __pthread_self;
-	struct __pthread_aux *aux = aux_of(t);
+	struct __pthread_aux *aux = pthread_aux(t);
 
 	__pthread_mutex_lock(&aux->cancel_lock);
 	__pthread_testcancel(t);

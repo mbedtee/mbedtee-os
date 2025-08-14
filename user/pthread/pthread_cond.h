@@ -7,6 +7,10 @@
 #ifndef _PTHREAD_COND_H
 #define	_PTHREAD_COND_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <__pthread.h>
 
 int	__pthread_cond_signal(pthread_cond_t *cond,
@@ -21,5 +25,9 @@ int	__pthread_cond_wait(pthread_cond_t *cond,
 int	__pthread_cond_timedwait(pthread_cond_t *cond,
 	pthread_mutex_t *mutex,	const struct timespec *abstime,
 	void **notification);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

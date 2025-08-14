@@ -5,7 +5,11 @@
  */
 
 #ifndef _PTHREAD_WAITDEP_H
-#define	_PTHREAD_WAITDEP_H
+#define _PTHREAD_WAITDEP_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <syscall.h>
 
@@ -95,8 +99,12 @@ static inline long __pthread_timedwait_wrlock(void *ptr, pid_t owner, long usecs
  */
 static inline void __pthread_wakeup_lock(void *ptr, uint32_t waiters)
 {
-	if (waiters)
+	if (waiters != 0)
 		syscall1(SYSCALL_WAKE_LOCK, ptr);
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

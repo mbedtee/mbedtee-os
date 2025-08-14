@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <limits.h>
 #include <syscall.h>
 
 #include "pthread_wait.h"
@@ -30,7 +31,8 @@ int __pthread_wakeup(struct __pthread_waitqueue *q,
 			__pthread_waitqueue_node, node);
 
 	if (n) {
-		q->condi++;
+		if (q->condi >= 0)
+			q->condi++;
 		list_move_tail(&n->node, &q->wakelist);
 		ret = __pthread_sys_wake(n->id);
 	} else {
@@ -56,7 +58,8 @@ int __pthread_wakeup_all(struct __pthread_waitqueue *q,
 	q->notification = notification;
 	if (!list_empty(&q->list)) {
 		list_for_each_entry_safe(n, _n, &q->list, node) {
-			q->condi++;
+			if (q->condi >= 0)
+				q->condi++;
 			list_move_tail(&n->node, &q->wakelist);
 			__pthread_sys_wake(n->id);
 		}
@@ -70,21 +73,50 @@ int __pthread_wakeup_all(struct __pthread_waitqueue *q,
 }
 
 /*
- * Wake up nr threads blocked @q
+ * Wake up all the threads blocked @q
  * @notification will be sent to the waiters
+ *
+ * no threads will be blocked in this waitqueue any more
  */
-int __pthread_wakeup_nr(struct __pthread_waitqueue *q,
-	unsigned long nr, void *notification)
+int __pthread_wakeup_dissolved(struct __pthread_waitqueue *q,
+	void *notification)
 {
 	struct __pthread_waitqueue_node *n = NULL;
 	struct __pthread_waitqueue_node *_n = NULL;
 
 	__pthread_mutex_lock(&q->mutex);
 	q->notification = notification;
-	q->condi += nr;
+	q->condi = -(INT_MAX >> 1);
 	list_for_each_entry_safe(n, _n, &q->list, node) {
 		list_move_tail(&n->node, &q->wakelist);
 		__pthread_sys_wake(n->id);
+	}
+	__pthread_mutex_unlock(&q->mutex);
+
+	return 0;
+}
+
+/*
+ * Wake up nr threads blocked @q
+ * @notification will be sent to the waiters
+ */
+int __pthread_wakeup_nr(struct __pthread_waitqueue *q,
+	unsigned long nr, void *notification)
+{
+	unsigned long count = 0;
+	struct __pthread_waitqueue_node *n = NULL;
+	struct __pthread_waitqueue_node *_n = NULL;
+
+	__pthread_mutex_lock(&q->mutex);
+	q->notification = notification;
+	if (q->condi >= 0)
+		q->condi += nr;
+	list_for_each_entry_safe(n, _n, &q->list, node) {
+		if (count >= nr)
+			break;
+		list_move_tail(&n->node, &q->wakelist);
+		__pthread_sys_wake(n->id);
+		count++;
 	}
 
 	__pthread_mutex_unlock(&q->mutex);
@@ -92,17 +124,36 @@ int __pthread_wakeup_nr(struct __pthread_waitqueue *q,
 	return 0;
 }
 
+/*
+ * flush a wait queue, blocked if the old waiter
+ * is not completely waked up yet.
+ *
+ * reclaim a wait queue resource.
+ */
+void __pthread_waitqueue_flush(struct __pthread_waitqueue *q)
+{
+	__pthread_mutex_lock(&q->mutex);
+	while (!list_empty(&q->list) ||
+		   !list_empty(&q->wakelist)) {
+		__pthread_mutex_unlock(&q->mutex);
+		usleep(5000);
+		__pthread_mutex_lock(&q->mutex);
+	}
+	__pthread_mutex_unlock(&q->mutex);
+}
 
 /*
  * Put the calling thread to a waiting queue.
  *
  * @notification is the join_ret value
  * from the waitqueue owner who wakes us.
+ *
+ * Note: mutex will be released !!!
  */
-long __pthread_wait(struct __pthread_waitqueue *q,
-	__pthread_mutex_t *m, void **notification)
+int __pthread_wait(struct __pthread_waitqueue *q,
+	struct __pthread_mutex *m, void **notification)
 {
-	struct __pthread_aux *aux = aux_of(__pthread_self);
+	struct __pthread_aux *aux = pthread_aux(__pthread_self);
 	struct __pthread_waitqueue_node n;
 
 	__pthread_mutex_lock(&q->mutex);
@@ -111,7 +162,7 @@ long __pthread_wait(struct __pthread_waitqueue *q,
 
 	__pthread_waitqueue_node_init(&n);
 
-	while (q->condi == false) {
+	while (q->condi == 0) {
 		n.waitq = q;
 		n.id = gettid();
 
@@ -125,7 +176,7 @@ long __pthread_wait(struct __pthread_waitqueue *q,
 		__pthread_mutex_lock(&q->mutex);
 	}
 
-	if (q->condi)
+	if (q->condi > 0)
 		q->condi--;
 
 	list_del(&n.node);
@@ -152,10 +203,10 @@ long __pthread_wait(struct __pthread_waitqueue *q,
  * to true before the timeout elapsed.
  */
 long __pthread_timedwait(struct __pthread_waitqueue *q,
-	__pthread_mutex_t *m, void **notification, long usecs)
+	struct __pthread_mutex *m, void **notification, long usecs)
 {
-	long remain = usecs;
-	struct __pthread_aux *aux = aux_of(__pthread_self);
+	long remain = usecs, ret = 0;
+	struct __pthread_aux *aux = pthread_aux(__pthread_self);
 	struct __pthread_waitqueue_node n;
 
 	if (usecs <= 0)
@@ -167,7 +218,7 @@ long __pthread_timedwait(struct __pthread_waitqueue *q,
 
 	__pthread_waitqueue_node_init(&n);
 
-	while ((q->condi == false) && remain) {
+	while (q->condi == 0 && remain != 0) {
 		n.waitq = q;
 		n.id = gettid();
 
@@ -176,16 +227,19 @@ long __pthread_timedwait(struct __pthread_waitqueue *q,
 			list_add_tail(&n.tnode, &aux->wqnodes);
 		__pthread_mutex_unlock(&q->mutex);
 
-		remain = __pthread_sys_wait(remain);
+		ret = __pthread_sys_wait(remain);
+
+		if (ret >= 0)
+			remain = ret;
+		/* EINTR: keep remain unchanged for retry */
 
 		__pthread_mutex_lock(&q->mutex);
 	}
 
-
-	if (q->condi) {
+	if (q->condi > 0) {
 		q->condi--;
 
-		if (!remain)
+		if (remain == 0)
 			remain = 1;
 	}
 
