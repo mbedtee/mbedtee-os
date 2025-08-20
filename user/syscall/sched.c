@@ -13,25 +13,18 @@
 
 int sched_get_priority_max(int policy)
 {
-	static int prio_max = -1;
+	int ret = syscall1(SYSCALL_SCHED_GET_PRIORITY_MAX, policy);
 
-	if (prio_max < 0) {
-		prio_max = syscall1(SYSCALL_SCHED_GET_PRIORITY_MAX, policy);
-		errno = 0;
-	}
-
-	return prio_max;
+	errno = syscall_errno(ret);
+	return syscall_retval(ret);
 }
 
 int sched_get_priority_min(int policy)
 {
-	static int prio_min = -1;
+	int ret = syscall1(SYSCALL_SCHED_GET_PRIORITY_MIN, policy);
 
-	if (prio_min < 0) {
-		prio_min = syscall1(SYSCALL_SCHED_GET_PRIORITY_MIN, policy);
-		errno = 0;
-	}
-	return prio_min;
+	errno = syscall_errno(ret);
+	return syscall_retval(ret);
 }
 
 int sched_setscheduler(pid_t id, int policy,

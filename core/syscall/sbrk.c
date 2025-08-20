@@ -47,7 +47,7 @@ static int sbrk_pages_alloc(struct list_head *head,
 
 int sbrk_init(struct process *proc)
 {
-	if ((!proc) || (!proc->c->heap_size))
+	if (!proc || proc->c->heap_size == 0)
 		return -EINVAL;
 
 	INIT_LIST_HEAD(&proc->heap_pages);
@@ -94,6 +94,11 @@ long sbrk_incr(long incr)
 	} else {
 		DMSG("incr = -0x%lx\n", -incr);
 
+		if (p->heap_current + incr < USER_HEAP_VA(p)) {
+			ret = -EINVAL;
+			goto out;
+		}
+
 		size = -incr + p->heap_residue;
 		algnsize = rounddown(size, PAGE_SIZE);
 		sbrk_pages_free(&p->heap_pages,
@@ -113,13 +118,14 @@ out:
 
 static void sbrk_destroy(struct process *p)
 {
+	struct scatter_page *sp = NULL;
+
 	if (!p || !p->heap_current)
 		return;
 
 	/* free all the heap pages */
 	sbrk_pages_free(&p->heap_pages, USER_HEAP_VA(p),
 		p->heap_current + p->heap_residue - USER_HEAP_VA(p), p->pt);
-	struct scatter_page *sp = NULL;
 
 	list_for_each_entry(sp, &p->heap_pages, node) {
 		IMSG("pid%d %p, pos:%lx residue %lx\n", p->id, sp,

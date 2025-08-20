@@ -14,12 +14,12 @@ int ioctl(int fd, int request, ...)
 {
 	int ret = 0;
 	void *arg = NULL;
-	va_list args = {0};
+	va_list args;
 
 	if (syscall_stdfd(fd))
 		return 0;
 
-	va_start(args, NULL);
+	va_start(args, request);
 	arg = va_arg(args, void *);
 	ret = syscall3(SYSCALL_IOCTL, fd, request, arg);
 	va_end(args);

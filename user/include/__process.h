@@ -7,6 +7,10 @@
 #ifndef _PROCESS_PRIV_H
 #define _PROCESS_PRIV_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -43,12 +47,12 @@ struct process_gp {
 
 /*
  * the app's or dynamic libs' unwinding table address
- * currently support max to 20 addresses
+ * currently support max to 10 addresses
  *
  * aarch64, riscv and mips use the .eh_frame for unwinding
  * aarch32 uses the .ARM.exidx and .ARM.extab for unwinding
  */
-#define MAX_UNWIND_TABLES 20
+#define MAX_UNWIND_TABLES 10
 struct unwind_info {
 	/* number of tables */
 	int nrtabs;
@@ -63,23 +67,16 @@ struct unwind_info {
 	int l_size[MAX_UNWIND_TABLES];
 };
 
-struct __process {
-	/*
-	 * inner-system process ID
-	 */
-	pid_t id;
-
-	bool exiting;
-
-	struct process_wrapper wrapper;
+/*
+ * Combined process info for single-fetch syscall
+ */
+struct proc_info {
 	struct process_gp gp;
-
-	/*
-	 * information for unwind backtrace
-	 */
 	struct unwind_info unwind;
-
-	void *pobjs[400];
 };
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

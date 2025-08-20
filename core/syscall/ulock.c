@@ -28,10 +28,11 @@ static int __writer_locked(struct thread *curr,
 			return true;
 
 		/*
-		 * val isn't 0, increase the nr of waiter, goto wait.
-		 * runs here, means the lock is possibly held by other
-		 * writer or readers, but condition maybe change at this
-		 * critical moment, just make sure of this
+		 * val isn't 0, so increase the number of waiters and go
+	 	 * to sleep.
+		 * Reaching here means the lock may be held by another
+		 * writer or by readers, but the condition may change at
+		 * this critical moment, so make sure of it.
 		 */
 		while (val != 0) {
 			if (*owner) {
@@ -62,10 +63,10 @@ static int __reader_locked(uint32_t *ulock)
 			return true;
 
 		/*
-		 * runs here, means the lock is possibly held by writer,
-		 * going to increase the nr of waiter, prepare for wait,
-		 * but condition maybe change at this critical moment,
-		 * just make sure of it
+		 * Reaching here means the lock may be held by a writer,
+		 * so increase the number of waiters and prepare to wait.
+		 * The condition may change at this critical moment, so
+		 * make sure of it.
 		 */
 		while (val & PTHREAD_LOCK_WRLOCK) {
 			if (val & PTHREAD_LOCK_WAITER)
@@ -84,22 +85,24 @@ static int __wait_writer_lock(struct thread *t,
 	uint32_t *l, pid_t *owner, uint64_t usecs)
 {
 	int ret = 0;
+	long remain = 0;
 	struct waitqueue *wq = &t->proc->wq;
 
-	pthread_leave_critical(t->tuser);
+	__pthread_leave_critical(t->tuser);
 
 	/*
 	 * if timeout == 0, then wait infinitely
 	 */
 	if (usecs == 0) {
-		__wait_event(wq, __writer_locked(t, l, owner), l, true);
+		ret = wait_event_priv_interruptible(wq, __writer_locked(t, l, owner), l);
+		ret = (ret != -EINTR) ? 0 : ret;
 	} else {
-		usecs = __wait_event_timeout(wq, __writer_locked(t, l, owner), usecs, l, true);
-		if (usecs == 0)
-			ret = -ETIMEDOUT;
+		remain = wait_event_timeout_priv_interruptible(wq,
+				__writer_locked(t, l, owner), usecs, l);
+		ret = (remain > 0) ? 0 : (remain == 0) ? -ETIMEDOUT : remain;
 	}
 
-	pthread_enter_critical(t->tuser);
+	__pthread_enter_critical(t->tuser);
 
 	return ret;
 }
@@ -108,22 +111,24 @@ static int __wait_reader_lock(struct thread *t,
 	uint32_t *l, uint64_t usecs)
 {
 	int ret = 0;
+	long remain = 0;
 	struct waitqueue *wq = &t->proc->wq;
 
-	pthread_leave_critical(t->tuser);
+	__pthread_leave_critical(t->tuser);
 
 	/*
 	 * if timeout == 0, then wait infinitely
 	 */
 	if (usecs == 0) {
-		__wait_event(wq, __reader_locked(l), l, true);
+		ret = wait_event_priv_interruptible(wq, __reader_locked(l), l);
+		ret = (ret != -EINTR) ? 0 : ret;
 	} else {
-		usecs = __wait_event_timeout(wq, __reader_locked(l), usecs, l, true);
-		if (usecs == 0)
-			ret = -ETIMEDOUT;
+		remain = wait_event_timeout_priv_interruptible(wq,
+				__reader_locked(l), usecs, l);
+		ret = (remain > 0) ? 0 : (remain == 0) ? -ETIMEDOUT : remain;
 	}
 
-	pthread_enter_critical(t->tuser);
+	__pthread_enter_critical(t->tuser);
 
 	return ret;
 }
@@ -138,10 +143,10 @@ long do_syscall_wait_rdlock(struct thread_ctx *regs)
 
 	local_irq_disable();
 
-	if ((long)ulock & (BYTES_PER_INT - 1))
+	if ((long)ulock & (sizeof(uint32_t) - 1))
 		return -EFAULT;
 
-	if (!access_ok(ulock, BYTES_PER_INT))
+	if (!access_ok(ulock, sizeof(uint32_t)))
 		return -EFAULT;
 
 	return __wait_reader_lock(current, ulock, timeout);
@@ -158,10 +163,10 @@ long do_syscall_wait_wrlock(struct thread_ctx *regs)
 
 	local_irq_disable();
 
-	if ((long)ulock & (BYTES_PER_INT - 1))
+	if ((long)ulock & (sizeof(uint32_t) - 1))
 		return -EFAULT;
 
-	if (!access_ok(ulock, BYTES_PER_INT))
+	if (!access_ok(ulock, sizeof(uint32_t)))
 		return -EFAULT;
 
 	return __wait_writer_lock(current, ulock, &owner, timeout);
@@ -169,21 +174,12 @@ long do_syscall_wait_wrlock(struct thread_ctx *regs)
 
 long do_syscall_wake_lock(struct thread_ctx *regs)
 {
-	struct waitqueue_node *n = NULL;
-	struct waitqueue *wq = &current->proc->wq;
+	struct waitqueue *waitq = &current->proc->wq;
 	void *ulock = (void *)regs->r[ARG_REG + 1];
 
-	if (!access_ok(ulock, BYTES_PER_INT))
+	if (!access_ok(ulock, sizeof(uint32_t)))
 		return -EFAULT;
 
-	spin_lock_irq(&wq->lock);
-
-	list_for_each_entry(n, &wq->list, node) {
-		if (ulock == n->priv)
-			n->wake(n);
-	}
-
-	spin_unlock(&wq->lock);
-
+	__wakeup(waitq, ulock);
 	return 0;
 }

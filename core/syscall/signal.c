@@ -163,9 +163,14 @@ static inline int __sigenqueue(struct signal_proc *sigp,
 	struct sigqueue *q = NULL;
 
 	q = kmalloc(sizeof(*q));
-	if (q == NULL) {
-		DMSG("allocate failed signo %d code %d\n", signo, info->si_code);
-		return -EAGAIN;
+	if (!q) {
+		/*
+		 * Degrade to non-queuing on ENOMEM: just set the
+		 * pending bit so the signal is never silently lost.
+		 * The siginfo will be synthesized at dequeue time.
+		 */
+		sigaddset(pending, signo);
+		return 0;
 	}
 
 	q->info = *info;
@@ -196,8 +201,9 @@ static int sigbroadcastkillstop(struct process *proc,
 			if (!sigismember(&sigt->pending, info->si_signo))
 				ret |= __sigenqueue(&proc->sigp, &sigt->queue, &sigt->pending, info);
 			sched_ready(t->id);
-		} else if (info->si_signo == SIGKILL)
+		} else if (info->si_signo == SIGKILL) {
 			sched_ready(t->id);
+		}
 	}
 	spin_unlock(&proc->slock);
 
@@ -214,7 +220,7 @@ static int sigenqueue_t(pid_t tid, siginfo_t *info)
 	struct signal_thread *sigt = NULL;
 	struct signal_proc *sigp = NULL;
 
-	if (t == NULL)
+	if (!t)
 		return -ESRCH;
 
 	if (t->tuser->exiting) {
@@ -307,6 +313,23 @@ static void sigwakeupproc(struct process *proc, int signo)
 	struct thread *t = NULL;
 
 	spin_lock(&proc->slock);
+
+	/*
+	 * Prefer a thread that is already waiting for this signal via
+	 * sigtimedwait / sigwaitinfo (sigwait contains the signal).
+	 * This avoids waking another thread that will consume the
+	 * signal from the process queue before the waiter can get it.
+	 */
+	list_for_each_entry(t, &proc->threads, node) {
+		if (!t->tuser->exiting && !t->sigt.sighandling &&
+		    sigismember(&t->sigt.sigwait, signo)) {
+			sched_ready(t->id);
+			spin_unlock(&proc->slock);
+			return;
+		}
+	}
+
+	/* Fall back: wake any non-exiting thread that can handle it. */
 	list_for_each_entry(t, &proc->threads, node) {
 		if (!t->tuser->exiting && !t->sigt.sighandling) {
 			if (sigwakeupthread(t, signo))
@@ -359,9 +382,9 @@ static int sigenqueue_p(struct process *p, siginfo_t *info)
 	 */
 	sigmaskofproc(p, &mask);
 	if (sigismember(&mask, signo) || (sigp->act[signo].sa_handler != SIG_IGN)) {
-		if (signo == SIGKILL || signo == SIGSTOP || signo == SIGCONT)
+		if (signo == SIGKILL || signo == SIGSTOP || signo == SIGCONT) {
 			ret = sigbroadcastkillstop(p, info);
-		else {
+		} else {
 			ret = __sigenqueue(sigp, &sigp->queue, &sigp->pending, info);
 			if (ret == 0)
 				sigwakeupproc(p, signo);
@@ -401,7 +424,7 @@ static int sigsecuritycheck(struct process *dst, bool threaddirected)
 	 * check if current TA has permission
 	 * to access the target TA
 	 */
-	else if (!threaddirected && strstr_delimiter(
+	else if (!threaddirected && strstr_token(
 		proc->c->ipc_acl, dst->c->name, ','))
 		ret = 0;
 
@@ -418,7 +441,7 @@ int sigenqueue(pid_t id, int signo, int sigcause,
 	siginfo_t info = {signo, sigcause, value};
 	struct process *dst = process_get(id);
 
-	if (dst == NULL)
+	if (!dst)
 		return -ESRCH;
 
 	ret = sigsecuritycheck(dst, threaddirected);
@@ -453,7 +476,7 @@ static int __sigdequeue(struct signal_proc *sigp,
 
 	val = *pending & ~*mask;
 
-	if (val) {
+	if (val != 0) {
 		handling = sigt->sighandling;
 
 		if (handling == SIGKILL || handling == SIGCANCEL)
@@ -486,6 +509,8 @@ static int __sigdequeue(struct signal_proc *sigp,
 					q = n;
 				}
 			}
+			if (!q)
+				signo = priorsigno;
 		} else {
 			list_for_each_entry(n, h, node) {
 				__signo = n->info.si_signo;
@@ -498,17 +523,35 @@ static int __sigdequeue(struct signal_proc *sigp,
 					q = n;
 				}
 			}
+			if (!q) {
+				for (signo = 1; signo < NSIG; signo++) {
+					if (sigismember(&val, signo))
+						break;
+				}
+			}
 		}
 
-		list_del(&q->node);
+		if (q) {
+			list_del(&q->node);
 
-		if (multiq == NULL)
+			if (!multiq)
+				sigdelset(pending, signo);
+
+			if (info)
+				*info = q->info;
+
+			sigp->nrqueued--;
+			kfree(q);
+		} else {
 			sigdelset(pending, signo);
 
-		if (info)
-			*info = q->info;
-
-		sigp->nrqueued--;
+			if (info) {
+				memset(info, 0, sizeof(*info));
+				info->si_signo = signo;
+				info->si_code = SI_USER;
+				info->si_value.sival_int = ENOMEM;
+			}
+		}
 
 		sigt->sighandling = (signo != SIGCONT) ? signo : sigt->siglast;
 		sigt->siglast = (signo != SIGSTOP) ? 0 : handling;
@@ -521,8 +564,6 @@ static int __sigdequeue(struct signal_proc *sigp,
 			if (handling)
 				sigt->mask = sigt->savedmask;
 		}
-
-		kfree(q);
 	}
 
 	return signo;
@@ -539,7 +580,7 @@ int sigdequeue(struct thread *t, sigset_t *mask, siginfo_t *info)
 	spin_lock_irqsave(&sigp->lock, flags);
 
 	signo = __sigdequeue(sigp, sigt, mask, info, true);
-	if (!signo)
+	if (signo == 0)
 		signo = __sigdequeue(sigp, sigt, mask, info, false);
 
 	spin_unlock_irqrestore(&sigp->lock, flags);
@@ -560,7 +601,7 @@ int sigpending(sigset_t *set)
  *	of the set of pending process-directed signals and the set of
  *	signals pending for the calling thread.
  */
-	if (set == NULL)
+	if (!set)
 		return -EFAULT;
 
 	sigt = &t->sigt;
@@ -577,7 +618,32 @@ int sigpending(sigset_t *set)
 
 int sigaltstack(const stack_t *ss, stack_t *old_ss)
 {
-	return -ENOTSUP;
+	struct thread *t = current;
+	struct signal_thread *sigt = &t->sigt;
+
+	if (old_ss)
+		*old_ss = sigt->sigaltstack;
+
+	if (!ss)
+		return 0;
+
+	/*
+	 * SS_DISABLE: clear the alternate stack.
+	 * Otherwise, validate and set.
+	 */
+	if (ss->ss_flags & SS_DISABLE) {
+		sigt->sigaltstack.ss_flags = SS_DISABLE;
+		sigt->sigaltstack.ss_sp = NULL;
+		sigt->sigaltstack.ss_size = 0;
+		return 0;
+	}
+
+	if (ss->ss_size < MINSIGSTKSZ)
+		return -ENOMEM;
+
+	sigt->sigaltstack = *ss;
+	sigt->sigaltstack.ss_flags = 0;
+	return 0;
 }
 
 int sigtimedwait(const sigset_t *set,
@@ -592,7 +658,7 @@ int sigtimedwait(const sigset_t *set,
 	sigset_t waitset = *set, mask;
 	int signo = 0;
 
-	if (set == NULL)
+	if (!set)
 		return -EINVAL;
 
 	if (ts) {
@@ -612,13 +678,13 @@ int sigtimedwait(const sigset_t *set,
 	do {
 		timeusecs = !ts ? INT_MAX : timeusecs;
 		signo = __sigdequeue(sigp, sigt, &mask, info, true);
-		if (!signo)
+		if (signo == 0)
 			signo = __sigdequeue(sigp, sigt, &mask, info, false);
 
-		if (signo)
+		if (signo != 0)
 			sigt->sighandling = 0;
 
-		if (signo || !timeusecs)
+		if (signo != 0 || timeusecs == 0)
 			break;
 
 		timeusecs = sched_timeout_locked(&sigp->lock, timeusecs, true);
@@ -627,7 +693,7 @@ int sigtimedwait(const sigset_t *set,
 	sigemptyset(&sigt->sigwait);
 	spin_unlock_irqrestore(&sigp->lock, flags);
 
-	if (signo)
+	if (signo != 0)
 		return signo;
 
 	return timeusecs ? -EINTR : -EAGAIN;

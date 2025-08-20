@@ -7,6 +7,10 @@
 #ifndef _POLL_H
 #define _POLL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define POLLIN          0x0001 /* available for read operations */
 #define POLLPRI         0x0002
 #define POLLOUT         0x0004 /* available for write operations */
@@ -33,5 +37,9 @@ struct pollfd {
 typedef unsigned int nfds_t;
 
 int poll(struct pollfd *fds, nfds_t nfds, int timemsecs);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

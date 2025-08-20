@@ -8,13 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <stdarg.h>
 #include <stdbool.h>
 #include <reent.h>
 #include <signal.h>
-#include <sys/stat.h>
-#include <sys/fcntl.h>
 
 #include <syscall.h>
 #include <utrace.h>
@@ -61,12 +57,23 @@ sighandler_t signal(int signo, sighandler_t handler)
 		return SIG_ERR;
 
 	act.sa_handler = handler;
+	act.sa_flags = 0;
 	sigemptyset(&act.sa_mask);
 	sigaddset(&act.sa_mask, signo);
 	if (sigaction(signo, &act, &oact) < 0)
 		return SIG_ERR;
 
 	return oact.sa_handler;
+}
+
+int sigaltstack(const stack_t *ss, stack_t *old_ss)
+{
+	int ret = 0;
+
+	ret = syscall2(SYSCALL_SIGALTSTACK, ss, old_ss);
+
+	errno = syscall_errno(ret);
+	return syscall_retval(ret);
 }
 
 int _kill_r(struct _reent *ptr, int pid, int signo)
@@ -137,7 +144,7 @@ int sigwaitinfo(const sigset_t *set, siginfo_t *info)
 int sigwait(const sigset_t *set, int *sig)
 {
 	int ret = 0;
-	siginfo_t info = {0};
+	siginfo_t info;
 
 	do {
 		ret = sigtimedwait(set, &info, NULL);
@@ -185,23 +192,34 @@ int pause(void)
 
 unsigned int alarm(unsigned int seconds)
 {
+	static timer_t timerid = -1;
+	timer_t tid = 0;
+	timer_t expected = -1;
 	unsigned int ret = 0;
 	struct sigevent evp;
-	struct itimerspec ts = {0}, ots;
-	timer_t timerid = -1;
+	struct itimerspec ts, ots;
 
-	evp.sigev_notify = SIGEV_SIGNAL;
-	evp.sigev_signo = SIGTIMER;
-	ret = timer_create(CLOCK_REALTIME, &evp, &timerid);
+	tid = __atomic_load_n(&timerid, __ATOMIC_ACQUIRE);
+	if (tid == (timer_t)-1) {
+		memset(&evp, 0, sizeof(evp));
+		evp.sigev_notify = SIGEV_SIGNAL;
+		evp.sigev_signo = SIGTIMER;
+		ret = timer_create(CLOCK_REALTIME, &evp, &tid);
+		if (ret != 0)
+			return 0;
+
+		if (!__atomic_compare_exchange_n(&timerid, &expected, tid,
+			false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+			timer_delete(tid);
+			tid = expected;
+		}
+	}
+
+	memset(&ts, 0, sizeof(ts));
+	ts.it_value.tv_sec = seconds;
+	ret = timer_settime(tid, 0, &ts, &ots);
 	if (ret != 0)
 		return 0;
-
-	ts.it_value.tv_sec = (time_t)seconds;
-	ret = timer_settime(timerid, !TIMER_ABSTIME, &ts, &ots);
-	if (ret != 0) {
-		timer_delete(timerid);
-		return 0;
-	}
 
 	ret = ots.it_value.tv_sec;
 	if ((ots.it_value.tv_nsec >= 500000000L) ||
@@ -238,7 +256,7 @@ extern void signal_entry(void (*sighandler)(int signo,
 	if ((_sig_func_ptr)sighandler == SIG_DFL)
 		sighandler = __sigdefault;
 
-	sighandler(sa->signo, &sa->info, sa->ctx);
+	sighandler(sa->info.si_signo, &sa->info, sa->ctx);
 
 	errno = ori_errno;
 	__sigreturn();

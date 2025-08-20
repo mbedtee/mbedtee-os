@@ -7,17 +7,20 @@
 #ifndef _PTHREAD_PRIV_H
 #define _PTHREAD_PRIV_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <reent.h>
 #include <sched.h>
+#include <time.h>
 #include <list.h>
 #include <misc.h>
 
 #include <pthread.h>
-
-#include <__process.h>
 
 #define PTHREAD_STACK_MIN (4096)
 #define PTHREAD_STACK_DEFAULT (PTHREAD_STACK_MIN)
@@ -49,11 +52,6 @@ struct __pthread {
 	int cpuid;
 
 	/*
-	 * for the Process Resources
-	 */
-	struct __process *proc;
-
-	/*
 	 * Stack Information
 	 */
 	void *stackaddr;
@@ -79,7 +77,7 @@ struct __pthread {
 	uint8_t priority;
 	/* backup value of the 'priority' */
 	uint8_t priority_bak;
-#define DEFAULT_PRIORITY(p) ((p)->priority_bak ? \
+#define DEFAULT_PRIORITY(p) ((p)->priority_bak != 0 ? \
 	(p)->priority_bak : (p)->priority)
 
 	/*
@@ -90,16 +88,6 @@ struct __pthread {
 	uint8_t inited;
 
 	uint8_t sighandling;
-
-	/*
-	 * System's thread ID MAX (nr of threads allowed)
-	 */
-	short idmax;
-
-	/*
-	 * indicate the thread is under critical section or not
-	 */
-	short critical;
 
 	/*
 	 * scheduling attributes are inherited from the calling
@@ -127,6 +115,25 @@ struct __pthread {
 	uint8_t cancel_pending;
 
 	/*
+	 * System's thread ID MAX (nr of threads allowed)
+	 */
+	short idmax;
+
+	/*
+	 * indicate the thread is under critical section or not
+	 */
+	short critical;
+
+	pthread_spinlock_t initlock;
+
+	/*
+	 * indicate the thread is detaching or not
+	 * Different from the 'exiting', detaching means a joinable thread
+	 * is waiting for detach then exit, ''exiting' means to exit directly.
+	 */
+	uint8_t detaching;
+
+	/*
 	 * contains the current signal handler's arguments
 	 */
 	struct sigarguments sa;
@@ -134,15 +141,14 @@ struct __pthread {
 
 #define DECLARE_DEFAULT_PTHREAD(name) \
 struct __pthread name = { \
-	0, 0, 0, 0, \
+	0, 0, 0, \
 	NULL, PTHREAD_STACK_DEFAULT, \
 	PTHREAD_CREATE_JOINABLE, \
 	PTHREAD_SCOPE_SYSTEM, \
 	SCHED_OTHER, PTHREAD_DEFAULT_PRIORITY, 0, \
-	0, 0, 0, 0, 0, \
-	PTHREAD_EXPLICIT_SCHED, \
-	PTHREAD_CANCEL_ENABLE, PTHREAD_CANCEL_DEFERRED, \
-	0, {0} \
+	0, 0, 0, PTHREAD_EXPLICIT_SCHED, \
+	PTHREAD_CANCEL_ENABLE, PTHREAD_CANCEL_DEFERRED, 0, \
+	0, 0, 0, 0, {NULL} \
 }
 
 #define DECLARE_DEFAULT_PTHREAD_ATTR(name) \
@@ -151,7 +157,7 @@ pthread_attr_t name = { \
 	PTHREAD_SCOPE_SYSTEM, \
 	PTHREAD_EXPLICIT_SCHED, \
 	SCHED_OTHER, {PTHREAD_DEFAULT_PRIORITY}, \
-	PTHREAD_CREATE_JOINABLE \
+	CLOCK_ALLOWED, PTHREAD_CREATE_JOINABLE \
 }
 
 #define DECLARE_DETACHED_PTHREAD_ATTR(name) \
@@ -160,13 +166,14 @@ pthread_attr_t name = { \
 	PTHREAD_SCOPE_SYSTEM, \
 	PTHREAD_EXPLICIT_SCHED, \
 	SCHED_OTHER, {PTHREAD_DEFAULT_PRIORITY}, \
-	PTHREAD_CREATE_DETACHED \
+	CLOCK_ALLOWED, PTHREAD_CREATE_DETACHED \
 }
 
 #define __pthread_self ((struct __pthread *)__builtin_thread_pointer())
 
-#define pthread_enter_critical(p) ((p)->critical++)
-#define pthread_leave_critical(p) ((p)->critical--)
+#define __pthread_enter_critical(p) ((p)->critical++)
+#define __pthread_leave_critical(p) ((p)->critical--)
+#define __pthread_clear_critical(p) ((p)->critical = 0)
 #define pthread_isnt_critical(p) ((p)->critical == 0)
 
 /*
@@ -175,5 +182,10 @@ pthread_attr_t name = { \
  * kernel always manages the tid/pid value less than 65536
  */
 #define tid_of(pthread) ((pid_t)(pthread) & 0xffff)
+#define pid_of(pthread) ((pid_t)(((unsigned int)(pthread)) >> 16))
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

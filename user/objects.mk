@@ -3,3 +3,6 @@
 
 user-uobjs-y += utrace.o
 user-uobjs-y += backtrace.o
+user-uobjs-y += assert.o
+user-uobjs-y += stackprotector.o
+user-uobjs-y += entry.o

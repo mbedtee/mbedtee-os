@@ -4,9 +4,14 @@
 user-syscall-cflags-y +=
 
 user-syscall-uobjs-$(CONFIG_SYSCALL) += \
-	stubs.o dirent.o lock.o sched.o \
+	stubs.o dirent.o lock.o sched.o pipe.o eventfd.o sem.o \
 	sleep.o ioctl.o dup.o mmap.o time.o \
-	poll.o mqueue.o shm.o
+	mqueue.o shm.o
+
+user-syscall-uobjs-$(CONFIG_POLL) += poll.o
+
+user-syscall-uobjs-$(CONFIG_SPAWN) += spawn.o
+user-syscall-uobjs-$(CONFIG_WAITPID) += waitpid.o
 
 user-syscall-uobjs-$(CONFIG_EPOLL) += epoll.o
 

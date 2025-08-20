@@ -26,7 +26,7 @@ static const char * const tracelevel_str[] = {
 	NULL, "ERR", "WAR", "INF", "DBG", "LOG"
 };
 
-static char strbuff[TRACE_SIZE + FUNC_SIZE + MISC_SIZE] = {0};
+static char strbuff[TRACE_SIZE + FUNC_SIZE + MISC_SIZE];
 
 DECLARE_RECURSIVE_PTHREAD_MUTEX(_trace_lock);
 
@@ -39,7 +39,7 @@ void utrace(const char *func, int line,
 	char *dstraw = NULL;
 	int flen = 0, l = 0;
 
-	if (fmt == NULL)
+	if (!fmt)
 		return;
 
 	flen = strnlen(func, FUNC_SIZE - 1);
@@ -64,7 +64,7 @@ void utrace(const char *func, int line,
 		"[%s %04u|%04u@CPU%02u]%s(%04d): %s", tracelevel_str[level],
 		gettid(), getpid(), sched_getcpu(), func_str, line, dstraw);
 
-	if ((size_t)l < sizeof(strbuff))
+	if (l < sizeof(strbuff))
 		write(STDOUT_FILENO, strbuff, l);
 
 	__pthread_mutex_unlock(&_trace_lock);

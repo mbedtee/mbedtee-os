@@ -4,23 +4,13 @@
  * directory operations
  */
 
-#include <errno.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <syscall.h>
 #include <sys/lock.h>
 
-static int __opendir(const char *dirname)
-{
-	return open(dirname, O_RDONLY | O_DIRECTORY);
-}
-
-static int __closedir(int fd)
-{
-	return close(fd);
-}
+#define DIR_BUF_SIZE 1024
 
 static int __readdir(int fd, void *buf, size_t cnt)
 {
@@ -45,20 +35,20 @@ DIR *opendir(const char *name)
 	int fd = -1;
 	DIR *d = NULL;
 
-	fd = __opendir(name);
+	fd = open(name, O_RDONLY | O_DIRECTORY);
 	if (fd < 0)
 		return NULL;
 
-	d = (DIR *)malloc(1024);
-	if (d == NULL) {
-		__closedir(fd);
+	d = malloc(DIR_BUF_SIZE);
+	if (!d) {
+		close(fd);
 		errno = ENOMEM;
 		return NULL;
 	}
 
 	d->dd_fd = fd;
 	d->dd_buf = (char *)(d + 1);
-	d->dd_len = 1024 - sizeof(DIR);
+	d->dd_len = DIR_BUF_SIZE - sizeof(DIR);
 	d->dd_loc = 0;
 	d->dd_size = 0;
 	d->dd_off = 0;
@@ -72,7 +62,7 @@ int closedir(DIR *d)
 
 	if (d) {
 		__lock_acquire_recursive(d->dd_lock);
-		ret = __closedir(d->dd_fd);
+		ret = close(d->dd_fd);
 		__lock_release_recursive(d->dd_lock);
 		__lock_close_recursive(d->dd_lock);
 		free(d);
@@ -101,6 +91,12 @@ struct dirent *readdir(DIR *d)
 	}
 
 	ptr = (struct dirent *)(d->dd_buf + d->dd_loc);
+	if (ptr->d_reclen == 0 || ptr->d_reclen > (d->dd_size - d->dd_loc)) {
+		d->dd_loc = 0;
+		d->dd_size = 0;
+		ptr = NULL;
+		goto out;
+	}
 	d->dd_loc += ptr->d_reclen;
 	d->dd_off = ptr->d_off;
 

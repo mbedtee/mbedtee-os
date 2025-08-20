@@ -4,11 +4,6 @@
  * mmap() and munmap()
  */
 
-#include <stdio.h>
-#include <unistd.h>
-#include <stdarg.h>
-#include <stddef.h>
-#include <errno.h>
 #include <mmap.h>
 #include <syscall.h>
 
@@ -28,8 +23,10 @@ int munmap(void *addr, size_t length)
 {
 	int ret = -1;
 
-	if (addr == NULL || addr == MAP_FAILED)
-		return -EINVAL;
+	if (!addr || addr == MAP_FAILED) {
+		errno = EINVAL;
+		return -1;
+	}
 
 	ret = syscall2(SYSCALL_MUNMAP, addr, length);
 

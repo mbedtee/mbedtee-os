@@ -26,6 +26,7 @@ struct epoll_fnode {
 	/* rbtree root */
 	struct rb_node *fds;
 	int refc;
+	/* lock for the ready list only */
 	struct spinlock lock;
 };
 
@@ -87,7 +88,7 @@ static inline intptr_t epi_rbadd_cmp(
 	const struct rb_node *n, const struct rb_node *ref)
 {
 	struct epoll_item *ei = rb_entry_of(n, struct epoll_item, node);
-	struct epoll_item *ei_ref = rb_entry_of(n, struct epoll_item, node);
+	struct epoll_item *ei_ref = rb_entry_of(ref, struct epoll_item, node);
 
 	return ei->fd < ei_ref->fd ? -1 :
 		   ei->fd > ei_ref->fd ? 1 : 0;
@@ -110,24 +111,6 @@ static inline void epoll_rbadd(
 static int epoll_item_poll(struct epoll_item *ei,
 	struct poll_table *pt)
 {
-/*
-	int mask = DEFAULT_EPOLLMASK;
-	struct file *f = NULL;
-	struct file_desc *fdesc = NULL;
-
-	fdesc = fdesc_get(ei->fd);
-	if (fdesc) {
-		f = fdesc->file;
-		if (f->fops->poll)
-			mask = f->fops->poll(f, pt);
-
-		fdesc_put(fdesc);
-	}
-
-	mask &= ei->event.events | EPOLLERR | EPOLLHUP;
-
-	return mask;
-*/
 	int mask = DEFAULT_EPOLLMASK;
 	struct file *f = ei->file;
 
@@ -145,12 +128,6 @@ static void epoll_wake(struct waitqueue_node *n)
 	struct epoll_fnode *epfn = ei->epfn;
 	unsigned long flags = 0;
 
-	n->wq->condi--;
-
-	assert(epfn->refc > 0);
-	assert(!rb_empty(&ei->node));
-	assert(ei->fd > 0);
-
 	spin_lock_irqsave(&epfn->lock, flags);
 
 	if (ei->event.events & ~EPOLLHIGHMASK) {
@@ -167,13 +144,12 @@ static void epoll_waitq_enqueue(struct file *filp,
 	struct waitqueue *wq, struct poll_table *p)
 {
 	unsigned long flags = 0;
-	struct thread *__curr = NULL;
 	struct epoll_queue *epq = container_of(p, struct epoll_queue, pt);
 	struct epoll_item *ei = epq->ei;
 	struct epoll_queue_node *eqn = NULL;
 
 	eqn = kmalloc(sizeof(*eqn));
-	if (eqn == NULL) {
+	if (!eqn) {
 		epq->errcode = -ENOMEM;
 		return;
 	}
@@ -186,15 +162,7 @@ static void epoll_waitq_enqueue(struct file *filp,
 
 	spin_lock(&wq->lock);
 
-	__curr = current;
-
-	__prepare_node(wq, &eqn->wqn, epoll_wake, ei);
-
-	/*
-	 * just like __prepare_wait() -
-	 * __prepare_wait(wq, &en->wqn, false, false);
-	 */
-	list_add_tail(&eqn->wqn.node, &wq->list);
+	waitqueue_node_enqueue(wq, &eqn->wqn, epoll_wake, ei);
 
 	spin_unlock(&wq->lock);
 
@@ -205,16 +173,17 @@ static void epoll_waitq_dequeue(struct epoll_item *ei)
 {
 	unsigned long flags = 0;
 	struct epoll_queue_node *n = NULL, *_n = NULL;
+	LIST_HEAD(tmp);
 
 	spin_lock_irqsave(&ei->lock, flags);
+	list_splice_init(&ei->wqnlist, &tmp);
+	spin_unlock_irqrestore(&ei->lock, flags);
 
-	list_for_each_entry_safe(n, _n, &ei->wqnlist, node) {
-		waitqueue_node_del(&n->wqn);
+	list_for_each_entry_safe(n, _n, &tmp, node) {
 		list_del(&n->node);
+		waitqueue_node_del_release(&n->wqn);
 		kfree(n);
 	}
-
-	spin_unlock_irqrestore(&ei->lock, flags);
 }
 
 static void epoll_rditem_dequeue(struct epoll_fnode *epfn,
@@ -263,10 +232,6 @@ static void __epoll_del(struct epoll_fnode *epfn,
 static int epoll_del(struct epoll_fnode *epfn,
 	struct epoll_item *ei)
 {
-	assert(epfn->refc > 0);
-	assert(!rb_empty(&ei->node));
-	assert(ei->fd > 0);
-
 	if (fdesc_unregister_atclose(ei->proc, &ei->fdatc))
 		__epoll_del(epfn, ei);
 
@@ -280,10 +245,6 @@ static void epoll_fdatc(struct fdesc_atclose *p)
 	struct epoll_fnode *epfn = ei->epfn;
 
 	tfs_lock_node(&epfn->node);
-
-	assert(epfn->refc > 0);
-	assert(!rb_empty(&ei->node));
-	assert(ei->fd > 0);
 
 	__epoll_del(epfn, ei);
 
@@ -305,14 +266,14 @@ static int epoll_add(struct epoll_fnode *epfn,
 	struct epoll_queue epq;
 	int revents = 0;
 
-	if (evt == NULL)
+	if (!evt)
 		return -EINVAL;
 
-//	if (!file_can_poll(d->file))
-//		return -EPERM;
+	if (!file_can_poll(d->file))
+		return -EPERM;
 
 	ei = kmalloc(sizeof(*ei));
-	if (ei == NULL)
+	if (!ei)
 		return -ENOMEM;
 
 	ei->fd = d->fd;
@@ -325,9 +286,6 @@ static int epoll_add(struct epoll_fnode *epfn,
 	rb_node_init(&ei->node);
 	spin_lock_init(&ei->lock);
 
-	INIT_LIST_HEAD(&ei->fdatc.node);
-	ei->fdatc.atclose = epoll_fdatc;
-
 	file_get(ei->file);
 	epoll_rbadd(epfn, ei);
 
@@ -336,15 +294,15 @@ static int epoll_add(struct epoll_fnode *epfn,
 	epq.pt.waitfn = epoll_waitq_enqueue;
 	revents = epoll_item_poll(ei, &epq.pt);
 
-	if (epq.errcode) {
+	if (epq.errcode != 0) {
 		__epoll_del(epfn, ei);
 		return epq.errcode;
 	}
 
-	if (revents)
+	if (revents != 0)
 		epoll_rditem_enqueue(epfn, ei);
 
-	fdesc_register_atclose(d, &ei->fdatc);
+	fdesc_register_atclose(d, &ei->fdatc, epoll_fdatc);
 
 	return 0;
 }
@@ -354,7 +312,7 @@ static int epoll_modify(struct epoll_fnode *epfn,
 {
 	struct poll_table pt = {NULL};
 
-	if (evt == NULL)
+	if (!evt)
 		return -EINVAL;
 
 	ei->event = *evt;
@@ -374,7 +332,7 @@ int epoll_create(int size)
 		return -EINVAL;
 
 	do {
-		if (!sprintf(path, "/epoll/%04d_%08d", current_id, rand()))
+		if (snprintf(path, sizeof(path), "/epoll/%04d_%08d", current_id, rand()) >= sizeof(path))
 			return -EFAULT;
 		ret = sys_open(path, O_RDWR | O_CREAT | O_EXCL);
 	} while (ret == -EEXIST);
@@ -392,24 +350,24 @@ int epoll_ctl(int epfd, int op, int fd,
 	struct file_desc *epd = NULL, *dst = NULL;
 
 	epd = fdesc_get(epfd);
-	if (epd == NULL)
+	if (!epd)
 		return -EBADF;
 
 	if (epd->file->fops != &epoll_fops) {
 		ret = -EINVAL;
-		goto outf;
+		goto out;
 	}
 
 	/* get the target file descriptor */
 	dst = fdesc_get(fd);
-	if (dst == NULL) {
+	if (!dst) {
 		ret = -EBADF;
-		goto outf;
+		goto out;
 	}
 
 	if (dst->file->fops == &epoll_fops) {
 		ret = -EINVAL;
-		goto outf2;
+		goto out;
 	}
 
 	n = epd->file->priv;
@@ -436,9 +394,8 @@ int epoll_ctl(int epfd, int op, int fd,
 
 	tfs_unlock_node(n);
 
-outf2:
+out:
 	fdesc_put(dst);
-outf:
 	fdesc_put(epd);
 	return ret;
 }
@@ -450,14 +407,12 @@ static int epoll_xfer_events(struct epoll_fnode *epfn,
 	struct poll_table pt = {NULL};
 	unsigned long flags = 0;
 	struct epoll_item *ei = NULL, *_ei = NULL;
-	LIST_HEAD(rdlist);
-
-	assert(epfn->refc > 0);
-
-	spin_lock_irqsave(&epfn->lock, flags);
+	LIST_HEAD(rdlist);	/* ready list */
 
 	/* use the temporary ready list */
+	spin_lock_irqsave(&epfn->lock, flags);
 	list_splice_init(&epfn->rdlist, &rdlist);
+	spin_unlock_irqrestore(&epfn->lock, flags);
 
 	list_for_each_entry_safe(ei, _ei, &rdlist, rdnode) {
 		if (nrevents >= maxevents)
@@ -466,27 +421,29 @@ static int epoll_xfer_events(struct epoll_fnode *epfn,
 		list_del(&ei->rdnode);
 
 		revents = epoll_item_poll(ei, &pt);
-		if (!revents)
+		if (revents == 0)
 			continue;
 
 		if (put_user(revents, &events[nrevents].events) ||
 			put_user(ei->event.data, &events[nrevents].data)) {
 			list_add(&ei->rdnode, &rdlist);
-			if (!nrevents)
+			if (nrevents == 0)
 				nrevents = -EFAULT;
 			break;
 		}
 
-		if (ei->event.events & EPOLLONESHOT)
+		if (ei->event.events & EPOLLONESHOT) {
 			ei->event.events &= EPOLLHIGHMASK;
-		else if (!(ei->event.events & EPOLLET))
+		} else if (!(ei->event.events & EPOLLET)) {
+			spin_lock_irqsave(&epfn->lock, flags);
 			list_add_tail(&ei->rdnode, &epfn->rdlist);
-
+			spin_unlock_irqrestore(&epfn->lock, flags);
+		}
 		nrevents++;
 	}
 
+	spin_lock_irqsave(&epfn->lock, flags);
 	list_splice(&rdlist, &epfn->rdlist);
-
 	spin_unlock_irqrestore(&epfn->lock, flags);
 
 	return nrevents;
@@ -496,6 +453,7 @@ int epoll_wait(int epfd, struct epoll_event *events,
 		       int maxevents, int timemsecs)
 {
 	int ret = -1;
+	long wret = 0;
 	struct file_desc *epd = NULL;
 	struct tfs_node *n = NULL;
 	struct epoll_fnode *epfn = NULL;
@@ -505,7 +463,7 @@ int epoll_wait(int epfd, struct epoll_event *events,
 		return -EINVAL;
 
 	epd = fdesc_get(epfd);
-	if (epd == NULL)
+	if (!epd)
 		return -EBADF;
 
 	if (epd->file->fops != &epoll_fops) {
@@ -516,9 +474,11 @@ int epoll_wait(int epfd, struct epoll_event *events,
 	n = epd->file->priv;
 	epfn = epoll_fnode_of(n);
 
+	tfs_lock_node(n);
+
 	while (1) {
 		ret = epoll_xfer_events(epfn, events, maxevents);
-		if (ret)
+		if (ret != 0)
 			break;
 
 		if (timeusecs == 0) {
@@ -526,17 +486,24 @@ int epoll_wait(int epfd, struct epoll_event *events,
 			break;
 		}
 
-		if (is_sigpending(current)) {
+		tfs_unlock_node(n);
+
+		wret = wait_event_timeout_interruptible(&epfn->wq,
+				!list_empty(&epfn->rdlist), timeusecs);
+
+		tfs_lock_node(n);
+
+		if (wret == -EINTR) {
 			ret = -EINTR;
 			break;
 		}
-
-		timeusecs = wait_event_timeout_interruptible(&epfn->wq,
-				!list_empty(&epfn->rdlist), timeusecs);
-
-		if (timemsecs == -1)
+		if (wret == 0)
+			timeusecs = 0;
+		else if (timemsecs == -1)
 			timeusecs = INT_MAX;
 	}
+
+	tfs_unlock_node(n);
 
 outf:
 	fdesc_put(epd);
@@ -547,7 +514,7 @@ static struct tfs_node *epoll_alloc_node(struct tfs *fs)
 {
 	struct epoll_fnode *epfn = kzalloc(sizeof(*epfn));
 
-	if (epfn == NULL)
+	if (!epfn)
 		return NULL;
 
 	epfn->refc = 1;
@@ -565,8 +532,6 @@ static void epoll_free_node(struct tfs_node *n)
 	bool to_free = false;
 
 	tfs_lock_node(&epfn->node);
-
-	assert(epfn->refc > 0);
 
 	/* DO NOT force to delete, may have race condition @ epoll_fdatc */
 	rb_for_each_entry_safe_postorder(ei, _ei, epfn->fds, node)
@@ -658,7 +623,7 @@ static int epoll_open(struct file *f,
 
 	n = tfs_get_node(fs, f->path);
 
-	if (n != NULL) {
+	if (n) {
 		ret = epoll_do_open(fs, n, isdir, f);
 		if (ret != 0) {
 			tfs_put_node(fs, n);
@@ -694,41 +659,12 @@ static int epoll_close(struct file *f)
 static int epoll_unlink(struct file_system *pfs, const char *path)
 {
 	int ret = -1;
-	struct tfs_node *n = NULL;
 	struct tfs *fs = pfs->priv;
 
-	if (!path)
-		return -EINVAL;
-
 	tfs_lock(fs);
-
-	n = tfs_get_node(fs, path);
-	if (n == NULL) {
-		ret = -ENOENT;
-		goto out;
-	}
-
-	if (n->attr & TFS_ATTR_DIR) {
-		ret = -EISDIR;
-		goto out;
-	}
-
-	if (fspath_isdir(path)) {
-		ret = -ENOTDIR;
-		goto out;
-	}
-
-	ret = tfs_security_check(fs, n);
-	if (ret != 0)
-		goto out;
-
-	list_del(&n->node);
-
-	tfs_put_node(fs, n);
-
-out:
-	tfs_put_node(fs, n);
+	ret = tfs_unlink(fs, path);
 	tfs_unlock(fs);
+
 	return ret;
 }
 
@@ -737,7 +673,7 @@ static int epoll_fstat(struct file *f, struct stat *st)
 	struct tfs_node *n = f->priv;
 	struct epoll_fnode *epfn = epoll_fnode_of(n);
 
-	if (st == NULL)
+	if (!st)
 		return -EINVAL;
 
 	tfs_lock_node(n);
@@ -766,10 +702,9 @@ static off_t epoll_seekdir(struct file *f, off_t off, int whence)
 	struct tfs_node *n = f->priv;
 
 	tfs_lock(fs);
-
 	ret = tfs_seekdir(fs, n, &f->pos, off, whence);
-
 	tfs_unlock(fs);
+
 	return ret;
 }
 
@@ -779,14 +714,13 @@ static ssize_t epoll_readdir(struct file *f, struct dirent *d, size_t count)
 	struct tfs *fs = file2tfs(f);
 	struct tfs_node *n = f->priv;
 
-	if (d == NULL)
+	if (!d)
 		return -EINVAL;
 
 	tfs_lock(fs);
-
 	rdbytes = tfs_readdir(fs, n, &f->pos, d, count);
-
 	tfs_unlock(fs);
+
 	return rdbytes;
 }
 
@@ -809,7 +743,7 @@ static struct tfs epoll_tfs = {
 
 static struct file_system epoll_fs = {
 	/* based on the tmpfs */
-	.name = "ep-fs",
+	.name = "epoll",
 	.mnt = {"/epoll", 0, 0},
 	.mount = tfs_mount,
 	.umount = tfs_umount,

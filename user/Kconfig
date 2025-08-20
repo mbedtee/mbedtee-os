@@ -8,17 +8,32 @@ config USER
 	select MMU
 	select SYSCALL
 	select ELF_LOADER
-	select FS
 	help
-		Say Y here to enable support the user space.
+		Say Y here to enable support for the user space.
 
 if USER
 
 config SYSCALL
-	bool "Enable System call"
+	bool "Enable syscall layer"
+	depends on FS
 	default y
 	help
-		Say Y here to enable the user2kernel syscalls.
+		Enable the userspace syscall layer (SVC/syscall handler and user wrappers).
+		Pure kernel-mode builds should keep this disabled.
+
+config SPAWN
+	bool "Enable process spawn"
+	default y
+	help
+		Enable posix_spawn*() support.
+		Pure kernel-mode builds typically don't need these.
+
+config WAITPID
+	bool "Enable waitpid"
+	default y
+	help
+		Enable waitpid() support for waiting/reaping child processes.
+		This is semantically independent from CONFIG_SPAWN.
 
 config USER_PTHREAD
 	bool "Enable POSIX thread"
@@ -32,28 +47,11 @@ config SIGNAL
 	help
 		Say Y here to enable the userspace POSIX signals.
 
-config IPC_SHM
-	bool "Enable POSIX Shared Memory"
-	depends on TMPFS
-	help
-		Say Y here to enable the POSIX Shared Memory
-
-config IPC_MSGQ
-	bool "Enable POSIX Message Queue"
-	depends on TMPFS
-	help
-		Say Y here to enable the POSIX Message Queue
-
 config USER_BACKTRACE
 	bool "Enable userspace unwind backtrace"
 	depends on ELF_LOADER
 	help
 		Say Y here to enable the userspace unwind backtrace.
-
-config EPOLL
-	bool "Enable userspace epoll"
-	help
-		Say Y here to enable the epoll.
 
 config ASLR
 	bool "Enable userspace ASLR"

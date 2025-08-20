@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
  * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
- * poll()
+ * poll(), select(), pselect()
  */
 
-#include <stdio.h>
-#include <unistd.h>
-#include <stdarg.h>
-#include <errno.h>
 #include <syscall.h>
 
 #include <poll.h>
+#include <sys/select.h>
 
 /*
  * timemsecs:
@@ -23,6 +20,31 @@ int poll(struct pollfd *fds, nfds_t nfds, int timemsecs)
 	int ret = 0;
 
 	ret = syscall3(SYSCALL_POLL, fds, nfds, timemsecs);
+
+	errno = syscall_errno(ret);
+	return syscall_retval(ret);
+}
+
+int select(int nfds, fd_set *readfds, fd_set *writefds,
+	   fd_set *exceptfds, struct timeval *timeout)
+{
+	int ret = 0;
+
+	ret = syscall5(SYSCALL_SELECT, nfds, readfds, writefds,
+		       exceptfds, timeout);
+
+	errno = syscall_errno(ret);
+	return syscall_retval(ret);
+}
+
+int pselect(int nfds, fd_set *readfds, fd_set *writefds,
+	    fd_set *exceptfds, const struct timespec *timeout,
+	    const sigset_t *sigmask)
+{
+	int ret = 0;
+
+	ret = syscall6(SYSCALL_PSELECT, nfds, readfds, writefds,
+		       exceptfds, timeout, sigmask);
 
 	errno = syscall_errno(ret);
 	return syscall_retval(ret);

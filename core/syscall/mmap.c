@@ -15,6 +15,16 @@
 
 #include <sys/mmap.h>
 
+static inline void vm_lock(struct process *proc, 	unsigned long *flags)
+{
+	spin_lock_irqsave(&proc->slock, *flags);
+}
+
+static inline void vm_unlock(struct process *proc,	unsigned long flags)
+{
+	spin_unlock_irqrestore(&proc->slock, flags);
+}
+
 static void vm_unmap(struct process *proc,
 	struct vm_struct *vm)
 {
@@ -37,18 +47,34 @@ static void vm_unmap(struct process *proc,
 	}
 }
 
-static struct vm_struct *vm_lookup(struct process *proc, void *addr)
+static void vm_put(struct process *proc, struct vm_struct *vm)
+{
+	if (vm && atomic_dec_return(&vm->refc) == 0) {
+		vm_unmap(proc, vm);
+		vm->vm_ops->munmap(vm);
+		vma_free(proc->vm, vm->va);
+		fdesc_put(vm->fdesc);
+		kfree(vm);
+	}
+}
+
+static struct vm_struct *vm_get(struct process *proc, void *addr)
 {
 	struct vm_struct *vm = NULL, *ret = NULL;
+	unsigned long flags = 0;
+
+	vm_lock(proc, &flags);
 
 	list_for_each_entry(vm, &proc->mmaps, node) {
 		if (vm->va <= addr &&
 			addr <= vm->va + vm->length - 1) {
 			ret = vm;
+			atomic_inc(&vm->refc);
 			break;
 		}
 	}
 
+	vm_unlock(proc, flags);
 	return ret;
 }
 
@@ -61,10 +87,8 @@ int vm_fault(struct process *proc, void *addr, int flags)
 	if (flags & PG_EXEC)
 		return -EACCES;
 
-	mutex_lock(&proc->mlock);
-
-	vm = vm_lookup(proc, addr);
-	if (vm == NULL) {
+	vm = vm_get(proc, addr);
+	if (!vm) {
 		ret = -EFAULT;
 		goto out;
 	}
@@ -78,7 +102,8 @@ int vm_fault(struct process *proc, void *addr, int flags)
 	ret = vm->vm_ops->fault(vm, &vf);
 	if (ret == 0) {
 		ret = page_map(vf.page, vm->pt, addr, vm->prot);
-		while (ret == -ENOMEM && ++retry < 30) {
+		while (ret == -ENOMEM && ++retry < 50) {
+			DMSG("oops OOM, retrying %d\n", retry);
 			msleep(20);
 			ret = page_map(vf.page, vm->pt, addr, vm->prot);
 		}
@@ -87,7 +112,7 @@ int vm_fault(struct process *proc, void *addr, int flags)
 		EMSG("oops OOM, retried %d\n", retry);
 
 out:
-	mutex_unlock(&proc->mlock);
+	vm_put(proc, vm);
 	return ret;
 }
 
@@ -99,8 +124,9 @@ void *vm_mmap(void *addr, size_t length, int prot,
 	struct file_desc *d = NULL;
 	struct vm_struct *vm = NULL;
 	struct process *proc = current->proc;
+	unsigned long lflags = 0;
 
-	if (!page_aligned(offset) || !length)
+	if (!page_aligned(offset) || length == 0)
 		return ERR_PTR(-EINVAL);
 
 	if (addr && !page_aligned(addr))
@@ -122,7 +148,7 @@ void *vm_mmap(void *addr, size_t length, int prot,
 		goto out;
 	}
 
-	if (d->file->fops->mmap == NULL) {
+	if (!d->file->fops->mmap) {
 		ret = -ENXIO;
 		goto out;
 	}
@@ -143,14 +169,14 @@ void *vm_mmap(void *addr, size_t length, int prot,
 	}
 
 	vm = kzalloc(sizeof(struct vm_struct));
-	if (vm == NULL) {
+	if (!vm) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
 	length = roundup(length, PAGE_SIZE);
 	va = vma_alloc(proc->vm, length);
-	if (va == NULL) {
+	if (!va) {
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -161,17 +187,15 @@ void *vm_mmap(void *addr, size_t length, int prot,
 	vm->prot = kprot;
 	vm->offset = offset;
 	vm->fdesc = d;
-
-	mutex_lock(&proc->mlock);
+	atomic_set(&vm->refc, 1);
 
 	ret = d->file->fops->mmap(d->file, vm);
-	if (ret != 0) {
-		mutex_unlock(&proc->mlock);
+	if (ret != 0)
 		goto out;
-	}
 
+	vm_lock(proc, &lflags);
 	list_add_tail(&vm->node, &proc->mmaps);
-	mutex_unlock(&proc->mlock);
+	vm_unlock(proc, lflags);
 
 	return va;
 
@@ -187,27 +211,23 @@ int vm_munmap(void *addr, size_t length)
 	int ret = -EINVAL;
 	struct vm_struct *vm = NULL;
 	struct process *proc = current->proc;
+	unsigned long flags = 0;
 
 	if (!access_ok(addr, length))
 		return -EFAULT;
 
-	mutex_lock(&proc->mlock);
+	vm_lock(proc, &flags);
 	list_for_each_entry(vm, &proc->mmaps, node) {
 		if (vm->va == addr) {
 			list_del(&vm->node);
-			vm_unmap(proc, vm);
 			ret = 0;
 			break;
 		}
 	}
-	mutex_unlock(&proc->mlock);
+	vm_unlock(proc, flags);
 
-	if (ret == 0) {
-		vm->vm_ops->munmap(vm);
-		vma_free(proc->vm, addr);
-		fdesc_put(vm->fdesc);
-		kfree(vm);
-	}
+	if (ret == 0)
+		vm_put(proc, vm);
 
 	return ret;
 }
@@ -220,14 +240,14 @@ static void vm_cleanup(struct process *proc)
 {
 	struct file_desc *d = NULL;
 	struct vm_struct *vm = NULL;
+	unsigned long flags = 0;
 
-	mutex_lock(&proc->mlock);
+	vm_lock(proc, &flags);
 
 	while ((vm = list_first_entry_or_null(&proc->mmaps,
 				struct vm_struct, node)) != NULL) {
 		list_del(&vm->node);
-		vm_unmap(proc, vm);
-		mutex_unlock(&proc->mlock);
+		vm_unlock(proc, flags);
 
 		d = vm->fdesc;
 		LMSG("vmunmap %s%s on %s@%d - va=%p fd=%d refc=%d\n",
@@ -235,14 +255,13 @@ static void vm_cleanup(struct process *proc)
 			d->proc->c->name, d->proc->id,
 			vm->va, d->fd, d->refc);
 
-		vm->vm_ops->munmap(vm);
-		vma_free(proc->vm, vm->va);
-		fdesc_put(vm->fdesc);
-		kfree(vm);
+		assert(atomic_read(&vm->refc) == 1);
 
-		mutex_lock(&proc->mlock);
+		vm_put(proc, vm);
+
+		vm_lock(proc, &flags);
 	}
 
-	mutex_unlock(&proc->mlock);
+	vm_unlock(proc, flags);
 }
 DECLARE_CLEANUP_HIGH(vm_cleanup);

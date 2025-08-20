@@ -18,22 +18,25 @@
 #include <backtrace.h>
 
 #include <__pthread.h>
+#include <__process.h>
 
 #include <pthread_mutexdep.h>
 
 #if defined(__arm__)
-typedef struct {_uw fnoffset; _uw content; } __EIT_entry;
+struct __EIT_entry {_uw fnoffset; _uw content; };
 __weak_symbol void __cxa_call_unexpected(_Unwind_Control_Block *ucbp) {}
 __weak_symbol bool __cxa_begin_cleanup(_Unwind_Control_Block *ucbp) {return false; }
 __weak_symbol int __cxa_type_match(_Unwind_Control_Block *ucbp, void *rttip,
 	bool is_reference, void **matched_object)
 {return false; }
-#ifndef CONFIG_USER_BACKTRACE
+#if !defined(CONFIG_USER_BACKTRACE)
 __weak_symbol void *__gnu_Unwind_Find_exidx(void *pc, int *nrec) {return NULL; }
 #endif
 #endif
 
-#ifdef CONFIG_USER_BACKTRACE
+#if defined(CONFIG_USER_BACKTRACE)
+
+extern struct proc_info __proc_info;
 
 static int tracer_fd = -1;
 DECLARE_RECURSIVE_PTHREAD_MUTEX(brslock);
@@ -48,7 +51,8 @@ static void __tprintf(const char *fmt, ...)
 	l = vsnprintf(tracer_buf, sizeof(tracer_buf), fmt, args);
 	va_end(args);
 
-	syscall3(SYSCALL_WRITE, tracer_fd, tracer_buf, l);
+	if (l <= sizeof(tracer_buf))
+		syscall3(SYSCALL_WRITE, tracer_fd, tracer_buf, l);
 }
 
 static _Unwind_Reason_Code __tracer(struct _Unwind_Context *ctx, void *d)
@@ -58,6 +62,8 @@ static _Unwind_Reason_Code __tracer(struct _Unwind_Context *ctx, void *d)
 	static unsigned long lastlreg;
 	unsigned long lreg = _Unwind_GetIP(ctx);
 	char name_buf[128];
+
+	name_buf[0] = '\0';
 
 	if (*depth && lreg) {
 		syscall3(SYSCALL_GET_FUNCNAME, lreg, name_buf, &offset);
@@ -92,13 +98,12 @@ static _Unwind_Reason_Code __tracer(struct _Unwind_Context *ctx, void *d)
 void *__gnu_Unwind_Find_exidx(void *pc, int *nrec)
 {
 	int i = 0;
-	struct __process *proc = __pthread_self->proc;
-	struct unwind_info *unw = &proc->unwind;
+	struct unwind_info *unw = &__proc_info.unwind;
 
 	for (i = 0; i < MAX_UNWIND_TABLES; i++) {
 		if ((pc >= unw->l_addr[i]) &&
 			(pc < unw->l_addr[i] + unw->l_size[i])) {
-			*nrec = unw->tabsize[i] / sizeof(__EIT_entry);
+			*nrec = unw->tabsize[i] / sizeof(struct __EIT_entry);
 			return unw->tabs[i];
 		}
 	}
@@ -107,17 +112,28 @@ void *__gnu_Unwind_Find_exidx(void *pc, int *nrec)
 }
 #endif
 
-void unwind_init(void)
+void __process_unwind_init(void)
 {
+
 #if !defined(__arm__)
 	int i = 0;
-	static int initflag;
-	struct __process *proc = __pthread_self->proc;
+	struct unwind_info *unw = &__proc_info.unwind;
+	int nrtabs = unw->nrtabs;
 
-	if (initflag == false) {
-		initflag = true;
-		for (i = 0; i < proc->unwind.nrtabs; i++)
-			__register_frame(proc->unwind.tabs[i]);
+	if (nrtabs <= 0)
+		return;
+
+	if (nrtabs > MAX_UNWIND_TABLES)
+		nrtabs = MAX_UNWIND_TABLES;
+
+	/* Mark as initialized (negative) before registration */
+	unw->nrtabs = -nrtabs;
+
+	for (i = 0; i < nrtabs; i++) {
+		void *tab = unw->tabs[i];
+		/* Validate tab pointer - should be in code segment, not stack */
+		if (tab && (unsigned long)tab > 0x10000)
+			__register_frame(tab);
 	}
 #endif
 }
@@ -138,8 +154,13 @@ extern void backtrace(void)
 	syscall1(SYSCALL_CLOSE, tracer_fd);
 
 	__pthread_mutex_unlock(&brslock);
+}
 
-	_exit(-EFAULT);
+extern void backtrace_exit(void)
+{
+	backtrace();
+
+	_exit(EFAULT);
 }
 
 #endif

@@ -9,6 +9,10 @@
 
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PROT_READ	0x1		/* page can be read */
 #define PROT_WRITE	0x2		/* page can be written */
 
@@ -21,15 +25,19 @@ void *mmap(void *addr, size_t length, int prot, int flags,
 			int fd, off_t offset);
 
 /*
- * unlike the posix complex definition which support to unmap
- * separated pieces (addr/length) within the mapped region
+ * Unlike the POSIX definition, which supports unmapping
+ * separate pieces (addr/length) within the mapped region,
  *
- * this function unmaps the whole mapped region in one syscall,
- * addr must be the mmap() return address, length is ignored
+ * this function unmaps the whole mapped region in one syscall;
+ * addr must be the mmap() return address, and length is ignored.
  */
 int munmap(void *addr, size_t length);
 
 int shm_open(const char *name, int oflag, mode_t mode);
 int shm_unlink(const char *name);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

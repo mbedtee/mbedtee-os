@@ -10,6 +10,10 @@
 #include <time.h>
 #include <signal.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define MQ_PRIO_MAX 1024
 
 typedef int mqd_t;
@@ -47,5 +51,9 @@ ssize_t mq_timedreceive(mqd_t mqdes, char *__restrict msg_ptr,
 int mq_send_fd(mqd_t mqdes, int fd);
 
 int mq_receive_fd(mqd_t mqdes, int *pfd);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

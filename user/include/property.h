@@ -7,6 +7,10 @@
 #ifndef _PROPERTY_H
 #define _PROPERTY_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <version.h>
 #include <tee_api_defines.h>
 
@@ -42,8 +46,6 @@
 #define GPD_TEE_FIRMWARE_IMPLEMENTATION_VERSION "gpd.tee.firmware.implementation.version\0" /* since v1.1 */
 #define GPD_TEE_FIRMWARE_IMPLEMENTATION_BINARYVERSION "gpd.tee.firmware.implementation.binaryversion\0" /* since v1.1 */
 #define GPD_TEE_FIRMWARE_MANUFACTURER "gpd.tee.firmware.manufacturer\0" /* since v1.1 */
-#define GPD_TEE_EVENT_MAXSOURCES "gpd.tee.event.maxSources\0" /* since v1.2 */
-
 #define PROP_TYPE_U32		0x10000000
 #define PROP_TYPE_U64		0x10000001
 #define PROP_TYPE_UUID		0x10000002
@@ -55,7 +57,7 @@
 #define PROP_HANDLES_TA         1
 #define PROP_HANDLES_CLIENT     2
 
-#define PROP_NR_TEE				20
+#define PROP_NR_TEE				19
 #define PROP_NR_TA				9
 #define PROP_NR_CLIENT			2
 #define PROP_NR_MAX				64
@@ -68,7 +70,7 @@
 #define TEE_TRUSTEDSTORAGE_ANTIROLLBACK_PROTECTIONLEVEL			100
 #define TEE_TRUSTEDSTORAGE_ROLLBACKDETECTION_PROTECTIONLEVEL	100
 #define TEE_TRUSTEDOS_IMPLEMENTATION_VERSION	PRODUCT_VERSION
-#define TEE_TRUSTEDOS_MANUFACTURER				"Kapa"
+#define TEE_TRUSTEDOS_MANUFACTURER				"XingLoong"
 #define TEE_FIRMWARE_IMPLEMENTATION_VERSION		"1.0.1"
 #define TEE_FIRMWARE_MANUFACTURER				PRODUCT_NAME
 
@@ -79,5 +81,9 @@ struct property {
 	char name[PROP_SIZE_MAX];
 	char data[PROP_SIZE_MAX];
 };
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

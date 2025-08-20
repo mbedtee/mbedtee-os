@@ -7,6 +7,10 @@
 #ifndef __MISCPRIV_H
 #define __MISCPRIV_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -20,9 +24,12 @@
 #define SIGTIMER SIGCANCEL
 
 struct sigarguments {
-	int signo;
-	siginfo_t info;
 	void *ctx;
+	siginfo_t info;
 };
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

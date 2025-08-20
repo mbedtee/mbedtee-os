@@ -5,15 +5,11 @@
  * target specific locking on different target platforms.
  */
 
-#include <stdio.h>
-#include <stdint.h>
 #include <stdlib.h>
-#include <stdbool.h>
+#include <string.h>
 #include <pthread.h>
 #include <sys/lock.h>
-#include <sys/errno.h>
 
-#include <pthread.h>
 #include <pthread_mutexdep.h>
 
 /*
@@ -39,6 +35,8 @@ void __retarget_lock_init(_LOCK_T *l)
 	if (__l) {
 		memcpy(__l, &m, sizeof(m));
 		*l = __l;
+	} else {
+		*l = NULL;
 	}
 }
 
@@ -52,6 +50,8 @@ void __retarget_lock_init_recursive(_LOCK_T *l)
 	if (__l) {
 		memcpy(__l, &m, sizeof(m));
 		*l = __l;
+	} else {
+		*l = NULL;
 	}
 }
 

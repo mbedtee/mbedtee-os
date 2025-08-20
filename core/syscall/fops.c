@@ -19,29 +19,60 @@
 #include "fops.h"
 
 /*
- * allocate the entry path inside the parent FS
+ * allocate the entry path inside the parent FS (src is kernel buffer)
+ */
+int alloc_kpath(const char *src, struct file_path *p)
+{
+	int ret = -EACCES;
+	struct file_system *fs = NULL;
+	char buf[FS_PATH_MAX];
+	size_t n = 0;
+
+	/* Copy from a kernel string and validate length. */
+	n = strlcpy(buf, src, FS_PATH_MAX);
+	if (n >= FS_PATH_MAX)
+		return -ENAMETOOLONG;
+
+	strtrim_unused(buf);
+
+	fs = fs_get(buf);
+	if (!fs)
+		return -ENOENT;
+
+	p->fs = fs;
+	p->path = buf;
+	ret = fs->getpath(p);
+	if (ret != 0)
+		p->path = NULL;
+
+	fs_put(fs);
+	return ret;
+}
+
+/*
+ * allocate the entry path inside the parent FS  (src is user buffer)
  */
 int alloc_path(const char *src, struct file_path *p)
 {
 	int ret = -EACCES;
 	struct file_system *fs = NULL;
-	char ori[FS_PATH_MAX];
+	char buf[FS_PATH_MAX];
 
-	ret = strncpy_from_user(ori, src, FS_PATH_MAX);
+	ret = strncpy_from_user(buf, src, FS_PATH_MAX);
 	if (ret < 0)
 		return ret;
 
 	if (ret == FS_PATH_MAX)
 		return -ENAMETOOLONG;
 
-	strtrim_unused(ori);
+	strtrim_unused(buf);
 
-	fs = fs_get(ori);
-	if (fs == NULL)
+	fs = fs_get(buf);
+	if (!fs)
 		return -ENOENT;
 
 	p->fs = fs;
-	p->path = ori;
+	p->path = buf;
 
 	ret = fs->getpath(p);
 	if (ret != 0)
@@ -92,6 +123,23 @@ long do_syscall_write(int fd, const void *buf, size_t n)
 	return sys_write(fd, buf, n);
 }
 
+long do_syscall_pread(int fd, void *buf, size_t n, off_t offset)
+{
+	if (!access_ok(buf, n))
+		return -EFAULT;
+
+	return sys_pread(fd, buf, n, offset);
+}
+
+long do_syscall_pwrite(int fd, const void *buf, size_t n,
+	off_t offset)
+{
+	if (!access_ok(buf, n))
+		return -EFAULT;
+
+	return sys_pwrite(fd, buf, n, offset);
+}
+
 long do_syscall_ioctl(int fd, int request, unsigned long arg)
 {
 	return sys_ioctl(fd, request, arg);
@@ -116,12 +164,35 @@ long do_syscall_lseek(int fd, off_t offset, int flags)
 long do_syscall_fstat(int fd, struct stat *st)
 {
 	int ret = -EFAULT;
-	struct stat tmp;
+	struct stat tmp = {0};
 
 	ret = sys_fstat(fd, &tmp);
 	if (ret == 0) {
 		ret = copy_to_user(st, &tmp, sizeof(tmp));
-		if (ret)
+		if (ret != 0)
+			ret = -EFAULT;
+	}
+
+	return ret;
+}
+
+long do_syscall_stat(const char *name, struct stat *st)
+{
+	long ret = -1;
+	struct file_path p;
+	struct stat tmp = {0};
+
+	ret = alloc_path(name, &p);
+	if (ret != 0)
+		return ret;
+
+	ret = sys_stat(p.path, &tmp);
+
+	free_path(&p);
+
+	if (ret == 0) {
+		ret = copy_to_user(st, &tmp, sizeof(tmp));
+		if (ret != 0)
 			ret = -EFAULT;
 	}
 
@@ -133,7 +204,7 @@ long do_syscall_ftruncate(int fd, off_t length)
 	return sys_ftruncate(fd, length);
 }
 
-long do_syscall_remove(const char *name)
+long do_syscall_unlink(const char *name)
 {
 	long ret = -1;
 	struct file_path p;
@@ -163,9 +234,10 @@ long do_syscall_rename(const char *oldpath, const char *newpath)
 
 	ret = sys_rename(oldp.path, newp.path);
 
+	free_path(&newp);
+
 out:
 	free_path(&oldp);
-	free_path(&newp);
 	return ret;
 }
 
@@ -204,5 +276,5 @@ long do_syscall_readdir(int fd, void *buf, size_t cnt)
 	if (!access_ok(buf, cnt))
 		return -EFAULT;
 
-	return sys_getdents(fd, buf, cnt);
+	return sys_readdir(fd, buf, cnt);
 }

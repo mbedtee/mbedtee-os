@@ -4,10 +4,6 @@
  * eventpoll
  */
 
-#include <stdio.h>
-#include <unistd.h>
-#include <stdarg.h>
-#include <errno.h>
 #include <syscall.h>
 
 #include <epoll.h>
@@ -26,7 +22,7 @@ int epoll_create1(int flags)
 {
 	int ret = 0;
 
-	ret = syscall1(SYSCALL_EPOLL_CREATE, 0);
+	ret = syscall1(SYSCALL_EPOLL_CREATE, flags);
 
 	errno = syscall_errno(ret);
 	return syscall_retval(ret);

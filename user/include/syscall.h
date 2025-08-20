@@ -31,68 +31,100 @@
 #define SYSCALL_REMOVE                  16
 #define SYSCALL_LSEEK                   17
 #define SYSCALL_FSTAT                   18
-#define SYSCALL_TRUNCATE                19
-#define SYSCALL_READDIR                 20
-#define SYSCALL_MKDIR                   21
-#define SYSCALL_RMDIR                   22
-#define SYSCALL_EXECVE                  23
+#define SYSCALL_STAT                    19
+#define SYSCALL_TRUNCATE                20
+#define SYSCALL_READDIR                 21
+#define SYSCALL_MKDIR                   22
+#define SYSCALL_RMDIR                   23
+#define SYSCALL_EXECVE                  24
 
-#define SYSCALL_SCHED_SETSCHEDULER      24
-#define SYSCALL_SCHED_GETSCHEDULER      25
-#define SYSCALL_SCHED_SETPARAM          26
-#define SYSCALL_SCHED_GETPARAM          27
-#define SYSCALL_SCHED_SETAFFINITY       28
-#define SYSCALL_SCHED_GETAFFINITY       29
-#define SYSCALL_SCHED_GET_PRIORITY_MAX  30
-#define SYSCALL_SCHED_GET_PRIORITY_MIN  31
+#define SYSCALL_PREAD                   25
+#define SYSCALL_PWRITE                  26
 
-#define SYSCALL_USLEEP                  32
-#define SYSCALL_MSLEEP                  33
+#define SYSCALL_SCHED_SETSCHEDULER      27
+#define SYSCALL_SCHED_GETSCHEDULER      28
+#define SYSCALL_SCHED_SETPARAM          29
+#define SYSCALL_SCHED_GETPARAM          30
+#define SYSCALL_SCHED_SETAFFINITY       31
+#define SYSCALL_SCHED_GETAFFINITY       32
+#define SYSCALL_SCHED_GET_PRIORITY_MAX  33
+#define SYSCALL_SCHED_GET_PRIORITY_MIN  34
 
-#define SYSCALL_PTHREAD_CREATE          34
+#define SYSCALL_USLEEP                  35
+#define SYSCALL_MSLEEP                  36
 
-#define SYSCALL_DUP                     35
-#define SYSCALL_DUP2                    36
+#define SYSCALL_PTHREAD_CREATE          37
 
-#define SYSCALL_WAIT_RDLOCK             37
-#define SYSCALL_WAIT_WRLOCK             38
-#define SYSCALL_WAKE_LOCK               39
-#define SYSCALL_WAIT                    40
-#define SYSCALL_WAKE                    41
+#define SYSCALL_DUP                     38
+#define SYSCALL_DUP2                    39
 
-#define SYSCALL_CLOCKGETTIME            42
-#define SYSCALL_TIMER_CREATE            43
-#define SYSCALL_TIMER_DELETE            44
-#define SYSCALL_TIMER_SETTIME           45
-#define SYSCALL_TIMER_GETTIME           46
-#define SYSCALL_TIMER_GETOVERRUN        47
+#define SYSCALL_WAIT_RDLOCK             40
+#define SYSCALL_WAIT_WRLOCK             41
+#define SYSCALL_WAKE_LOCK               42
+#define SYSCALL_WAIT                    43
+#define SYSCALL_WAKE                    44
 
-#define SYSCALL_MQ_OPEN                 48
-#define SYSCALL_MQ_TIMEDSEND            49
-#define SYSCALL_MQ_TIMEDRECEIVE         50
-#define SYSCALL_MQ_GETSETATTR           51
-#define SYSCALL_MQ_NOTIFY               52
-#define SYSCALL_MQ_SENDFD               53
-#define SYSCALL_MQ_RECEIVEFD            54
+#define SYSCALL_CLOCKGETTIME            45
+#define SYSCALL_TIMER_CREATE            46
+#define SYSCALL_TIMER_DELETE            47
+#define SYSCALL_TIMER_SETTIME           48
+#define SYSCALL_TIMER_GETTIME           49
+#define SYSCALL_TIMER_GETOVERRUN        50
+#define SYSCALL_CLOCKGETRES             51
 
-#define SYSCALL_PAUSE                   55
-#define SYSCALL_SIGACTION               56
-#define SYSCALL_SIGPROCMASK             57
-#define SYSCALL_SIGQUEUE                58
-#define SYSCALL_SIGPENDING              59
-#define SYSCALL_SIGTIMEDWAIT            60
-#define SYSCALL_SIGSUSPEND              61
+#define SYSCALL_PAUSE                   52
+#define SYSCALL_SIGACTION               53
+#define SYSCALL_SIGPROCMASK             54
+#define SYSCALL_SIGQUEUE                55
+#define SYSCALL_SIGPENDING              56
+#define SYSCALL_SIGTIMEDWAIT            57
+#define SYSCALL_SIGSUSPEND              58
+#define SYSCALL_SIGALTSTACK             59
 
-#define SYSCALL_EPOLL_CREATE            62
-#define SYSCALL_EPOLL_CTL               63
-#define SYSCALL_EPOLL_WAIT              64
+#define SYSCALL_EPOLL_CREATE            60
+#define SYSCALL_EPOLL_CTL               61
+#define SYSCALL_EPOLL_WAIT              62
 
-#define SYSCALL_SET_CONFIG              65
-#define SYSCALL_GET_PROPERTY            66
+#define SYSCALL_SELECT                  63
+#define SYSCALL_PSELECT                 64
 
-#define SYSCALL_GET_FUNCNAME            67
+#define SYSCALL_FCNTL                   65
+#define SYSCALL_PIPE                    66
 
-#ifndef __ASSEMBLY__
+#define SYSCALL_MQ_OPEN                 67
+#define SYSCALL_MQ_UNLINK               68
+#define SYSCALL_MQ_TIMEDSEND            69
+#define SYSCALL_MQ_TIMEDRECEIVE         70
+#define SYSCALL_MQ_GETSETATTR           71
+#define SYSCALL_MQ_NOTIFY               72
+#define SYSCALL_MQ_SENDFD               73
+#define SYSCALL_MQ_RECEIVEFD            74
+
+#define SYSCALL_POSIX_SPAWN             75
+#define SYSCALL_WAITPID                 76
+#define SYSCALL_EVENTFD2                77
+
+#define SYSCALL_SEM_INIT                78
+#define SYSCALL_SEM_DESTROY             79
+#define SYSCALL_SEM_POST                80
+#define SYSCALL_SEM_WAIT                81
+#define SYSCALL_SEM_TRYWAIT             82
+#define SYSCALL_SEM_TIMEDWAIT           83
+#define SYSCALL_SEM_GETVALUE            84
+#define SYSCALL_SEM_OPEN                85
+#define SYSCALL_SEM_CLOSE               86
+#define SYSCALL_SEM_UNLINK              87
+
+#define SYSCALL_SET_CONFIG              88
+#define SYSCALL_GET_PROPERTY            89
+#define SYSCALL_GET_FUNCNAME            90
+#define SYSCALL_GET_PROC_INFO           91
+
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <unistd.h>
 #include <stddef.h>
@@ -134,6 +166,11 @@ static inline long syscall(long id, long arg1,
 	syscall(id, (long)(a1), (long)(a2), (long)(a3), (long)(a4), (long)(a5), 0)
 #define syscall6(id, a1, a2, a3, a4, a5, a6) \
 	syscall(id, (long)(a1), (long)(a2), (long)(a3), (long)(a4), (long)(a5), (long)(a6))
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif
 
 #endif

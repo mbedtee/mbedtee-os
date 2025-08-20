@@ -4,11 +4,6 @@
  * dup() and dup2()
  */
 
-#include <stdio.h>
-#include <unistd.h>
-#include <stdarg.h>
-#include <errno.h>
-
 #include <syscall.h>
 
 int dup(int oldfd)

@@ -66,7 +66,7 @@ static inline struct utimer *timer_lookup(timer_t id)
 	pid_t pid = 0;
 	struct utimer *t = timer_find(id);
 
-	if (t == NULL)
+	if (!t)
 		return NULL;
 
 	pid = current->proc->id;
@@ -85,7 +85,7 @@ static inline timer_t timer_id_assign(pid_t tid)
 		prng(&id, sizeof(id));
 		id <<= 16;
 		id |= tid;
-	} while (timer_find(id) != NULL);
+	} while (timer_find(id));
 
 	return id;
 }
@@ -99,7 +99,7 @@ static inline struct utimer *timer_get_lock(
 	spin_lock_irqsave(&tlock, f);
 
 	t = timer_lookup(timerid);
-	if (t == NULL) {
+	if (!t) {
 		spin_unlock_irqrestore(&tlock, f);
 		return NULL;
 	}
@@ -121,7 +121,8 @@ static inline void timer_put_lock(struct utimer *t,
 
 static void timer_worker(struct work *w)
 {
-	int ret = -1, to_free = false;
+	int ret = -1;
+	bool to_free = false;
 	struct process *proc = NULL;
 	struct timespec tval;
 	unsigned long flags = 0;
@@ -133,15 +134,14 @@ static void timer_worker(struct work *w)
 
 	/* process exiting ? */
 	proc = process_get(t->pid);
-	if (proc == NULL)
+	if (!proc)
 		goto out;
 
 	if (t->evp.sigev_notify == SIGEV_THREAD) {
 		struct thread *lastthd = thread_get(t->evplasttid);
 
 		if (!lastthd) {
-			ret = pthread_kcreate(proc,
-				t->evp.sigev_notify_attributes ? &t->attr : NULL,
+			ret = pthread_kcreate(proc, &t->attr,
 				(pthread_func_t)t->evp.sigev_notify_function,
 				t->evp.sigev_value.sival_ptr);
 			if (ret > 0) {
@@ -227,7 +227,7 @@ int timer_delete(timer_t timerid)
 
 	spin_lock(&tlock);
 	t = timer_lookup(timerid);
-	if (t != NULL) {
+	if (t) {
 		rb_del(&t->node, &utimers);
 		list_del(&t->pnode);
 		spin_lock(&t->lock);
@@ -235,7 +235,7 @@ int timer_delete(timer_t timerid)
 	}
 	spin_unlock(&tlock);
 
-	if (t != NULL) {
+	if (t) {
 		to_free = __timer_del(t);
 		spin_unlock(&t->lock);
 
@@ -258,7 +258,7 @@ static inline struct utimer *timer_cleanup_get(struct process *p)
 	spin_lock(&tlock);
 
 	t = list_first_entry(&p->utimers, struct utimer, pnode);
-	if (t != NULL) {
+	if (t) {
 		rb_del(&t->node, &utimers);
 		list_del(&t->pnode);
 		spin_lock(&t->lock);
@@ -311,33 +311,36 @@ int timer_create(clockid_t clockid, struct sigevent *evp,
 	struct utimer *t = NULL;
 	unsigned long flags = 0;
 	bool invalidparam = false;
+	DECLARE_DETACHED_PTHREAD_ATTR(dattr);
 
 	if ((clockid != CLOCK_MONOTONIC) &&
 		(clockid != CLOCK_REALTIME))
 		return -EINVAL;
 
 	t = kzalloc(sizeof(*t));
-	if (t == NULL)
+	if (!t)
 		return -ENOMEM;
 
-	if (evp != NULL) {
+	if (evp) {
 		memcpy(&t->evp, evp, sizeof(*evp));
 
 		if (t->evp.sigev_notify == SIGEV_THREAD) {
-			if (t->evp.sigev_notify_attributes) {
+			if (t->evp.sigev_notify_attributes)
 				memcpy(&t->attr, evp->sigev_notify_attributes, sizeof(t->attr));
-
-				if (t->attr.inheritsched == PTHREAD_INHERIT_SCHED) {
-					t->attr.schedpolicy = curr->tuser->policy;
-					t->attr.contentionscope = curr->tuser->scope;
-					t->attr.schedparam.sched_priority = curr->tuser->priority;
-				}
+			else
+				memcpy(&t->attr, &dattr, sizeof(t->attr));
+			if (t->attr.inheritsched == PTHREAD_INHERIT_SCHED) {
+				t->attr.schedpolicy = curr->tuser->policy;
+				t->attr.contentionscope = curr->tuser->scope;
+				t->attr.schedparam.sched_priority = curr->tuser->priority;
 			}
+			t->attr.detachstate = PTHREAD_CREATE_DETACHED;
 		} else if (t->evp.sigev_notify == SIGEV_SIGNAL) {
 			if (t->evp.sigev_signo < 1 || t->evp.sigev_signo >= NSIG)
 				invalidparam = true;
-		} else
+		} else {
 			invalidparam = true;
+		}
 	} else {
 		t->evp.sigev_notify = SIGEV_SIGNAL;
 		t->evp.sigev_signo = SIGALRM;
@@ -366,7 +369,7 @@ int timer_create(clockid_t clockid, struct sigevent *evp,
 	 *  a sigevent structure in which sigev_notify is SIGEV_SIGNAL,
 	 *  sigev_signo is SIGALRM, and sigev_value.sival_int is the timer ID.
 	 */
-	if (evp == NULL)
+	if (!evp)
 		t->evp.sigev_value = (union sigval)((void *)t->id);
 
 	*timerid = t->id;
@@ -385,7 +388,7 @@ int timer_settime(timer_t timerid, int flags,
 	struct timespec tval;
 	unsigned long slflags = 0;
 
-	if (value == NULL)
+	if (!value)
 		return -EINVAL;
 
 	if (INVALID_TIMESPEC(&value->it_value) ||
@@ -393,7 +396,7 @@ int timer_settime(timer_t timerid, int flags,
 		return -EINVAL;
 
 	t = timer_get_lock(timerid, &slflags);
-	if (t == NULL)
+	if (!t)
 		return -EINVAL;
 
 	/*
@@ -464,11 +467,11 @@ int timer_gettime(timer_t timerid, struct itimerspec *value)
 	struct timespec curr;
 	unsigned long slflags = 0;
 
-	if (value == NULL)
+	if (!value)
 		return -EINVAL;
 
 	t = timer_get_lock(timerid, &slflags);
-	if (t == NULL)
+	if (!t)
 		return -EINVAL;
 
 	clock_gettime(t->clockid, &curr);
@@ -494,7 +497,7 @@ int timer_getoverrun(timer_t timerid)
 	unsigned long slflags = 0;
 
 	t = timer_get_lock(timerid, &slflags);
-	if (t == NULL)
+	if (!t)
 		return -EINVAL;
 
 	ret = t->overrun;

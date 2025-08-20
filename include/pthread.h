@@ -12,6 +12,10 @@
 #include <sys/cdefs.h>
 #include <sys/signal.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 int	pthread_create(pthread_t *pthread,
 	const pthread_attr_t *attr,
 	void *(*start_routine)(void *),
@@ -311,9 +315,19 @@ int	pthread_mutex_timedlock(pthread_mutex_t *mutex,
 
 int pthread_mutex_consistent(pthread_mutex_t *mutex);
 
+int pthread_mutex_setprioceiling(pthread_mutex_t *mutex,
+	int prioceiling, int *old_ceiling);
+
+int pthread_mutex_getprioceiling(const pthread_mutex_t *mutex,
+	int *prioceiling);
+
 int pthread_sigqueue(pthread_t thread, int signo, const union sigval val);
 
 pid_t gettid(void);
 pid_t gettid_max(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -14,10 +14,14 @@
 
 #include <syscall.h>
 
-int shm_open(const char *name, int oflag, mode_t mode)
+static int shm_build_name(const char *name, char *buf)
 {
-	char shm_name[NAME_MAX + 6] = "/shm/";
 	size_t namelen = 0;
+
+	if (!name) {
+		errno = EINVAL;
+		return -1;
+	}
 
 	while (*name == '/')
 		++name;
@@ -28,26 +32,27 @@ int shm_open(const char *name, int oflag, mode_t mode)
 		return -1;
 	}
 
-	strlcpy(shm_name + 5, name, NAME_MAX);
+	memcpy(buf, "/shm/", 5);
+	strlcpy(buf + 5, name, NAME_MAX);
+	return 0;
+}
+
+int shm_open(const char *name, int oflag, mode_t mode)
+{
+	char shm_name[NAME_MAX + 6];
+
+	if (shm_build_name(name, shm_name) < 0)
+		return -1;
 
 	return open(shm_name, oflag, mode);
 }
 
 int shm_unlink(const char *name)
 {
-	char shm_name[NAME_MAX + 6] = "/shm/";
-	size_t namelen = 0;
+	char shm_name[NAME_MAX + 6];
 
-	while (*name == '/')
-		++name;
-
-	namelen = strlen(name) + 1;
-	if (namelen >= NAME_MAX || namelen <= 1) {
-		errno = EINVAL;
+	if (shm_build_name(name, shm_name) < 0)
 		return -1;
-	}
-
-	strlcpy(shm_name + 5, name, NAME_MAX);
 
 	return unlink(shm_name);
 }

@@ -10,6 +10,10 @@
 #include <stdint.h>
 #include <limits.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define EPOLLIN          0x0001 /* available for read operations */
 #define EPOLLPRI         0x0002
 #define EPOLLOUT         0x0004 /* available for write operations */
@@ -53,5 +57,9 @@ int epoll_ctl(int epfd, int op, int fd,
 
 int epoll_wait(int epfd, struct epoll_event *events,
 		       int maxevents, int timemsecs);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

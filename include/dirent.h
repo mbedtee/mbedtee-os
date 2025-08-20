@@ -9,6 +9,10 @@
 
 #include <sys/lock.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* d_type */
 #define DT_UNKNOWN  0
 #define DT_FIFO     1
@@ -34,7 +38,7 @@ struct dirent {
 	unsigned long	d_off;
 	unsigned short	d_reclen;
 	unsigned char	d_type;
-	char			d_name[256];
+	char			d_name[];
 };
 
 DIR *opendir(const char *name);
@@ -43,5 +47,9 @@ int closedir(DIR *d);
 void seekdir(DIR *d, long offset);
 void rewinddir(DIR *d);
 long telldir(DIR *d);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

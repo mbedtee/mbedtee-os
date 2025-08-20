@@ -7,15 +7,25 @@
 #ifndef _UBACKTRACE_H
 #define _UBACKTRACE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <generated/autoconf.h>
 
-#ifdef CONFIG_USER_BACKTRACE
+#if defined(CONFIG_USER_BACKTRACE)
 void backtrace(void);
-void unwind_init(void);
+void backtrace_exit(void);
 void __register_frame(void *framehdr);
+void __process_unwind_init(void);
 #else
 static inline void backtrace(void) {}
-static inline void unwind_init(void) {}
+static inline void backtrace_exit(void) {}
+static inline void __process_unwind_init(void) {}
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif

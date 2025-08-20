@@ -10,6 +10,9 @@
 
 int clock_getcpuclockid(pid_t pid, clockid_t *clockid)
 {
+	if (!clockid)
+		return EINVAL;
+
 	if ((pid != getpid()) && (pid != 0))
 		return EPERM;
 
@@ -22,6 +25,16 @@ int clock_gettime(clockid_t clockid, struct timespec *t)
 	int ret = 0;
 
 	ret = syscall3(SYSCALL_CLOCKGETTIME, clockid, t, NULL);
+
+	errno = syscall_errno(ret);
+	return syscall_retval(ret);
+}
+
+int clock_getres(clockid_t clockid, struct timespec *t)
+{
+	int ret = 0;
+
+	ret = syscall2(SYSCALL_CLOCKGETRES, clockid, t);
 
 	errno = syscall_errno(ret);
 	return syscall_retval(ret);
