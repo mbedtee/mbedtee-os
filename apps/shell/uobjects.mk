@@ -8,4 +8,10 @@ obj-$(CONFIG_USER_SHELL) += shell.elf
 shell-cflags +=
 
 # application sub-objects
-shell-y += shell_user.o
+shell-y += shell_user.o shell_common.o
+
+ifeq ($(CONFIG_SPAWN)$(CONFIG_WAITPID),yy)
+shell-y += shell_external.o
+else
+shell-y += shell_external_weak.o
+endif

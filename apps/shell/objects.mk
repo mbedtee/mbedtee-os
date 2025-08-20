@@ -4,4 +4,10 @@
 apps-shell-cflags-y +=
 
 apps-shell-$(CONFIG_SIMPLE_SHELL) += shell.o
-apps-shell-$(CONFIG_KERN_SHELL) += shell_kern.o
+apps-shell-$(CONFIG_KERN_SHELL) += shell_kern.o shell_common.o
+
+ifeq ($(CONFIG_SPAWN)$(CONFIG_WAITPID),yy)
+apps-shell-$(CONFIG_KERN_SHELL) += shell_external.o
+else
+apps-shell-$(CONFIG_KERN_SHELL) += shell_external_weak.o
+endif

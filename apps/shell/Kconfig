@@ -12,13 +12,15 @@ choice
 
 config USER_SHELL
 	bool "Shell commands @ user-space"
-	depends on USER
+	depends on USER && POLL
 	help
 		Enable support the shell commands @ user-space.
 
 config KERN_SHELL
 	bool "Shell commands @ kernel-space"
-	depends on UART
+	depends on UART && FS && POLL
+	select IPC_PIPE
+	select IPC_EVENTFD
 	help
 		Enable support the shell commands @ kernel-space.
 endchoice

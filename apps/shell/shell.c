@@ -15,26 +15,19 @@
 
 #include <shell.h>
 
-extern void shell_kthread(void *data);
+extern long shell_kthread(void *data);
 
 static void __init shell_init(void)
 {
-#ifdef CONFIG_KERN_SHELL
 	int id = 0;
 
-	id = __kthread_create(shell_kthread, NULL,
-		PAGE_SIZE * (sizeof(long)/sizeof(int)), "kshell");
-	if (id < 0)
-		EMSG("create shell failed %d\n", id);
-	else
-		sched_ready(id);
+#if defined(CONFIG_KERN_SHELL)
+	id = kthread_run(shell_kthread, NULL, "kshell");
 #elif defined(CONFIG_USER_SHELL)
-	int id = 0;
-
 	id = process_run("shell", NULL);
+#endif
 	if (id < 0)
 		EMSG("run shell failed %d\n", id);
-#endif
 }
 
 MODULE_INIT_LATE(shell_init);
