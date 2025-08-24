@@ -57,17 +57,6 @@
 	__UART_INIT_END = .;
 
 /*
- * callbacks for process resource reclaim
- */
-#define CLEANUP_CALLBACKS		\
-	. = ALIGN(BYTES_PER_LONG);	\
-	__CLEANUP_START = .;		\
-	KEEP(*(.cleanup.high))		\
-	KEEP(*(.cleanup.medium))	\
-	KEEP(*(.cleanup.low))		\
-	__CLEANUP_END = .;
-
-/*
  * callbacks for Suspend-to-RAM (STR)
  */
 #define STR_SECTIONS			\
@@ -80,6 +69,28 @@
 	KEEP(*(.str_normal))		\
 	KEEP(*(.str_late))			\
 	__STR_END = .;
+
+/*
+ * callbacks for process resource reclaim
+ */
+#define PROCESS_CLEANUP_CALLBACKS		\
+	. = ALIGN(BYTES_PER_LONG);			\
+	__PROCESS_CLEANUP_START = .;		\
+	KEEP(*(.cleanup.high))				\
+	KEEP(*(.cleanup.medium))			\
+	KEEP(*(.cleanup.low))				\
+	__PROCESS_CLEANUP_END = .;
+
+/*
+ * callbacks for thread resource reclaim
+ */
+#define THREAD_CLEANUP_CALLBACKS		\
+	. = ALIGN(BYTES_PER_LONG);			\
+	__THREAD_CLEANUP_START = .;			\
+	KEEP(*(.thread_cleanup.high))		\
+	KEEP(*(.thread_cleanup.medium))		\
+	KEEP(*(.thread_cleanup.low))		\
+	__THREAD_CLEANUP_END = .;
 
 /*
  * early init sections
@@ -119,7 +130,11 @@
 #define __init __section(".init") __used
 #define __exit __section(".exit") __used
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 typedef void (*init_func_t) (void);
 typedef void (*exit_func_t) (void);
@@ -172,6 +187,10 @@ typedef void (*exit_func_t) (void);
 #define MODULE_EXIT_CORE(fn) MODULE_EXIT(fn)
 #define MODULE_EXIT_SYS(fn)  MODULE_EXIT(fn)
 #define MODULE_EXIT_LATE(fn) MODULE_EXIT(fn)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 

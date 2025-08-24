@@ -7,6 +7,10 @@
 #ifndef _DEVICE_H
 #define _DEVICE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <fs.h>
 #include <str.h>
 #include <init.h>
@@ -43,5 +47,9 @@ static inline void *dev_get_drvdata(
 void early_init(void);
 void percpu_init(void);
 void modules_init(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -23,14 +23,14 @@ int driver_register(const struct device_driver *drv)
 			dev->driver = drv;
 
 			ret = drv->probe(dev);
-			if (ret)
+			if (ret != 0)
 				continue;
 
-			if (dev->fops == NULL)
+			if (!dev->fops)
 				continue;
 
 			path = kmalloc(DEV_MAX_NAME);
-			if (path == NULL) {
+			if (!path) {
 				ret = -ENOMEM;
 				goto err;
 			}
@@ -41,7 +41,7 @@ int driver_register(const struct device_driver *drv)
 
 			dev->path = path;
 			ret = device_register(dev);
-			if (ret)
+			if (ret != 0)
 				goto err;
 			minor++;
 		}
@@ -64,11 +64,13 @@ void driver_unregister(const struct device_driver *drv)
 
 	for (; id->name; id++) {
 		dn = of_find_matching_node(NULL, id);
+		if (!dn)
+			continue;
 
-		if (dn && drv->remove)
+		if (drv->remove)
 			drv->remove(&dn->dev);
 
-		if (dn->dev.fops != NULL) {
+		if (dn->dev.fops) {
 			device_unregister(&dn->dev);
 			kfree(dn->dev.path);
 		}

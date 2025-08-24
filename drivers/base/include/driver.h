@@ -7,6 +7,10 @@
 #ifndef _DRIVER_H
 #define _DRIVER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <of.h>
 #include <str.h>
 #include <init.h>
@@ -129,5 +133,9 @@ struct device_driver {
 
 int driver_register(const struct device_driver *drv);
 void driver_unregister(const struct device_driver *drv);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
