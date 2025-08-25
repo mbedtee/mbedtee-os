@@ -33,12 +33,13 @@ SECTIONS
 	.rodata : {
 		*(.rodata .rodata.*)
 		PERCPU_INIT_SECTIONS
-		CLEANUP_CALLBACKS
+		PROCESS_CLEANUP_CALLBACKS
+		THREAD_CLEANUP_CALLBACKS
 		STR_SECTIONS
 		. = ALIGN(BYTES_PER_LONG);
 	}
 	__EHFRAME_START = .;
-#ifdef CONFIG_BACKTRACE
+#if defined(CONFIG_BACKTRACE)
 	.eh_frame : {KEEP (*(.eh_frame))}
 #else
 	/DISCARD/ : {*(.eh_frame)}

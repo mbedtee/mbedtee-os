@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+# Copyright (c) 2025 Xing Loong <xing.xl.loong@gmail.com>
 
 include $(SCRIPTS_DIR)/Makefile.dt
 

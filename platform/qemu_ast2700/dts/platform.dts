@@ -1,5 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
 /*
- * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2025 Xing Loong <xing.xl.loong@gmail.com>
  */
 
@@ -59,37 +59,42 @@
 			<0 0x12280000 0 0x100000>; /* GICR RD_Base / SGI_Base */
 	};
 
-#if !defined(CONFIG_REE) /* Give the GIC132/133 to REE */
-	/* interrupt-controller: GIC132's SoC side */
-	intc_gic132: ast2700-intc-gic132@12101400 {
+#if !defined(CONFIG_REE) /* Give the INTC to REE */
+	/*
+	 * AST2700-A1 two-level interrupt controller hierarchy:
+	 * UART12 -> INTCIO GICINT196 bit18 -> INTC GICINT192_201 bit4 -> GIC SPI 196
+	 */
+
+	/* Top-level INTC: GICINT192_201 aggregate controller */
+	intc_top: ast2700-intc@12101b00 {
 		compatible = "aspeed,ast2700-intc";
 
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
 
-		interrupts = <GIC_SPI(132)>;
+		interrupts = <GIC_SPI(196)>;
 
 		interrupt-parent = <&gic>;
 
-		reg = <0 0x12101400 0 0x8>;
+		reg = <0 0x12101b00 0 0x8>;
 
 		max-irqs = <32>;
 	};
 
-	/* interrupt-controller: GIC133's SoC side */
-	intc_gic133: ast2700-intc-gic133@12101500 {
+	/* INTCIO: per-GICINT196 controller (UART group) */
+	intc_gic196: ast2700-intcio-gic196@14c18140 {
 		compatible = "aspeed,ast2700-intc";
 
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
 
-		interrupts = <GIC_SPI(133)>;
+		interrupts = <4>;
 
-		interrupt-parent = <&gic>;
+		interrupt-parent = <&intc_top>;
 
-		reg = <0 0x12101500 0 0x8>;
+		reg = <0 0x14c18140 0 0x8>;
 
 		max-irqs = <32>;
 	};
@@ -104,7 +109,7 @@
 			compatible = "ns16550a";
 			reg = <0x14c33b00 0x100>;
 #if !defined(CONFIG_REE) /* Give the UART INT to REE */
-			interrupt-parent = <&intc_gic132>;
+			interrupt-parent = <&intc_gic196>;
 			interrupts = <18>;
 #endif
 			clock-frequency = <1846153>;

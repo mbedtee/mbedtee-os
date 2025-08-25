@@ -69,13 +69,15 @@ static void __init intc_soc_init(struct device_node *dn)
 	struct intc_soc_desc *intc = NULL;
 	struct irq_controller *ic = NULL;
 
-	intc = kmalloc(sizeof(struct intc_soc_desc));
-	if (intc == NULL)
+	intc = kmalloc(sizeof(*intc));
+	if (!intc)
 		return;
 
 	ret = of_irq_parse_max(dn, &intc->max);
-	if (ret)
+	if (ret != 0) {
+		kfree(intc);
 		return;
+	}
 
 	intc->base = of_iomap(dn, 0);
 
