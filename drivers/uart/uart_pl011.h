@@ -7,6 +7,10 @@
 #ifndef _UART_PL011_H
 #define _UART_PL011_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <uart.h>
 
 #define PL011_DR			0x00	/* Data read or written from the interface. */
@@ -66,5 +70,9 @@
 #define PL011_FR_DCD		0x004
 #define PL011_FR_DSR		0x002
 #define PL011_FR_CTS		0x001
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

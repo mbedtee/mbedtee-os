@@ -7,6 +7,10 @@
 #ifndef _UART_CDNS_H
 #define _UART_CDNS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <uart.h>
 
 #define CDNS_CR					0x00	/* Control register. */
@@ -46,5 +50,9 @@
 #define CDNS_SR_RXEMPTY			0x00000002	/* Status register - RX FIFO empty. */
 #define CDNS_SR_TXEMPTY			0x00000008	/* Status register - TX FIFO empty. */
 #define CDNS_SR_TXFULL			0x00000010	/* Status register - TX FIFO full. */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

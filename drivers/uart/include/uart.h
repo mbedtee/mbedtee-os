@@ -7,13 +7,17 @@
 #ifndef _UART_H
 #define _UART_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <interrupt.h>
 #include <workqueue.h>
 
 #include <generated/autoconf.h>
 
-#define UART_BUFFER_SIZE (888)
+#define UART_BUFFER_SIZE (800)
 
 struct uart_port {
 	int idx;
@@ -55,5 +59,9 @@ void uart_early_puts(const char *str, size_t cnt);
 
 int uart_register(struct uart_port *p);
 void uart_unregister(struct uart_port *p);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

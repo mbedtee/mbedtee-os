@@ -53,13 +53,13 @@ static ssize_t imx_gets(struct uart_port *p, char *buf, size_t count)
 		return 0;
 
 	spin_lock_irqsave(&p->lock, flags);
+
 	while ((p->rd != p->wr) && (pos < count)) {
 		buf[pos++] = p->buf[p->rd++];
 		if (p->rd == sizeof(p->buf))
 			p->rd = 0;
 	}
 
-	buf[pos] = 0;
 	spin_unlock_irqrestore(&p->lock, flags);
 	return pos;
 }
@@ -135,7 +135,8 @@ static void imx_setup(struct uart_port *p)
 	iowrite32(IMX_UCR2_SRST | IMX_UCR2_IRTS | IMX_UCR2_TXEN |
 		IMX_UCR2_WS | IMX_UCR2_STPB, p->membase + IMX_UCR2);
 
-	/* Baud rate divisor
+	/*
+	 * Baud rate divisor
 	 *	div = (UARTCLK / {16 * Baud rate})
 	 */
 	div = p->clk / (p->baudrate * p->divisor);
@@ -163,8 +164,8 @@ static void imx_attach(struct uart_port *p)
 	/*
 	 * Enable RX and RX interrupt
 	 */
- 	iowrite32(ioread32(p->membase + IMX_UCR2) |
- 			IMX_UCR2_RXEN, p->membase + IMX_UCR2);
+	iowrite32(ioread32(p->membase + IMX_UCR2) |
+			IMX_UCR2_RXEN, p->membase + IMX_UCR2);
 	iowrite32(IMX_UCR4_OREN | IMX_UCR4_DREN, p->membase + IMX_UCR4);
 }
 

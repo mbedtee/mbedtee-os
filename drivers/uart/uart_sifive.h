@@ -7,8 +7,12 @@
 #ifndef _UARTSIFIVE_H
 #define _UARTSIFIVE_H
 
-#define UART_TXFIFO			0 /* Rx FIFO Register */
-#define UART_RXFIFO			1 /* Tx FIFO Register */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define UART_TXFIFO			0 /* Tx FIFO Register */
+#define UART_RXFIFO			1 /* Rx FIFO Register */
 #define UART_TXCTRL			2 /* Tx Control Register */
 #define UART_RXCTRL			3 /* Rx Control Register */
 #define UART_IE				4 /* Interrupt Enable Register */
@@ -25,5 +29,9 @@
 
 #define UART_TXFULL			(1u << 31) /* Tx FIFO full */
 #define UART_RXEMPTY		(1u << 31) /* Rx FIFO Empty */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -7,6 +7,10 @@
 #ifndef _UART16550_H
 #define _UART16550_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define UART_TX				0x0	/* Out: Transmit buffer */
 #define UART_RX				0x0	/* In: Receive buffer */
 #define UART_IER			0x1	/* Out: Interrupt Enable Register */
@@ -25,5 +29,9 @@
 #define UART_LSR_DR			0x01 /* Data ready */
 #define UART_LSR_THRE		0x20 /* Transmit-hold-register empty */
 #define UART_LSR_TEMT		0x40 /* Transmitter empty */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

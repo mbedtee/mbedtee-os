@@ -89,13 +89,13 @@ static ssize_t uart_sifive_gets(struct uart_port *p, char *buf, size_t count)
 		return 0;
 
 	spin_lock_irqsave(&p->lock, flags);
+
 	while ((p->rd != p->wr) && (pos < count)) {
 		buf[pos++] = p->buf[p->rd++];
 		if (p->rd == sizeof(p->buf))
 			p->rd = 0;
 	}
 
-	buf[pos] = 0;
 	spin_unlock_irqrestore(&p->lock, flags);
 	return pos;
 }

@@ -45,12 +45,22 @@ static uint64_t mips32_read_cycles(void)
 
 static void mips32_timer_isr(void *data)
 {
+	/*
+	 * Ack the pending timer interrupt by writing C0_COMPARE.
+	 * On MIPS32, the timer interrupt (Cause.IP7/TI) stays
+	 * asserted until C0_COMPARE is written.
+	 */
+	write_cp0_register(C0_COMPARE, read_cp0_register(C0_COUNT) - 1);
 	tevent_isr();
 }
 
 static void mips32_trigger_next(uint64_t cycles)
 {
 	uint32_t val = read_cp0_register(C0_COUNT);
+
+	/* Cap to half the 32-bit counter range to avoid ambiguity */
+	if (cycles > (UINT32_MAX >> 1))
+		cycles = (UINT32_MAX >> 1);
 
 	/*
 	 * set physical compare value

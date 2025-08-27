@@ -78,6 +78,9 @@ static uint64_t xlnx_timer_read_cycles(void)
 
 static void xlnx_timer_trigger_next(uint64_t cycles)
 {
+	if (cycles > UINT32_MAX)
+		cycles = UINT32_MAX;
+
 	/* loading value to timer reg */
 	reg_write(cycles, R_TLR);
 

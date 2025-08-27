@@ -23,7 +23,7 @@
 #define UART_MAX_PORT 10
 
 static LIST_HEAD(uart_ports);
-static struct of_device_id of_uart_port_ids[UART_MAX_PORT] = {{NULL}};
+static struct of_device_id of_uart_port_ids[UART_MAX_PORT] = {{0}};
 
 #define for_each_uart_port(p) list_for_each_entry(p, &uart_ports, node)
 
@@ -52,14 +52,14 @@ int uart_register(struct uart_port *p)
 	list_add_tail(&p->node, &uart_ports);
 
 	for (i = 0; i < UART_MAX_PORT; i++) {
-		if (of_uart_port_ids[i].name != NULL &&
+		if (of_uart_port_ids[i].name &&
 			of_name_equal(p->dn, of_uart_port_ids[i].name) &&
 			of_compatible_equal(p->dn, of_uart_port_ids[i].compat))
 			return 0;
 	}
 
 	for (i = 0; i < UART_MAX_PORT; i++) {
-		if (of_uart_port_ids[i].name == NULL) {
+		if (!of_uart_port_ids[i].name) {
 			p->idx = i;
 			memcpy(&of_uart_port_ids[i], &p->dn->id, sizeof(p->dn->id));
 			break;
@@ -91,7 +91,7 @@ static int uart_open(struct file *f, mode_t mode, void *arg)
 {
 	struct uart_port *p = dev_get_drvdata(f->dev);
 
-	if (p == NULL)
+	if (!p)
 		return -ENODEV;
 
 	f->priv = p;
@@ -101,7 +101,7 @@ static int uart_open(struct file *f, mode_t mode, void *arg)
 
 static int uart_close(struct file *f)
 {
-	if (f->priv == NULL)
+	if (!f->priv)
 		return -ENODEV;
 
 	return 0;
@@ -110,26 +110,31 @@ static int uart_close(struct file *f)
 static ssize_t uart_read(struct file *f,
 	void *buf, size_t count)
 {
-	ssize_t pos = 0;
+	long wret = 0;
 	struct uart_port *p = f->priv;
 
-	if (p == NULL)
+	if (!p)
 		return -ENODEV;
 
-	if (buf == NULL)
+	if (!buf)
 		return -EINVAL;
 
-	if (p->ops->rx == NULL)
+	if (!p->ops->rx)
 		return -ENXIO;
 
 	if (count == 0)
 		return 0;
 
-	wait_event_interruptible(&p->wait_queue,
-			((pos = p->ops->rx(p, buf, count)) != 0) ||
-			(f->flags & O_NONBLOCK));
+	wret = wait_event_interruptible(&p->wait_queue,
+			(p->rd != p->wr) || (f->flags & O_NONBLOCK));
 
-	return pos;
+	if ((f->flags & O_NONBLOCK) && p->rd == p->wr)
+		return -EAGAIN;
+
+	if (wret == -EINTR)
+		return wret;
+
+	return p->ops->rx(p, buf, count);
 }
 
 static ssize_t uart_write(struct file *f,
@@ -137,13 +142,13 @@ static ssize_t uart_write(struct file *f,
 {
 	struct uart_port *p = f->priv;
 
-	if (p == NULL)
+	if (!p)
 		return -ENODEV;
 
-	if (buf == NULL)
+	if (!buf)
 		return -EINVAL;
 
-	if (p->ops->tx == NULL)
+	if (!p->ops->tx)
 		return -ENXIO;
 
 	if (count == 0)
@@ -159,7 +164,7 @@ static int uart_poll(struct file *f, struct poll_table *wait)
 	int events = POLLOUT | POLLWRNORM;
 	struct uart_port *p = f->priv;
 
-	if (p == NULL)
+	if (!p)
 		return -ENODEV;
 
 	poll_wait(f, &p->wait_queue, wait);
@@ -229,7 +234,7 @@ static void uart_poll_timer_event(struct tevent *t)
 
 		tevent_start(&p->tevent, &ts);
 
-		if (rdbytes)
+		if (rdbytes != 0)
 			wakeup(&p->wait_queue);
 	}
 }
@@ -252,7 +257,7 @@ static int __init uart_probe(struct device *dev)
 {
 	struct uart_port *p = of_uart_port(dev);
 
-	if (p == NULL)
+	if (!p)
 		return -ENODEV;
 
 	p->ops->attach(p);
@@ -274,25 +279,25 @@ static int __init uart_parse_dts(struct uart_port *p,
 	p->dn = dn;
 
 	ret = of_parse_io_resource(dn, 0, &p->iobase, &p->iosize);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	ret = of_property_read_u32(dn, "reg-io-width", &tmp);
-	p->regiowidth = ret ? 1 : tmp;
+	p->regiowidth = (ret != 0) ? 1 : tmp;
 
 	ret = of_property_read_u32(dn, "reg-shift", &tmp);
-	p->regshift = ret ? 0 : tmp;
+	p->regshift = (ret != 0) ? 0 : tmp;
 
 	ret = of_property_read_u32(dn, "clock-frequency", &p->clk);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	ret = of_property_read_u32(dn, "current-speed", &p->baudrate);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	ret = of_property_read_u32(dn, "clock-divisor", &p->divisor);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	p->membase = iomap(p->iobase, p->iosize);
@@ -310,22 +315,26 @@ void __init uart_early_init(void)
 	struct of_compat_init *end = NULL;
 	struct of_compat_init *oci = NULL;
 
+	BUILD_ERROR_ON(sizeof(struct uart_port) > 1024);
+
 	start = __uart_init_start();
 	end = __uart_init_end();
 
 	uartdn = of_find_compatible_node(NULL, "module,uart");
-	if (uartdn == NULL)
+	if (!uartdn)
 		return;
 
 	for (oci = start; oci < end; oci++) {
 		for_each_compatible_child_of_node(uartdn, child, oci->compat) {
 			p = kzalloc(sizeof(struct uart_port));
-			if (p == NULL)
+			if (!p)
 				continue;
 
 			ret = uart_parse_dts(p, child);
-			if (ret != 0)
+			if (ret != 0) {
+				kfree(p);
 				continue;
+			}
 
 			spin_lock_init(&p->lock);
 			waitqueue_init(&p->wait_queue);
@@ -338,7 +347,7 @@ void __init uart_early_init(void)
 				continue;
 			}
 
-			if (uart_register(p))
+			if (uart_register(p) != 0)
 				kfree(p);
 			else
 				IMSG("%s\n", child->id.name);

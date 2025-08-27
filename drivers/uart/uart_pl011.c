@@ -56,13 +56,13 @@ static ssize_t pl011_gets(struct uart_port *p, char *buf, size_t count)
 		return 0;
 
 	spin_lock_irqsave(&p->lock, flags);
+
 	while ((p->rd != p->wr) && (pos < count)) {
 		buf[pos++] = p->buf[p->rd++];
 		if (p->rd == sizeof(p->buf))
 			p->rd = 0;
 	}
 
-	buf[pos] = 0;
 	spin_unlock_irqrestore(&p->lock, flags);
 	return pos;
 }
@@ -145,7 +145,8 @@ static void pl011_setup(struct uart_port *p)
 				PL011_FEIC | PL011_RTIC | PL011_RXIC,
 			p->membase + PL011_ICR);
 
-	/* Baud rate divisor
+	/*
+	 * Baud rate divisor
 	 *	BAUDDIV = (FUARTCLK/ {16 * Baud rate})
 	 *  fractional part, m = integer((x * 64) + 0.5)
 	 */

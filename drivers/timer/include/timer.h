@@ -10,6 +10,10 @@
 #ifndef _TIMER_H
 #define _TIMER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <init.h>
 #include <list.h>
 #include <time.h>
@@ -60,6 +64,7 @@ extern struct arch_timer *ticktimer;
 		((unsigned long)(ts)->tv_nsec >= NANOSECS_PER_SEC))
 
 #define TIMER_FRQ (ticktimer->frq)
+#define CYCLES_PER_SECS (ticktimer->frq)
 #define CYCLES_PER_MSECS (ticktimer->cycles_per_msecs)
 #define CYCLES_PER_USECS (ticktimer->cycles_per_usecs)
 #define CYCLES_PER_1KKNSECS (ticktimer->cycles_per_nsecs)
@@ -145,6 +150,13 @@ static inline void usecs_to_time(uint64_t usecs,
 	}
 }
 
+static inline void msecs_to_time(uint64_t msecs,
+	struct timespec *time)
+{
+	time->tv_sec = msecs / 1000ULL;
+	time->tv_nsec = (long)((msecs % 1000ULL) * 1000000ULL);
+}
+
 static inline uint64_t time_to_usecs(const struct timespec *time)
 {
 	uint64_t usecs = 0;
@@ -215,5 +227,9 @@ void timer_init(void);
  * Force turn off the percpu ticktimer or other percpu timers
  */
 void timer_down(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -34,9 +34,9 @@ static void sync_time(void)
 	struct percpu_tick *pt = &__percpu_tick[cpu];
 	struct timespec *ts0 = &__percpu_tick[0].time;
 
-	if (cpu == 0) {
+	if (cpu == 0)
 		pt->cycles_stamp = read_cycles();
-	} else {
+	else {
 		pt->time = *ts0;
 		while (timespeccmp(&pt->time, ts0, ==))
 			smp_mb(); /* CPU0 updates is visible to current CPU */
@@ -119,6 +119,9 @@ void timer_init(void)
 	int cpu = percpu_id();
 	struct arch_timer *t = ticktimer;
 
+	if (!ticktimer)
+		EMSG("no ticktimer - check defconfig/dts\n");
+
 	list_for_each_entry(t, &timers, node) {
 		/*
 		 * enable the percpu timers
@@ -155,7 +158,7 @@ static int __init timer_parse_dts(struct device_node *dn,
 	t->dn = dn;
 
 	ret = of_property_read_u32(dn, "clock-frequency", &t->frq);
-	if (ret) {
+	if (ret != 0) {
 		EMSG("clock-frequency not found @ %s\n", dn->id.name);
 		return ret;
 	}
@@ -188,13 +191,13 @@ void __init timer_early_init(void)
 
 	for (oci = start; oci < end; oci++) {
 		dn = of_find_compatible_node(NULL, oci->compat);
-		if (dn == NULL)
+		if (!dn)
 			continue;
 
 		memset(&timerdesc, 0, sizeof(timerdesc));
 
 		ret = timer_parse_dts(dn, &timerdesc);
-		if (ret)
+		if (ret != 0)
 			continue;
 
 		dev_set_drvdata(&dn->dev, &timerdesc);

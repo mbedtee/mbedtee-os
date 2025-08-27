@@ -62,6 +62,9 @@ static void armv7_timer_isr(void *data)
 
 static void armv7_trigger_next(uint64_t cycles)
 {
+	if (cycles > UINT32_MAX)
+		cycles = UINT32_MAX;
+
 	reg_write(cycles, PRIVATE_TIMER_COUNTER);
 }
 

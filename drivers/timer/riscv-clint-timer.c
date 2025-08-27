@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
- * RISCV Clint Timer (M-mode)
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
+ * RISCV Clint/PLMT Timer (M-mode)
  */
 
 #include <of.h>
@@ -13,8 +13,12 @@
 #include <tevent.h>
 #include <interrupt.h>
 
-#define CLINT_TIMER_CMP_REG	0x0000
-#define CLINT_TIMER_VAL_REG	0x7ff8
+/*
+ * CLINT layout: mtime @ base+0x7ff8, mtimecmp[hart] @ base+hart*8
+ * PLMT layout:  mtime @ base+0,      mtimecmp[hart] @ base+8+hart*8
+ */
+static long timer_val_offset;
+static long timer_cmp_offset;
 
 static struct arch_timer riscv_timer = {0};
 
@@ -34,14 +38,14 @@ static uint64_t riscv_read_cycles(void)
 		return -1;
 
 #if defined(CONFIG_64BIT)
-	return reg_read(CLINT_TIMER_VAL_REG);
+	return reg_read(timer_val_offset);
 #else
 	uint32_t v1 = 0, v0 = 0;
 
 	do {
-		v1 = reg_read(CLINT_TIMER_VAL_REG + BYTES_PER_LONG);
-		v0 = reg_read(CLINT_TIMER_VAL_REG);
-	} while (v1 != reg_read(CLINT_TIMER_VAL_REG + BYTES_PER_LONG));
+		v1 = reg_read(timer_val_offset + BYTES_PER_LONG);
+		v0 = reg_read(timer_val_offset);
+	} while (v1 != reg_read(timer_val_offset + BYTES_PER_LONG));
 
 	return ((uint64_t)v1 << 32) | v0;
 #endif
@@ -50,13 +54,13 @@ static uint64_t riscv_read_cycles(void)
 static void riscv_trigger_next(uint64_t cycles)
 {
 	long offset = percpu_hartid() * sizeof(uint64_t);
+	uint64_t val = riscv_read_cycles() + cycles;
 
-	offset += CLINT_TIMER_CMP_REG;
+	offset += timer_cmp_offset;
 
 #if defined(CONFIG_64BIT)
-	reg_write(riscv_read_cycles() + cycles, offset);
+	reg_write(val, offset);
 #else
-	uint64_t val = riscv_read_cycles() + cycles;
 	uint32_t hi = val >> 32;
 	uint32_t lo = val;
 
@@ -64,14 +68,10 @@ static void riscv_trigger_next(uint64_t cycles)
 	reg_write(lo, offset);
 	reg_write(hi, offset + BYTES_PER_INT);
 #endif
-
-	set_csr(CSR_IE, IE_TIE);
 }
 
 static void riscv_timer_isr(void *data)
 {
-	clear_csr(CSR_IE, IE_TIE);
-
 	tevent_isr();
 }
 
@@ -96,6 +96,14 @@ static int __init riscv_timer_init(struct device_node *dn)
 	struct arch_timer *dst = &riscv_timer;
 	struct arch_timer *t = dev_get_drvdata(&dn->dev);
 
+	if (of_compatible_equal(dn, "andes,plmt-timer")) {
+		timer_val_offset = 0x0000;
+		timer_cmp_offset = 0x0008;
+	} else {
+		timer_val_offset = 0x7ff8;
+		timer_cmp_offset = 0x0000;
+	}
+
 	t->enable = riscv_timer_enable;
 	t->disable = riscv_timer_disable;
 	t->read_cycles = riscv_read_cycles;
@@ -110,4 +118,5 @@ static int __init riscv_timer_init(struct device_node *dn)
 
 	return 0;
 }
-DECLARE_TIMER(riscv_timer, "riscv,clint-timer", riscv_timer_init);
+DECLARE_TIMER(riscv_clint_timer, "riscv,clint-timer", riscv_timer_init);
+DECLARE_TIMER(andes_plmt_timer, "andes,plmt-timer", riscv_timer_init);

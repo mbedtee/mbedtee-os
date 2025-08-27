@@ -7,6 +7,10 @@
 #ifndef _UART_IMX_H
 #define _UART_IMX_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <uart.h>
 
 /* necessary registers */
@@ -39,5 +43,9 @@
 #define IMX_UFCR_TXTL_SHF	10		/* Transmitter trigger level shift */
 
 #define IMX_UTS_TXFULL		(1<<4)	/* UART Test Register - TxFIFO full */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

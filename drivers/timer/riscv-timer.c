@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * RISCV Timer
  */
 
@@ -15,11 +15,18 @@
 
 static struct arch_timer riscv_timer = {0};
 
-/* if Sstc does not present, forward the requests to M-Mode Timer */
-#define MTIMER_BASE ((uintptr_t)riscv_timer.base)
+/*
+ * if Sstc does not present, forward the requests to M-Mode Timer.
+ * mtime_addr: direct address of the mtime register
+ * mtimecmp_base: base address of the mtimecmp[hart] array
+ *
+ * CLINT layout: mtime@base+0x7ff8, mtimecmp[hart]@base+hart*8
+ * PLMT layout:  mtime@base+0,      mtimecmp[hart]@base+8+hart*8
+ */
+static uintptr_t mtime_addr;
+static uintptr_t mtimecmp_base;
 
-/* __noinline is required to avoid optimization to ecall_xx */
-static __noinline uint64_t riscv_read_cycles(void)
+static uint64_t riscv_read_cycles(void)
 {
 	if (sstc_supported()) {
 #if defined(CONFIG_64BIT)
@@ -35,15 +42,13 @@ static __noinline uint64_t riscv_read_cycles(void)
 		return ((uint64_t)v1 << 32) | v0;
 #endif
 	} else {
-		return (uint64_t)ecall(ECALL_RDTIME, 0,	0, MTIMER_BASE);
+		return ecall(ECALL_RDTIME, 0, 0, mtime_addr);
 	}
 }
 
 static void riscv_trigger_next(uint64_t cycles)
 {
 	uint64_t val = riscv_read_cycles() + cycles;
-
-	set_csr(CSR_IE, IE_TIE);
 
 	if (sstc_supported()) {
 #if defined(CONFIG_64BIT)
@@ -58,17 +63,15 @@ static void riscv_trigger_next(uint64_t cycles)
 #endif
 	} else {
 #if defined(CONFIG_64BIT)
-		ecall(ECALL_WRTIME, val, 0, MTIMER_BASE);
+		ecall(ECALL_WRTIME, val, 0, mtimecmp_base);
 #else
-		ecall(ECALL_WRTIME, val, val >> 32, MTIMER_BASE);
+		ecall(ECALL_WRTIME, val, val >> 32, mtimecmp_base);
 #endif
 	}
 }
 
 static void riscv_timer_isr(void *data)
 {
-	clear_csr(CSR_IE, IE_TIE);
-
 	tevent_isr();
 }
 
@@ -105,15 +108,33 @@ static int __init riscv_timer_init(struct device_node *dn)
 
 	/*
 	 * if Sstc extension does not present, just get the
-	 * M-Mode clint-timer base address for forwarding
-	 * the timer functions to M-Mode
+	 * M-Mode timer base address for forwarding
+	 * the timer functions to M-Mode.
+	 *
+	 * CLINT: mtime@base+0x7ff8, mtimecmp[hart]@base+0
+	 * PLMT:  mtime@base+0,      mtimecmp[hart]@base+8
 	 */
 	if (!sstc_supported()) {
 		clint = of_find_compatible_node(NULL, "riscv,clint-timer");
-		if (clint == NULL)
-			return -ENXIO;
-		of_parse_io_resource(clint, 0, (unsigned long *)&t->base, NULL);
-		of_property_read_u32(clint, "clock-frequency", &t->frq);
+		if (clint) {
+			of_parse_io_resource(clint, 0,
+				(unsigned long *)&t->base, NULL);
+			of_property_read_u32(clint, "clock-frequency",
+				&t->frq);
+			mtime_addr = (uintptr_t)t->base + 0x7ff8;
+			mtimecmp_base = (uintptr_t)t->base;
+		} else {
+			clint = of_find_compatible_node(NULL,
+				"andes,plmt-timer");
+			if (!clint)
+				return -ENXIO;
+			of_parse_io_resource(clint, 0,
+				(unsigned long *)&t->base, NULL);
+			of_property_read_u32(clint, "clock-frequency",
+				&t->frq);
+			mtime_addr = (uintptr_t)t->base;
+			mtimecmp_base = (uintptr_t)t->base + 8;
+		}
 	}
 
 	memcpy(dst, t, sizeof(struct arch_timer));
