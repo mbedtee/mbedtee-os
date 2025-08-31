@@ -75,27 +75,33 @@ static void __init intc_soc_init(struct device_node *dn)
 	struct intc_soc_desc *intc = NULL;
 
 	intc = kmalloc(sizeof(*intc));
-	if (intc == NULL)
+	if (!intc)
 		return;
 
 	ret = of_irq_parse_max(dn, &intc->max);
-	if (ret)
+	if (ret != 0) {
+		kfree(intc);
 		return;
+	}
 
 	intc->gics = kcalloc(intc->max, sizeof(unsigned int));
-	if (!intc->gics)
+	if (!intc->gics) {
+		kfree(intc);
 		return;
+	}
 
 	ret = of_property_read_u32_array(dn, "gic-table", intc->gics, intc->max);
 	if (ret < 0) {
 		EMSG("error read gic-table @ %s\n", dn->id.name);
 		kfree(intc->gics);
+		kfree(intc);
 		return;
 	}
 
 	intc->base = of_iomap(dn, 0);
 	if (!intc->base) {
 		kfree(intc->gics);
+		kfree(intc);
 		return;
 	}
 

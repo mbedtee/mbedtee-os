@@ -13,8 +13,8 @@
 
 #include <interrupt.h>
 
-static __volatile unsigned char master_irq_mask = 0xff;
-static __volatile unsigned char slave_irq_mask = 0xff;
+static volatile unsigned char master_irq_mask = 0xff;
+static volatile unsigned char slave_irq_mask = 0xff;
 
 struct intc_desc {
 	/* max interrupts in SoC */
@@ -149,15 +149,17 @@ static void __init i8259_init(struct device_node *dn)
 	struct irq_controller *ic = NULL;
 
 	intc = kmalloc(sizeof(*intc));
-	if (intc == NULL)
+	if (!intc)
 		return;
 
 	intc->master = of_iomap(dn, 0);
 	intc->slave = of_iomap(dn, 1);
 
 	ret = of_irq_parse_max(dn, &intc->max);
-	if (ret)
+	if (ret != 0) {
+		kfree(intc);
 		return;
+	}
 
 	i8259_setup(intc);
 

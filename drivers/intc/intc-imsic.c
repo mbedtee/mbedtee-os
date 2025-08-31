@@ -15,8 +15,6 @@
 
 #include <intc-aplic-imsic.h>
 
-#define IMSIC_SGI_ID	1
-
 #define IMSIC_PERCPU(hartid) (imsic->regs +  ((unsigned long)(hartid)) * \
 	 BIT(imsic->guest_index_bits + IMSIC_PAGE_SHIFT))
 
@@ -30,6 +28,7 @@ struct imsic_move_affinity {
 };
 
 static void imsic_percpu_init(void);
+static const struct irq_controller_ops imsic_intc_ops;
 
 static inline void imsic_set_csr(unsigned long reg, unsigned long val)
 {
@@ -107,7 +106,7 @@ static void __imsic_remote_call(tevent_handler handler,
 {
 	struct tevent *t = NULL;
 
-	while ((t = tevent_alloc(handler, (void *)id)) == NULL)
+	while (!(t = tevent_alloc(handler, (void *)id)))
 		udelay(50);
 
 	tevent_start_on(t, &((struct timespec){0, 0}), cpu);
@@ -304,7 +303,7 @@ static void __imsic_sync_affinity_old(
 		return;
 	}
 
-	while ((mov = kmalloc(sizeof(*mov))) == NULL)
+	while (!(mov = kmalloc(sizeof(*mov))))
 		udelay(50);
 
 	mov->imsic = imsic;
@@ -402,6 +401,22 @@ static void imsic_softint_raise(struct irq_desc *d,
 	iowrite32(d->hwirq, IMSIC_PERCPU(hartid));
 }
 
+/*
+ * Raise a specific IMSIC interrupt @id
+ * on the processor specified by @hartid
+ */
+void imsic_raise(unsigned int hartid, unsigned int id)
+{
+	struct irq_controller *ic =
+		irq_matching_ops_controller(&imsic_intc_ops);
+	struct imsic_desc *imsic = NULL;
+
+	if (ic) {
+		imsic = ic->data;
+		iowrite32(id, IMSIC_PERCPU(hartid));
+	}
+}
+
 static int imsic_parent_alloc(struct irq_desc *d,
 	unsigned int *hwirq, unsigned int *type)
 {
@@ -435,7 +450,7 @@ static void imsic_alloc_percpu(struct imsic_desc *d)
 		priv = &d->pcpu_priv[cpu];
 
 		priv->bmap = bitmap_zalloc(d->max + 1);
-		if (priv->bmap == NULL)
+		if (!priv->bmap)
 			goto cleanup;
 
 		priv->next = 1;
@@ -460,7 +475,7 @@ static int __init imsic_parse_dts(struct imsic_desc *d, struct device_node *dn)
 	size_t size = 0;
 
 	ret = of_parse_io_resource(dn, IS_ENABLED(CONFIG_RISCV_S_MODE), &addr, &size);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	d->phys_addr = addr;
@@ -470,7 +485,7 @@ static int __init imsic_parse_dts(struct imsic_desc *d, struct device_node *dn)
 		d->guest_index_bits = 0;
 
 	ret = of_property_read_u32(dn, "imsic,hart-index-bits", &d->hart_index_bits);
-	if (ret)
+	if (ret != 0)
 		d->hart_index_bits = log2of(size >> (IMSIC_PAGE_SHIFT + d->guest_index_bits));
 
 	if (size < BIT(IMSIC_PAGE_SHIFT + d->guest_index_bits + d->hart_index_bits))
@@ -543,11 +558,13 @@ static void __init imsic_intc_init(struct device_node *dn)
 	struct irq_controller *ic = NULL;
 
 	imsic = kmalloc(sizeof(*imsic));
-	if (imsic == NULL)
+	if (!imsic)
 		return;
 
-	if (imsic_parse_dts(imsic, dn) != 0)
+	if (imsic_parse_dts(imsic, dn) != 0) {
+		kfree(imsic);
 		return;
+	}
 
 	imsic_alloc_percpu(imsic);
 

@@ -239,20 +239,19 @@ static int __init aplic_parse_dts(struct aplic_desc *d,
 	struct device_node *parent = NULL;
 
 	ret = of_parse_io_resource(dn, 0, &addr, &size);
-	if (ret)
+	if (ret != 0)
 		return ret;
 
 	d->phys_addr_m = addr;
 
 	if (IS_ENABLED(CONFIG_RISCV_S_MODE)) {
 		ret = of_parse_io_resource(dn, 1, &addr, &size);
-		if (ret)
+		if (ret != 0)
 			return ret;
 	}
 
 	parent = of_irq_find_parent(dn);
-	if (parent && !strcmp(parent->id.compat, "riscv,imsic"))
-		d->msi_mode = true;
+	d->msi_mode = parent && !strcmp(parent->id.compat, "riscv,imsic");
 
 	ret = of_irq_parse_max(dn, &d->max);
 	if (ret || (d->max >= APLIC_MAX_INT))
@@ -323,11 +322,13 @@ static void __init aplic_intc_init(struct device_node *dn)
 	struct irq_controller *ic = NULL;
 
 	aplic = kmalloc(sizeof(*aplic));
-	if (aplic == NULL)
+	if (!aplic)
 		return;
 
-	if (aplic_parse_dts(aplic, dn) != 0)
+	if (aplic_parse_dts(aplic, dn) != 0) {
+		kfree(aplic);
 		return;
+	}
 
 	aplic_setup(aplic);
 

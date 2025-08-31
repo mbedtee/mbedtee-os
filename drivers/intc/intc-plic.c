@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * PLIC Interrupt-controller
  */
 
@@ -208,11 +208,11 @@ static int __init plic_parse_dts(struct plic_desc *d,
 	int ret = -1;
 
 	d->regs = of_iomap(dn, 0);
-	if (d->regs == NULL)
+	if (!d->regs)
 		return -EINVAL;
 
 	ret = of_irq_parse_max(dn, &d->max);
-	if (ret)
+	if (ret != 0)
 		return -EINVAL;
 
 	IMSG("init %s %d irqs\n", dn->id.name, d->max);
@@ -240,11 +240,13 @@ static void __init plic_intc_init(struct device_node *dn)
 	struct plic_desc *d = NULL;
 
 	d = kmalloc(sizeof(*d));
-	if (d == NULL)
+	if (!d)
 		return;
 
-	if (plic_parse_dts(d, dn) != 0)
+	if (plic_parse_dts(d, dn) != 0) {
+		kfree(d);
 		return;
+	}
 
 	plic_setup(d);
 

@@ -6,6 +6,10 @@
 #ifndef _INTC_APLIC_IMSIC_H
 #define _INTC_APLIC_IMSIC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <io.h>
 #include <of.h>
 #include <bitops.h>
@@ -72,6 +76,8 @@
 #define IMSIC_IRQ_ID_OF(irq) ((irq) % (imsic->max + 1))
 #define IMSIC_IRQ_CPU_OF(irq) ((irq) / (imsic->max + 1))
 
+#define IMSIC_SGI_ID	1
+
 struct imsic_percpu {
 	unsigned int available;
 	unsigned int next;
@@ -98,5 +104,11 @@ struct imsic_desc {
 
 void imsic_post_set_affinity(struct irq_desc *d,
 	unsigned int oldcpu, unsigned int oldid);
+
+void imsic_raise(unsigned int hartid, unsigned int id);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

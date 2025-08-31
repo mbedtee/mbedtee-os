@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2025 Xing Loong <xing.xl.loong@gmail.com>
  * xilinx XPS Interrupt-controller.
  */
 
@@ -83,16 +83,20 @@ static void __init xlnx_intc_init(struct device_node *dn)
 	struct irq_controller *ic = NULL;
 
 	intc = kmalloc(sizeof(*intc));
-	if (intc == NULL)
+	if (!intc)
 		return;
 
 	intc->base = of_iomap(dn, 0);
-	if (!intc->base)
+	if (!intc->base) {
+		kfree(intc);
 		return;
+	}
 
 	ret = of_irq_parse_max(dn, &intc->max);
-	if (ret)
+	if (ret != 0) {
+		kfree(intc);
 		return;
+	}
 
 	xlnx_intc_setup(intc);
 
