@@ -7,6 +7,10 @@
 #ifndef _KMATH_H
 #define _KMATH_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <cpu.h>
 #include <math.h>
 
@@ -28,7 +32,7 @@ static inline unsigned long rounddown2pow(unsigned long x)
 	return 1UL << (BITS_PER_LONG - __builtin_clzl(x - 1) - 1);
 }
 
-static inline unsigned long log2of(unsigned long x)
+static inline unsigned int log2of(unsigned long x)
 {
 	if (x == 0)
 		return 0;
@@ -48,4 +52,7 @@ static inline unsigned long long pow_of(
 	return res;
 }
 
+#ifdef __cplusplus
+}
+#endif
 #endif

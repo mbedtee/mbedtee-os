@@ -17,16 +17,17 @@
 
 __weak_symbol void abort(void)
 {
-	panic("aborted\n");
+	panic("oops-aborted\n");
 }
 
 __weak_symbol int raise(int signo)
 {
-	IMSG("raising %d\n", signo);
-	backtrace();
-	int ret = sigenqueue(current_id, signo, SI_QUEUE,
-			 (union sigval)((void *)-ESRCH), true);
+	int ret = 0;
 
+	EMSG("oops-raising %d\n", signo);
+
+	ret = sigenqueue(current_id, signo, SI_QUEUE,
+			 (union sigval)((void *)-ESRCH), true);
 	if (ret != 0)
 		abort();
 
@@ -35,17 +36,7 @@ __weak_symbol int raise(int signo)
 
 __weak_symbol int stat(const char *fpath, struct stat *s)
 {
-	int fd = -1, ret = -1;
-
-	fd = sys_open(fpath, O_RDONLY);
-	if (fd < 0)
-		return -1;
-
-	ret = sys_fstat(fd, s);
-
-	sys_close(fd);
-
-	return ret;
+	return sys_stat(fpath, s);
 }
 
 __weak_symbol int access(const char *fpath, int mode)

@@ -12,7 +12,23 @@
 
 #include <thread_info.h>
 
-static struct timespec systs = {0};
+static struct timespec systs;
+
+/* minutes west of UTC, e.g. UTC+8 => -480 */
+static int systz_minuteswest;
+
+void set_systz(int minuteswest)
+{
+	systz_minuteswest = minuteswest;
+}
+
+void get_systz(int *minuteswest, int *dsttime)
+{
+	if (minuteswest)
+		*minuteswest = systz_minuteswest;
+	if (dsttime)
+		*dsttime = 0;
+}
 
 int clock_gettime(clockid_t clockid,
 	struct timespec *ts)
@@ -30,7 +46,7 @@ int clock_gettime(clockid_t clockid,
 		read_time(ts);
 		ret = 0;
 		break;
-#ifdef CONFIG_USER
+#if defined(CONFIG_USER)
 	case CLOCK_THREAD_CPUTIME_ID:
 		ret = sched_thread_cputime(current_id, ts);
 		break;
@@ -44,6 +60,28 @@ int clock_gettime(clockid_t clockid,
 	}
 
 	return ret;
+}
+
+int clock_getres(clockid_t clockid,
+	struct timespec *ts)
+{
+	if (!ts)
+		return -EINVAL;
+
+	ts->tv_sec = 0;
+
+	switch (clockid) {
+	case CLOCK_REALTIME:
+	case CLOCK_MONOTONIC:
+#if defined(CONFIG_USER)
+	case CLOCK_THREAD_CPUTIME_ID:
+	case CLOCK_PROCESS_CPUTIME_ID:
+#endif
+		ts->tv_nsec = 1000; /* 1 us */
+		return 0;
+	default:
+		return -EINVAL;
+	}
 }
 
 void set_systime(time_t sec, long nsec)
@@ -107,7 +145,7 @@ void time2date(time_t time, struct tm *tm)
 		days += 365 + IS_LEAP_YEAR(year);
 	}
 	tm->tm_year = year - 1900;
-	tm->tm_yday = days + 1;
+	tm->tm_yday = days;
 
 	for (month = 0; month < 11; month++) {
 		int newdays;
@@ -151,6 +189,35 @@ time_t date2time(int year, int mon, int day,
 	days = day - 1 + mdays + ydays - 719162;
 
 	return (((days * 24 + hour) * 60 + min) * 60) + second;
+}
+
+/*
+ * Parse timezone offset string "+HHMM" or "+HH:MM" to seconds.
+ * e.g. "+0800" -> 28800, "-0530" -> -19800
+ */
+int tz_offset_secs(const char *tz)
+{
+	int sign = 1, h, m = 0;
+	const char *p = tz;
+
+	if (!p || *p == '\0')
+		return 0;
+
+	if (*p == '-')
+		sign = -1;
+	if (*p == '+' || *p == '-')
+		p++;
+
+	h = (p[0] - '0') * 10 + (p[1] - '0');
+	p += 2;
+
+	if (*p == ':')
+		p++;
+
+	if (p[0] >= '0' && p[0] <= '9')
+		m = (p[0] - '0') * 10 + (p[1] - '0');
+
+	return sign * (h * 3600 + m * 60);
 }
 
 /*

@@ -4,5 +4,3 @@
 core-misc-cflags-y +=
 
 core-misc-y += misc.o ktime.o
-
-core-misc-$(CONFIG_KERN_NEWLIB) += stubs.o

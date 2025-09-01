@@ -7,13 +7,17 @@
 #ifndef _PRINTK_H
 #define _PRINTK_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdarg.h>
 #include <stddef.h>
 
 #include <file.h>
 #include <generated/autoconf.h>
 
-#ifdef CONFIG_PRINTK
+#if defined(CONFIG_PRINTK)
 /*
  * formatted-print to uart or redirected-file
  * fmt: format
@@ -34,5 +38,8 @@ void printk_setfd(struct file_desc *d);
 static inline void printk(const char *fmt, ...) {}
 static inline void printk_raw(const char *str, size_t size) {}
 static inline void printk_setfd(struct file_desc *d) {}
+#endif
+#ifdef __cplusplus
+}
 #endif
 #endif
