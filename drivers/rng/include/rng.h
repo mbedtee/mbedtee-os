@@ -7,6 +7,10 @@
 #ifndef _RNG_H
 #define _RNG_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <generated/autoconf.h>
 
@@ -19,5 +23,9 @@ struct rng_struct {
 };
 
 void rng_register(const struct rng_struct *r);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

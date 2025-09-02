@@ -20,7 +20,7 @@ int rand(void)
 {
 	const uint64_t salt = 0x7B4C7A4F5B2AE62D;
 
-	_seed = _seed * (salt + (uintptr_t)current);
+	_seed = _seed * (salt + (uintptr_t)current) + 1442695040888963407ULL;
 
 	return (_seed >> 32) & RAND_MAX;
 }
@@ -29,7 +29,7 @@ ssize_t prng(void *buf, size_t count)
 {
 	size_t n = 0, ops = 0;
 	const uint64_t salt = 0x7B4C7A4F5B2AE62D;
-	uint64_t seed = 0;
+	uint64_t seed = 0, out;
 	unsigned long flags = 0;
 
 	local_irq_save(flags);
@@ -37,9 +37,11 @@ ssize_t prng(void *buf, size_t count)
 	seed = _seed + (read_cycles() + (percpu_id() << 16));
 
 	while (n < count) {
-		seed = seed * (salt + (uintptr_t)current);
-		ops = min(count - n, sizeof(seed));
-		memcpy(buf + n, &seed, ops);
+		seed = seed * (salt + (uintptr_t)current) + 1442695040888963407ULL;
+		out = seed ^ (seed >> 32);
+		out = (out * salt) ^ (out >> 32);
+		ops = min(count - n, sizeof(out));
+		memcpy(buf + n, &out, ops);
 		n += ops;
 	}
 

@@ -32,7 +32,7 @@ static int rng_open(struct file *f, mode_t mode, void *arg)
 {
 	const struct rng_struct *p = rng_current();
 
-	if (p == NULL)
+	if (!p)
 		return -ENODEV;
 
 	if (f->flags & O_ACCMODE)
@@ -45,7 +45,7 @@ static int rng_open(struct file *f, mode_t mode, void *arg)
 
 static int rng_close(struct file *f)
 {
-	if (f->priv == NULL)
+	if (!f->priv)
 		return -ENODEV;
 
 	f->priv = NULL;
@@ -57,10 +57,10 @@ static ssize_t rng_read(struct file *f,
 {
 	const struct rng_struct *p = f->priv;
 
-	if (p == NULL)
+	if (!p)
 		return -ENODEV;
 
-	if (buf == NULL)
+	if (!buf)
 		return -EINVAL;
 
 	return p->read(p, buf, count);
