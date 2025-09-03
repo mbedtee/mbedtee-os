@@ -7,7 +7,6 @@
 #include <stddef.h>
 #include <trace.h>
 #include <strmisc.h>
-#include <percpu.h>
 #include <cpu.h>
 #include <percpu.h>
 #include <thread.h>
@@ -34,9 +33,9 @@ struct ipc_shm {
 	struct list_head node;
 };
 
-static inline void ipc_shm_lock(void)
+static inline int ipc_shm_lock(void)
 {
-	mutex_lock(&ipc_mutex);
+	return mutex_lock_interruptible(&ipc_mutex);
 }
 
 static inline void ipc_shm_unlock(void)
@@ -82,7 +81,7 @@ static void *ipc_shm_map(struct process *proc,
 	nr_pages = roundup(size + offset, PAGE_SIZE) >> PAGE_SHIFT;
 
 	ppages = kcalloc(nr_pages, sizeof(*ppages));
-	if (ppages == NULL)
+	if (!ppages)
 		return ERR_PTR(-ENOMEM);
 
 	ret = pin_user_pages(start, nr_pages, ppages);
@@ -92,7 +91,7 @@ static void *ipc_shm_map(struct process *proc,
 	}
 
 	shm_va = vma_alloc(proc->vm, nr_pages << PAGE_SHIFT);
-	if (shm_va == NULL) {
+	if (!shm_va) {
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -105,7 +104,7 @@ static void *ipc_shm_map(struct process *proc,
 	}
 
 	shm = kmalloc(sizeof(*shm));
-	if (shm == NULL) {
+	if (!shm) {
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -116,7 +115,12 @@ static void *ipc_shm_map(struct process *proc,
 	shm->proc = proc;
 	shm->pages = ppages;
 
-	ipc_shm_lock();
+	if (ipc_shm_lock() != 0) {
+		ret = -EINTR;
+		kfree(shm);
+		goto out;
+	}
+
 	list_add_tail(&shm->node, &ipc_shms);
 	ipc_shm_unlock();
 
@@ -136,9 +140,11 @@ static int ipc_shm_unmap(struct process *proc, void *buffer)
 	int cnt = 0;
 	struct ipc_shm *shm = NULL;
 
-	ipc_shm_lock();
+	if (ipc_shm_lock() != 0)
+		return -EINTR;
+
 	shm = ipc_shm_of(proc, buffer);
-	if (shm == NULL) {
+	if (!shm) {
 		ipc_shm_unlock();
 		return -EINVAL;
 	}
@@ -190,7 +196,7 @@ static void ipc_param_put(TEE_Param *params,
 static int ipc_param_get(TEE_Param *params,
 	uint32_t params_type, uint32_t cmd, struct thread *t)
 {
-	void *shm_va = 0;
+	void *shm_va = NULL;
 	int i = 0, ret = -1, type = 0;
 	struct pthread_session *sess = ipc_session(t);
 
@@ -242,20 +248,21 @@ out:
 static int ipc_security_check(const TEE_UUID *uuid)
 {
 	struct process *proc = current->proc;
-	struct process_config *c = process_config_of(uuid);
+	struct process_config *c = process_config_of_uuid(uuid);
 
-	if (c == NULL) {
+	if (!c) {
 		EMSG("No Such Service\n");
 		return -ENOENT;
 	}
 
 	/*
-	 * check if current TA has permission
-	 * to access the target TA
+	 * Check if the current TA has permission
+	 * to access the target TA.
 	 */
-	if (!strstr_delimiter(proc->c->ipc_acl,
+	if (!strstr_token(proc->c->ipc_acl,
 			c->name, ',')) {
 		EMSG("TA<->TA IPC permission??\n");
+		EMSG("ipc_acl: %s target: %s\n", proc->c->ipc_acl, c->name);
 		return -EACCES;
 	}
 
@@ -279,18 +286,18 @@ static pid_t ipc_session_create(const TEE_UUID *uuid)
 	pid_t tid = -1;
 	struct process *proc = NULL;
 	struct process *curr = current->proc;
-	struct process_config *c = process_config_of(uuid);
+	struct process_config *c = process_config_of_uuid(uuid);
 	struct sched_param prio = {.sched_priority
 			= PTHREAD_RPC_DEFAULT_PRIORITY};
 	DECLARE_DETACHED_PTHREAD_ATTR(attr);
 
-	if (c == NULL) {
+	if (!c) {
 		EMSG("No Such Service\n");
 		return -ENOENT;
 	}
 
 	/*
-	 * Privilege TA is only for TEE internal usage
+	 * A privileged TA is for TEE internal use only.
 	 */
 	if (c->privilege) {
 		EMSG("Error target is Privilege TA\n");
@@ -304,15 +311,17 @@ static pid_t ipc_session_create(const TEE_UUID *uuid)
 
 	if (!c->single_instance) {
 		/* use the primary thread */
-		tid = process_create(uuid);
+		tid = __process_create(c, NULL);
 		sched_setscheduler(tid, SCHED_OTHER, &prio);
 	} else {
-		mutex_lock(&c->inst_lock);
+		if (mutex_lock_interruptible(&c->inst_lock) != 0)
+			return -EINTR;
+
 		proc = __process_get(c);
 		if (proc) {
-			if ((c->multi_session == false) ||
+			if (!c->multi_session ||
 				(curr->id != proc->parent_id)) {
-				if (c->multi_session == false)
+				if (!c->multi_session)
 					EMSG("busy! not multi_session\n");
 				else
 					EMSG("%d not owner of %d parent=%d\n",
@@ -330,7 +339,7 @@ static pid_t ipc_session_create(const TEE_UUID *uuid)
 			mutex_unlock(&c->inst_lock);
 		} else {
 			/* use the primary thread */
-			tid = process_create(uuid);
+			tid = __process_create(c, NULL);
 			sched_setscheduler(tid, SCHED_OTHER, &prio);
 			mutex_unlock(&c->inst_lock);
 		}
@@ -347,7 +356,7 @@ static struct thread *ipc_session_get(pid_t tid)
 
 	for (;;) {
 		t = thread_get(tid);
-		if (t == NULL)
+		if (!t)
 			return NULL;
 
 		ret = ipc_audit(t);
@@ -358,7 +367,11 @@ static struct thread *ipc_session_get(pid_t tid)
 
 		sess = ipc_session(t);
 
-		mutex_lock(&t->mlock);
+		if (mutex_lock_interruptible(&t->mlock) != 0) {
+			thread_put(t);
+			return NULL;
+		}
+
 		if (sess->stat == SESS_DONE)
 			break;
 		mutex_unlock(&t->mlock);
@@ -378,31 +391,47 @@ static void ipc_session_put(struct thread *t)
 static int ipc_session_wait(struct thread *t, uint32_t timeout, bool isopen)
 {
 	int ret = 0;
-	uint64_t remain = 0;
+	long remain = 0;
 	struct pthread_session *sess = ipc_session(t);
 
 	/*
 	 * if timeout == TEE_TIMEOUT_INFINITE, then wait infinitely
 	 */
 	if (timeout == TEE_TIMEOUT_INFINITE) {
-		ret = wait_locked(&t->join_q, &t->mlock);
+		ret = wait_locked_interruptible(&t->join_q, &t->mlock);
+		if (ret == -EINTR)
+			goto cancel;
 	} else {
 		/* timeout - (microseconds) */
-		remain = wait_timeout_locked(&t->join_q, timeout, &t->mlock);
-		if (remain == 0) {
-			/* according to spec, timeout means cancellation */
-			sess->cancel_flag = true;
-			if (sess->cancel_mask == false) {
-				ret = sigenqueue(t->id, isopen ? SIGKILL : SIGSTOP, SI_QUEUE,
-						(union sigval)((void *)TEE_ERROR_CANCEL), true);
-				if (ret == 0)
-					ret = wait_locked(&t->join_q, &t->mlock);
-			} else {
-				ret = -ETIMEDOUT;
-			}
-		} else {
-			ret = t->join_q.notification;
+		remain = wait_timeout_locked_interruptible(
+				&t->join_q, timeout, &t->mlock);
+		if (remain == -EINTR) {
+			ret = -EINTR;
+			goto cancel;
 		}
+		if (remain == 0) {
+			ret = -ETIMEDOUT;
+			goto cancel;
+		}
+		/*
+		 * Success: TA completed. Read notification (TA result)
+		 * directly - safe because join_q belongs to this thread
+		 * and the TA has already finished at this point.
+		 */
+		ret = t->join_q.notification;
+	}
+
+	return ret;
+
+cancel:
+	sess->cancel_flag = true;
+	if (!sess->cancel_mask) {
+		ret = sigenqueue(t->id, isopen ? SIGKILL : SIGSTOP, SI_QUEUE,
+				(union sigval)((void *)TEE_ERROR_CANCEL), true);
+		if (ret == 0)
+			ret = wait_locked_interruptible(&t->join_q, &t->mlock);
+	} else {
+		ret = -ETIMEDOUT;
 	}
 
 	if (ret != 0)
@@ -427,7 +456,7 @@ int ipc_session_open(TEE_UUID *uuid,
 		return ret;
 
 	t = thread_get(ret);
-	if (t == NULL)
+	if (!t)
 		return -ESRCH;
 
 	mutex_lock(&t->mlock);
@@ -441,18 +470,19 @@ int ipc_session_open(TEE_UUID *uuid,
 	}
 
 	ret = sched_entry_init(t->id,
-		t->proc->pself->wrapper.pthread_entry,
-		t->proc->pself->wrapper.open, NULL);
+		t->proc->wrapper.pthread_entry,
+		t->proc->wrapper.open, NULL);
+	if (ret == 0) {
+		if (sched_ready(t->id))
+			ret = ipc_session_wait(t, timeout, true);
+		ipc_param_put(param, types, t);
+	} else {
+		ipc_param_put(param, types, t);
+		thread_put(t);
+	}
 
-	if (ret == 0 && sched_ready(t->id))
-		ret = ipc_session_wait(t, timeout, true);
-
-	ipc_param_put(param, types, t);
-
-	if (ret != 0)
-		goto out;
-
-	ret = t->id;
+	if (ret == 0)
+		ret = t->id;
 
 out:
 	DMSG("open %d ret %d\n", t->id, ret);
@@ -467,7 +497,7 @@ int ipc_session_invoke(pid_t tid, uint32_t timeout,
 	struct thread *t = NULL;
 
 	t = ipc_session_get(tid);
-	if (t == NULL) {
+	if (!t) {
 		EMSG("No such session %d\n", tid);
 		return -ESRCH;
 	}
@@ -479,8 +509,8 @@ int ipc_session_invoke(pid_t tid, uint32_t timeout,
 		goto out;
 
 	ret = sched_entry_init(tid,
-		t->proc->pself->wrapper.pthread_entry,
-		t->proc->pself->wrapper.invoke, NULL);
+		t->proc->wrapper.pthread_entry,
+		t->proc->wrapper.invoke, NULL);
 
 	if ((ret == 0) && sched_ready(tid))
 		ret = ipc_session_wait(t, timeout, false);
@@ -500,7 +530,7 @@ int ipc_session_close(pid_t tid)
 	struct pthread_session *sess = NULL;
 
 	t = ipc_session_get(tid);
-	if (t == NULL) {
+	if (!t) {
 		EMSG("No such session %d\n", tid);
 		return -ESRCH;
 	}
@@ -512,8 +542,8 @@ int ipc_session_close(pid_t tid)
 	sess->stat = SESS_PREPARED;
 
 	ret = sched_entry_init(tid,
-		t->proc->pself->wrapper.pthread_entry,
-		t->proc->pself->wrapper.close, NULL);
+		t->proc->wrapper.pthread_entry,
+		t->proc->wrapper.close, NULL);
 
 	if (ret == 0 && sched_ready(tid))
 		ret = wait_locked(&t->join_q, &t->mlock);

@@ -32,7 +32,7 @@ static int do_open_session(void *uid,
 	TEE_UUID uuid;
 	TEE_Param param[4];
 
-	ret = copy_from_user((void *)&uuid, uid, sizeof(uuid));
+	ret = copy_from_user(&uuid, uid, sizeof(uuid));
 	if (ret != 0)
 		return -EFAULT;
 
@@ -86,7 +86,7 @@ static int do_getreetime(struct timespec *dst)
 #include <rpc.h>
 	int ret = -1;
 
-	ret = rpc_call_sync(RPC_REETIME, &ts, sizeof(ts));
+	ret = rpc_call_sync(MBEDTEE_RPC_REETIME, &ts, sizeof(ts));
 	if (ret != 0)
 		return ret;
 #endif
@@ -127,7 +127,7 @@ static int do_memacc_check(void *va, size_t size, uint32_t flags)
 	    !tee_range_ok(p, va, size))
 		return -EACCES;
 
-	if (!access_user_ok((void *)va, size, (flags &
+	if (!access_user_ok(va, size, (flags &
 		TEE_MEMORY_ACCESS_WRITE) ? PG_RW : PG_RO))
 		return -EACCES;
 
@@ -194,7 +194,7 @@ static const struct file_operations globalplatform_fops = {
 
 static void __init globalplatform_init(void)
 {
-	static struct device dev = {NULL};
+	static struct device dev = {0};
 
 	dev.fops = &globalplatform_fops;
 	dev.path = "/dev/globalplatform";

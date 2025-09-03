@@ -7,6 +7,10 @@
 #ifndef _IPC_H
 #define _IPC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <tee_api_types.h>
 
 int ipc_session_open(TEE_UUID *uuid,
@@ -16,5 +20,9 @@ int ipc_session_invoke(pid_t tid, uint32_t timeout,
 	uint32_t cmd, uint32_t types, void *params);
 
 int ipc_session_close(pid_t tid);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
