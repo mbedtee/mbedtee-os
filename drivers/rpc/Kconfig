@@ -3,6 +3,7 @@
 
 config RPC
 	bool "RPC module"
+	depends on REE
 	default n
 	help
 		Say Y here to enable RPC caller/fast-callee
@@ -14,3 +15,27 @@ config RPC_YIELD
 	help
 		Say Y here to enable support RPC YieldCall / RPC SHM (callee)
 		current RPC YieldCall/SHM follows the GlobalPlatform style
+
+config RPC_MAX_SESSIONS
+	int "Maximum number of concurrent RPC sessions"
+	depends on RPC_YIELD
+	default 100
+	range 1 256
+	help
+		Maximum number of concurrent RPC sessions that the REE
+		can open simultaneously. This prevents a malicious REE
+		from exhausting TEE memory by creating unlimited sessions.
+
+config RPC_R2T_POLL_1MS
+	bool "R2T ring polling fallback (1ms)"
+	depends on RPC && RISCV
+	default y
+	help
+		Enable periodic 1ms polling of the REE->TEE RPC ring.
+
+		Use this when REE cannot send an IMSIC doorbell interrupt to
+		the TEE (for example, disjoint Linux/TEE hart topology where
+		direct MMIO notify is unavailable or intentionally disabled).
+
+		When enabled, TEE checks the r2t ring every 1ms and processes
+		pending RPC entries without requiring an external IRQ trigger.

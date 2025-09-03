@@ -11,26 +11,28 @@
 #include <vma.h>
 #include <trace.h>
 #include <prng.h>
+#include <rbtree.h>
+#include <ksemaphore.h>
 
 #include <rpc_callee.h>
 
-static LIST_HEAD(rpc_gpshms);
+static struct rb_node *rpc_gpshms;
 static DECLARE_SEMA(shms_sema, 1);
 
 struct rpc_gpshm {
 	uint64_t id;
 	size_t cnt;
 	off_t offset;
-	unsigned long *pages;
+	uint64_t *pages;
 	void *va;
 	int refc;
 	struct process *proc;
-	struct list_head node;
+	struct rb_node node;
 };
 
-static inline void rpc_gpshm_lock(void)
+static inline int rpc_gpshm_lock(void)
 {
-	down(&shms_sema);
+	return down_interruptible(&shms_sema);
 }
 
 static inline void rpc_gpshm_unlock(void)
@@ -38,25 +40,46 @@ static inline void rpc_gpshm_unlock(void)
 	up(&shms_sema);
 }
 
+static intptr_t rpc_gpshm_cmp(const void *key, const struct rb_node *n)
+{
+	uint64_t id = *(const uint64_t *)key;
+	struct rpc_gpshm *shm = rb_entry_of(n, struct rpc_gpshm, node);
+
+	if (id < shm->id)
+		return -1;
+	if (id > shm->id)
+		return 1;
+	return 0;
+}
+
+static intptr_t rpc_gpshm_cmp_node(
+	const struct rb_node *a, const struct rb_node *b)
+{
+	struct rpc_gpshm *sa = rb_entry_of(a, struct rpc_gpshm, node);
+	struct rpc_gpshm *sb = rb_entry_of(b, struct rpc_gpshm, node);
+
+	if (sa->id < sb->id)
+		return -1;
+	if (sa->id > sb->id)
+		return 1;
+	return 0;
+}
+
 static struct rpc_gpshm *rpc_gpshm_of(uint64_t id)
 {
-	struct rpc_gpshm *n = NULL, *ret = NULL;
+	struct rb_node *n = NULL;
 
 	if (id == 0)
 		return NULL;
 
-	list_for_each_entry(n, &rpc_gpshms, node) {
-		if (n->id == id) {
-			ret = n;
-			break;
-		}
-	}
-	return ret;
+	n = rb_find(&id, rpc_gpshms, rpc_gpshm_cmp);
+
+	return rb_entry(n, struct rpc_gpshm, node);
 }
 
 static void rpc_gpshm_free(struct rpc_gpshm *n)
 {
-	list_del(&n->node);
+	rb_del(&n->node, &rpc_gpshms);
 	kfree(n->pages);
 	kfree(n);
 }
@@ -69,7 +92,7 @@ static uint64_t rpc_shmid_get(void)
 		prng(&id, sizeof(id));
 		id <<= 16;
 		id |= current_id;
-	} while (rpc_gpshm_of(id) != NULL);
+	} while (rpc_gpshm_of(id));
 
 	return id;
 }
@@ -78,43 +101,40 @@ int rpc_gpshm_register(struct rpc_memref *mr)
 {
 	int ret = -1, i = 0;
 	size_t pt_size = 0;
-	unsigned long *rpages = NULL, *lpages = NULL;
+	uint64_t *rpages = NULL, *lpages = NULL;
 	struct rpc_gpshm *n = NULL;
-
-	if (mr->pages & (~PAGE_MASK))
-		return -EFAULT;
 
 	if ((mr->cnt == 0) || (mr->cnt >
 		(USER_VM4REE_SIZE / 2 / PAGE_SIZE)))
 		return -EINVAL;
 
-	pt_size = mr->cnt * sizeof(unsigned long);
+	pt_size = (size_t)mr->cnt * sizeof(*lpages);
 
 	/* map the page table */
 	rpages = phys_to_virt(mr->pages);
 
 	lpages = kmalloc(pt_size);
-	if (lpages == NULL) {
+	if (!lpages) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
 	memcpy(lpages, rpages, pt_size);
 
-	for (i = 0; i < mr->cnt; i++) {
+	for (i = 0; i < (int)mr->cnt; i++) {
 		if (lpages[i] & (~PAGE_MASK)) {
 			ret = -EFAULT;
 			goto out;
 		}
 
-		if (mem_in_secure(lpages[i])) {
+		if (mem_in_secure((unsigned long)lpages[i])) {
 			ret = -EACCES;
 			goto out;
 		}
 	}
 
 	n = kzalloc(sizeof(*n));
-	if (n == NULL) {
+	if (!n) {
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -124,9 +144,14 @@ int rpc_gpshm_register(struct rpc_memref *mr)
 	n->pages = lpages;
 	n->refc = 1;
 
-	rpc_gpshm_lock();
+	ret = rpc_gpshm_lock();
+	if (ret != 0) {
+		kfree(n);
+		goto out;
+	}
+
 	mr->id = n->id = rpc_shmid_get();
-	list_add_tail(&n->node, &rpc_gpshms);
+	rb_add(&n->node, &rpc_gpshms, rpc_gpshm_cmp_node);
 	rpc_gpshm_unlock();
 
 	ret = 0;
@@ -142,10 +167,12 @@ int rpc_gpshm_unregister(struct rpc_memref *mr)
 	int ret = -1;
 	struct rpc_gpshm *n = NULL;
 
-	rpc_gpshm_lock();
+	ret = rpc_gpshm_lock();
+	if (ret != 0)
+		return ret;
 
 	n = rpc_gpshm_of(mr->id);
-	if (n == NULL) {
+	if (!n) {
 		ret = 0;
 		goto out;
 	}
@@ -189,7 +216,7 @@ static int __rpc_gpshm_map(struct rpc_gpshm *n,
 		return -ENOMEM;
 
 	for (i = 0; i < n->cnt; i++) {
-		ret = map(proc->pt, n->pages[i],
+		ret = map(proc->pt, (unsigned long)n->pages[i],
 				shm_va + (PAGE_SIZE * i),
 				PAGE_SIZE, flags);
 		if (ret != 0)
@@ -214,13 +241,24 @@ void *rpc_gpshm_map(struct process *proc,
 	struct rpc_memref *mr, unsigned long flags)
 {
 	int ret = -1;
+	size_t total = 0;
 	struct rpc_gpshm *n = NULL;
 	void *va = NULL;
 
-	rpc_gpshm_lock();
+	ret = rpc_gpshm_lock();
+	if (ret != 0)
+		return ERR_PTR(ret);
 
 	n = rpc_gpshm_of(mr->id);
-	if (n == NULL) {
+	if (!n) {
+		n = ERR_PTR(-EINVAL);
+		goto out;
+	}
+
+	total = n->cnt * PAGE_SIZE;
+
+	if (mr->offset >= total ||
+		mr->size > total - mr->offset) {
 		n = ERR_PTR(-EINVAL);
 		goto out;
 	}
@@ -228,13 +266,6 @@ void *rpc_gpshm_map(struct process *proc,
 	ret = __rpc_gpshm_map(n, proc, flags);
 	if (ret != 0) {
 		n = ERR_PTR(ret);
-		goto out;
-	}
-
-	if (mr->offset >= n->cnt * PAGE_SIZE ||
-		(mr->size > n->cnt * PAGE_SIZE) ||
-		(mr->offset + mr->size > n->cnt * PAGE_SIZE)) {
-		n = ERR_PTR(-EINVAL);
 		goto out;
 	}
 
@@ -254,10 +285,12 @@ int rpc_gpshm_unmap(uint64_t id)
 	int ret = -1;
 	struct rpc_gpshm *n = NULL;
 
-	rpc_gpshm_lock();
+	ret = rpc_gpshm_lock();
+	if (ret != 0)
+		return ret;
 
 	n = rpc_gpshm_of(id);
-	if (n == NULL) {
+	if (!n) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -287,8 +320,10 @@ static void rpc_gpshm_cleanup(struct process *p)
 {
 	struct rpc_gpshm *n = NULL, *_n = NULL;
 
-	rpc_gpshm_lock();
-	list_for_each_entry_safe(n, _n, &rpc_gpshms, node) {
+	if (rpc_gpshm_lock() != 0)
+		return;
+
+	rb_for_each_entry_safe(n, _n, rpc_gpshms, node) {
 		if (n->proc == p) {
 			n->proc = NULL;
 			n->va = NULL;
@@ -310,8 +345,10 @@ void rpc_gpshm_info(struct debugfs_file *d)
 {
 	struct rpc_gpshm *n = NULL;
 
-	rpc_gpshm_lock();
-	list_for_each_entry(n, &rpc_gpshms, node) {
+	if (rpc_gpshm_lock() != 0)
+		return;
+
+	rb_for_each_entry(n, rpc_gpshms, node) {
 		debugfs_printf(d, "\nshm %llx info:\n", (long long)n->id);
 		debugfs_printf(d, "pages ptr: %p, cnt %d\n",
 					n->pages, (int)n->cnt);

@@ -7,6 +7,10 @@
 #ifndef _RPC_H
 #define _RPC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <unistd.h>
 #include <stddef.h>
 #include <rpc/rpc.h>
@@ -32,14 +36,9 @@ int rpc_call(unsigned int id, void *data, size_t size);
 int rpc_call_sync(unsigned int id, void *data, size_t size);
 
 /*
- * return if the callee ready or not
+ * Return whether the callee is ready.
  */
 int rpc_test_callee(void);
-
-/*
- * return the callee's hartid or mpid
- */
-int rpc_calleeid(void);
 
 /*
  * complete the execution of rpc_call_sync()
@@ -57,5 +56,9 @@ void *rpc_shm_alloc(size_t size);
  * free rpc shared-memory
  */
 void rpc_shm_free(void *addr);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

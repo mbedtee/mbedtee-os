@@ -28,54 +28,55 @@ long rpc_fastcall_handler(unsigned long fn,
 {
 	long ret = -1;
 
-	switch (fn & RPC_FUNC_MASK) {
-	case RPC_VERSION:
+	switch (fn & MBEDTEE_RPC_FUNC_MASK) {
+	case MBEDTEE_RPC_VERSION:
 		ret = 2;
 		break;
 
-	case RPC_OS_VERSION:
+	case MBEDTEE_RPC_OS_VERSION:
 		ret = PRODUCT_VERSION_INT;
 		break;
 
-	case RPC_SUPPORT_YIELD:
+	case MBEDTEE_RPC_SUPPORT_YIELD:
 		ret = IS_ENABLED(CONFIG_RPC_YIELD);
 		break;
 
-	case RPC_COMPLETE_TEE:
+	case MBEDTEE_RPC_COMPLETE_TEE:
 		ret = rpc_complete(a0);
 		break;
 
-	case RPC_SYSTEM_SUSPEND:
+	case MBEDTEE_RPC_SYSTEM_SUSPEND:
 		str_suspend();
 		break;
 
 #if CONFIG_NR_CPUS > 1
-	case RPC_CPU_SUSPEND:
+	case MBEDTEE_RPC_CPU_SUSPEND:
 		break;
 
-	case RPC_CPU_OFF:
+	case MBEDTEE_RPC_CPU_OFF:
 		cpu_die();
 		break;
 
-	case RPC_CPU_ON:
+	case MBEDTEE_RPC_CPU_ON:
 		if (!mem_in_secure(a1))
 			ret = cpu_up(cpuid_of(a0), a1);
 		else
 			ret = -EFAULT;
 		break;
 
-	case RPC_KILL_SECONDARY:
+	case MBEDTEE_RPC_KILL_SECONDARY: {
 		int cpu = cpuid_of(a0);
 
-		if (cpu == 0) {
+		if (cpu == 0)
 			ret = -1;
-		} else {
+		else {
 			cpu_down(cpu);
 			ret = 1;
 		}
 		break;
+	}
 
-	case RPC_MIGRATE_INFO_TYPE:
+	case MBEDTEE_RPC_MIGRATE_INFO_TYPE:
 		ret = 2;
 		break;
 #endif
