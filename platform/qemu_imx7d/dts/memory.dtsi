@@ -1,5 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
 /*
- * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2025 Xing Loong <xing.xl.loong@gmail.com>
  */
 
@@ -31,5 +31,6 @@
 		rpc-t2r-ring = <0x85F10000 0x20000>;
 		rpc-t2r-shm = <0x85F30000 0x40000>;
 		ree-addr = <0x86008000 0x1800000>;
+		rpc-t2r-spi = <72>;
 	};
 };

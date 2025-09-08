@@ -1,5 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
 /*
- * SPDX-License-Identifier: Apache-2.0
  * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
  */
 
@@ -19,10 +19,10 @@
 		 *
 		 * e.g. QEMU xlnx-versal-virt phys memory regions:
 		 *
-		 * 0x00000000 ~ 7fffffff         [size：0x80000000]
-		 * 0x800000000 ~ 0xfffffffff     [size：0x800000000]
-		 * 0xc000000000 ~ 0xffffffffff   [size：0x4000000000]
-		 * 0x10000000000 ~ 0x1b780000000 [size：0xb780000000]
+		 * 0x00000000 ~ 7fffffff         [size: 0x80000000]
+		 * 0x800000000 ~ 0xfffffffff     [size: 0x800000000]
+		 * 0xc000000000 ~ 0xffffffffff   [size: 0x4000000000]
+		 * 0x10000000000 ~ 0x1b780000000 [size: 0xb780000000]
 		 */
 		mapping = <0 0x00000000 0 0x80000000>,
 				<8 0x00000000 8 0x00000000>;
@@ -38,5 +38,6 @@
 		rpc-t2r-ring = <0 0x05F10000 0 0x20000>;
 		rpc-t2r-shm = <0 0x05F30000 0 0x40000>;
 		ree-addr = <0 0x06000000 0 0x1800000>;
+		rpc-t2r-spi = <72>;
 	};
 };

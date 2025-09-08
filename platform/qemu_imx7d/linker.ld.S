@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2025 Xing Loong <xing.xl.loong@gmail.com>
  */
 
 #include <cpu.h>
@@ -33,13 +33,14 @@ SECTIONS
 	.rodata : {
 		*(.rodata .rodata.*)
 		PERCPU_INIT_SECTIONS
-		CLEANUP_CALLBACKS
+		PROCESS_CLEANUP_CALLBACKS
+		THREAD_CLEANUP_CALLBACKS
 		STR_SECTIONS
 		. = ALIGN(BYTES_PER_LONG);
 	}
 
 	/* unwind table for AArch32@ARMV7-A backtrace */
-#ifdef CONFIG_BACKTRACE
+#if defined(CONFIG_BACKTRACE)
 	.ARM.extab : {KEEP (*(.ARM.extab*))}
 	__exidx_start = .;
 	.ARM.exidx : {KEEP (*(.ARM.exidx*))}
