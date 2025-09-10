@@ -15,14 +15,30 @@
 
 #include "sched_priv.h"
 
+/* CPACR_EL1.FPEN: trap EL0 FPU, allow EL1 */
+#define CPACR_FPEN_TRAP_EL0 ((3UL << 16) | (1UL << 20))
+/* CPACR_EL1.FPEN: no trap */
+#define CPACR_FPEN_NO_TRAP  ((3UL << 16) | (3UL << 20))
+
+static inline void fpu_trap_enable(void)
+{
+	asm volatile("msr cpacr_el1, %0\n\tisb"
+		: : "r" (CPACR_FPEN_TRAP_EL0) : "memory");
+}
+
+static inline void fpu_trap_disable(void)
+{
+	asm volatile("msr cpacr_el1, %0\n\tisb"
+		: : "r" (CPACR_FPEN_NO_TRAP) : "memory");
+}
+
 static void sched_idle(void *data)
 {
 	for (;;) {
-#ifdef CONFIG_REE /* ret to REE */
+	if (IS_ENABLED(CONFIG_REE)) /* ret to REE */
 		smc_call(0, 0, 0, 0);
-#else
+	else
 		asm volatile("wfi; nop" : : : "memory", "cc");
-#endif
 	}
 }
 
@@ -58,6 +74,9 @@ static void sched_init_ctx(struct sched *s,
 	 * current executing thread
 	 */
 	regs->tpidrro_el0 = (unsigned long)t;
+
+	/* lazy FPU: back-pointer for FPU trap restore */
+	t->sched_ctx = regs;
 }
 
 /* set the thread and MM info to global */
@@ -75,18 +94,22 @@ static inline void sched_set_thread_mm(struct sched *s)
 	set_current(t);
 
 #if defined(CONFIG_MMU)
-	if (t->tuser)
-		t->tuser->cpuid = pc->id;
+	{
+		unsigned long asid = 0;
 
-	/*
-	 * Saw this reserved ASID, means OS was run out of the ASID,
-	 * here need to clean the TLBs indexed by this ASID on each context switch,
-	 * because this ASID might be used on different applications
-	 */
-	unsigned long asid = t->proc->pt->asid;
+		if (t->tuser)
+			t->tuser->cpuid = pc->id;
 
-	if (asid == ASID_RESVD)
-		flush_tlb_asid(asid);
+		/*
+		 * Saw this reserved ASID, means OS was run out of the ASID,
+		 * here we need to clean the TLBs indexed by this ASID on each context switch,
+		 * because this ASID might be used on different applications
+		 */
+		asid = t->proc->pt->asid;
+
+		if (asid == ASID_RESVD)
+			flush_tlb_asid(asid);
+	}
 #endif
 }
 
@@ -97,12 +120,19 @@ static void sched_switch_ctx
 	struct thread_ctx *regs
 )
 {
-	if (curr)
-		memcpy(&curr->regs, regs, sizeof(*regs));
+	if (curr) {
+		/* Save only GPR portion from exception stack */
+		memcpy(&curr->regs, regs, GPR_CTX_SIZE);
+	}
 
 	if (next) {
-		memcpy(regs, &next->regs, sizeof(*regs));
+		/* Restore only GPR portion to exception stack */
+		memcpy(regs, &next->regs, GPR_CTX_SIZE);
 		sched_set_thread_mm(next);
+
+		/* Trap EL0 FPU - lazy restore on first access */
+		thiscpu->fpu_owner = NULL;
+		fpu_trap_enable();
 	}
 }
 
@@ -111,19 +141,29 @@ static void sched_save_sigctx(struct sched *s,
 {
 	struct thread_ctx *dst = s->thread->kstack;
 
+	/* Copy GPR from exception frame */
 	if (dst != regs)
-		memcpy(dst, regs, sizeof(*regs));
+		memcpy(dst, regs, GPR_CTX_SIZE);
+
+	/* Copy FPU from sched->regs (saved by kernel_fpu_eagersave at entry) */
+	memcpy((char *)dst + GPR_CTX_SIZE,
+		(char *)&s->regs + GPR_CTX_SIZE, FPU_CTX_SIZE);
 }
 
 static void sched_restore_sigctx(struct sched *s,
 	struct thread_ctx *regs)
 {
-
+	/*
+	 * Copy FPU state from saved signal context back to sched->regs.
+	 * The physical Q registers will be lazily restored on next FPU use.
+	 */
+	memcpy((char *)&s->regs + GPR_CTX_SIZE,
+		(char *)regs + GPR_CTX_SIZE, FPU_CTX_SIZE);
 }
 
 static struct sched *sched_pick_hook(struct sched_priv *sp)
 {
-#ifdef CONFIG_REE
+#if defined(CONFIG_REE)
 	struct sched *s = sp->idle;
 
 	/*
@@ -140,7 +180,7 @@ static void sched_create_idle(struct sched_priv *sp)
 	pid_t id = -1;
 	struct sched_param p = {SCHED_PRIO_MIN};
 
-	id = kthread_create_on(sched_idle,
+	id = kthread_create_on((void *)sched_idle,
 			NULL, sp->pc->id, "idle");
 	if (id < 0) {
 		EMSG("kthread_create failed %d\n", id);
@@ -160,7 +200,7 @@ static void sched_exit_idle(struct sched_priv *sp)
 {
 	struct sched *s = sp->idle;
 
-	if (s == NULL)
+	if (!s)
 		return;
 
 	sp->idle = NULL;

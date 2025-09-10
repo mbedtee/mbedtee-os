@@ -89,28 +89,18 @@ save_percpu_ctx:
 	mrs x11, afsr1_el1
 	stp	x10, x11, [x0, #16 * 29]
 
-	/* FP/SIMD registers */
-	mrs	x10, fpsr
-	mrs	x11, fpcr
-	stp	x10, x11, [x0, #16 * 30]
-
-	stp	q0, q1, [x0, #16 * 31]
-	stp	q2, q3, [x0, #16 * 33]
-	stp	q4, q5, [x0, #16 * 35]
-	stp	q6, q7, [x0, #16 * 37]
-	stp	q8, q9, [x0, #16 * 39]
-	stp	q10, q11, [x0, #16 * 41]
-	stp	q12, q13, [x0, #16 * 43]
-	stp	q14, q15, [x0, #16 * 45]
-	stp	q16, q17, [x0, #16 * 47]
-	stp	q18, q19, [x0, #16 * 49]
-	stp	q20, q21, [x0, #16 * 51]
-	stp	q22, q23, [x0, #16 * 53]
-	stp	q24, q25, [x0, #16 * 55]
-	stp	q26, q27, [x0, #16 * 57]
-	stp	q28, q29, [x0, #16 * 59]
-	stp	q30, q31, [x0, #16 * 61]
-
+	/*
+	 * FP/SIMD (Q0-Q31, FPSR, FPCR) - always save.
+	 *
+	 * Physical FPU registers are shared hardware between Secure
+	 * and Non-secure worlds. NS (Linux/REE) uses NEON/FPU and
+	 * will overwrite them; when S resumes it needs its values
+	 * back.
+	 */
+	stp	x30, x0, [sp, #-16]!
+	add	x0, x0, #(GPR_CTX_EL3_SIZE)
+	bl	__save_fpu_simd
+	ldp	x30, x0, [sp], #16
 	ret
 .size save_percpu_ctx, .-save_percpu_ctx
 
@@ -145,7 +135,7 @@ restore_percpu_ctx:
 	msr spsr_el1, x12
 	msr elr_el1, x13
 
-	/* save s/ns world per-cpu registers */
+	/* restore s/ns world per-cpu registers */
 	ldp	x10, x11, [x0, #16 * 20]
 	ldp	x12, x13, [x0, #16 * 21]
 	ldp	x14, x15, [x0, #16 * 22]
@@ -180,12 +170,14 @@ restore_percpu_ctx:
 	msr	afsr0_el1, x11
 	msr	afsr1_el1, x12
 
-	/* restore FP/SIMD state/ctrl */
-	ldp	x14, x15, [x0, #16 * 30]
-	msr	fpsr, x14
-	msr	fpcr, x15
-	isb
-
+	/*
+	 * FP/SIMD - always restore. NS overwrote the physical
+	 * registers; S needs its saved values back.
+	 */
+	stp	x30, x0, [sp, #-16]!
+	add	x0, x0, #(GPR_CTX_EL3_SIZE)
+	bl	__restore_fpu_simd
+	ldp	x30, x0, [sp], #16
 	/* restore the x1 ~ x28 */
 	ldp	x1, x2, [x0, #16 * 1]
 	ldp	x3, x4, [x0, #16 * 2]
@@ -201,24 +193,6 @@ restore_percpu_ctx:
 	ldp	x23, x24, [x0, #16 * 12]
 	ldp	x25, x26, [x0, #16 * 13]
 	ldp	x27, x28, [x0, #16 * 14]
-
-	/* restore FP/SIMD registers */
-	ldp	q0, q1, [x0, #16 * 31]
-	ldp	q2, q3, [x0, #16 * 33]
-	ldp	q4, q5, [x0, #16 * 35]
-	ldp	q6, q7, [x0, #16 * 37]
-	ldp	q8, q9, [x0, #16 * 39]
-	ldp	q10, q11, [x0, #16 * 41]
-	ldp	q12, q13, [x0, #16 * 43]
-	ldp	q14, q15, [x0, #16 * 45]
-	ldp	q16, q17, [x0, #16 * 47]
-	ldp	q18, q19, [x0, #16 * 49]
-	ldp	q20, q21, [x0, #16 * 51]
-	ldp	q22, q23, [x0, #16 * 53]
-	ldp	q24, q25, [x0, #16 * 55]
-	ldp	q26, q27, [x0, #16 * 57]
-	ldp	q28, q29, [x0, #16 * 59]
-	ldp	q30, q31, [x0, #16 * 61]
 
 	ret
 .size restore_percpu_ctx, .-restore_percpu_ctx

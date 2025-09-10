@@ -7,6 +7,10 @@
 #ifndef _PERCPU_H
 #define _PERCPU_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <ctx.h>
 #include <cpu.h>
 #include <init.h>
@@ -40,6 +44,9 @@ struct percpu {
 	/* share with el3 */
 	void *rctx;
 	unsigned long sgi;
+
+	/* lazy FPU: thread whose FPU state is in physical Q registers */
+	struct thread *fpu_owner;
 } __aligned(64);
 
 extern struct percpu percpu_dt[CONFIG_NR_CPUS];
@@ -87,5 +94,9 @@ static __always_inline unsigned long percpu_mpid(void)
 {
 	return thiscpu->mpid;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

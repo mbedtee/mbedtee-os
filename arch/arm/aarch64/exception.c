@@ -9,10 +9,13 @@
 #include <string.h>
 #include <uaccess.h>
 #include <thread.h>
+#include <ksyscall.h>
 #include <sys/mmap.h>
 #include <__pthread.h>
 
-extern void *syscall_handler(struct thread_ctx *);
+#if defined(CONFIG_USER)
+#include <elf_proc.h>
+#endif
 
 #define ESR_EC_UNKNOWN        (0x00) /* Unknown reason */
 #define ESR_EC_WFI_WFE        (0x01) /* Trapped WFE, WFI, WFET or WFIT instruction execution */
@@ -111,8 +114,8 @@ static const char * const ec_encodings[] = {
 
 static inline int is_write_abort(unsigned long esr)
 {
-	return (esr & (1 << ESR_ISS_WNR)) &&
-		 !(esr & (1 << ESR_ISS_CM));
+	return (esr & (1U << ESR_ISS_WNR)) &&
+		 !(esr & (1U << ESR_ISS_CM));
 }
 
 static inline unsigned long __esr(void)
@@ -181,8 +184,7 @@ static __nosprot void __oops(struct thread *t, struct thread_ctx *regs)
 		t->ustack_size, t->ustack_uva,
 		t->kstack_size, t);
 
-#ifdef CONFIG_USER
-#include <elf_proc.h>
+#if defined(CONFIG_USER)
 
 	symstr = elf_proc_funcname(proc, regs->pc, &offset);
 	EMSG("pc 0x%lx (%s + %lx)\n", regs->pc, symstr ? symstr : "null", offset);
@@ -204,13 +206,27 @@ __nosprot void *exception_handler(struct thread_ctx *regs)
 {
 	struct thread *t = current;
 
-#ifdef CONFIG_USER
+#if defined(CONFIG_USER)
 	unsigned long esr = __esr();
 	unsigned long ec = ESR_EC(esr);
 
 	/* handle low-level syscall */
 	if (ec == ESR_EC_SVC64)
 		return syscall_handler(regs);
+
+	/* handle lazy FPU trap from EL0 */
+	if (ec == ESR_EC_SVE_SIMD_FP) {
+		unsigned long cpacr = (3UL << 16) | (3UL << 20);
+
+		/* Restore current thread's FPU from sched->regs */
+		restore_fpu_ctx(t->sched_ctx);
+		thiscpu->fpu_owner = t;
+
+		/* Allow EL0 FPU access - retry trapped instruction */
+		asm volatile("msr cpacr_el1, %0\n\tisb"
+			: : "r" (cpacr) : "memory");
+		return regs;
+	}
 
 	/* handle low-level page fault */
 	if (ec == ESR_EC_DABT_LOW) {

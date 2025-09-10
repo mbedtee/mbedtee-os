@@ -7,6 +7,10 @@
 #ifndef _CTX_H
 #define _CTX_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* x0 offset @ struct thread_ctx.r[] */
 #define ARG_REG             (0)
 #define RET_REG             (0)
@@ -50,6 +54,14 @@ struct thread_ctx {
 	 */
 	__uint128_t vr[32];
 };
+
+/* Byte sizes of GPR and FPU portions of struct thread_ctx */
+#define GPR_CTX_SIZE	offsetof(struct thread_ctx, fpsr)
+#define FPU_CTX_SIZE	(sizeof(struct thread_ctx) - GPR_CTX_SIZE)
+
+/* low level save/restore functions for FPU context @ ASM */
+extern void save_fpu_ctx(struct thread_ctx *ctx);
+extern void restore_fpu_ctx(struct thread_ctx *ctx);
 
 /*
  * only a information for monitor EL3, not really in use
@@ -125,6 +137,10 @@ struct thread_ctx_el3 {
 	 */
 	__uint128_t vr[32];
 };
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 
