@@ -99,14 +99,6 @@ _cpu_init:
 	msr sctlr_el1, x1
 	isb
 
-	/*
-	 * ZEN, FPEN
-	 * does not trap SVE/SIMD/FP
-	 */
-	ldr x1, =((3 << 16) | (3 << 20))
-	msr cpacr_el1, x1
-	isb
-
 	/* Set VBAR */
 	ldr	x1, =exception_vectors
 	msr vbar_el1, x1

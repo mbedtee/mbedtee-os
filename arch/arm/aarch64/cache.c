@@ -52,7 +52,6 @@ static void dcache_va_range_ops(unsigned long start,
 		/* patch for memory write-back latency in SOC */
 		ioread32((void *)start);
 		ioread32((void *)(end - line_len));
-		/* patch for memory write-back latency in SOC */
 
 		break;
 	case DCACHE_INV_RANGE:

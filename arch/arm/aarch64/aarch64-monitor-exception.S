@@ -83,11 +83,10 @@ set_legacy_gic_base:
 /*
  * x0 == 0: resume NS
  * x0 == others: TEE2Monitor calls
- *   x0 == 1: set GeneriTimer Counter FRQ
- *   x0 == 2: secondary_cpu_restart
- *   x0 == 3: set the legacy GICD/GICC for 'AArch64+GICv2' SoC
+ *	x0 == 1: set GeneriTimer Counter FRQ
+ *	x0 == 2: secondary_cpu_restart
+ *	x0 == 3: set the legacy GICD/GICC for 'AArch64+GICv2' SoC
  */
-
 smc_called_from_s:
 	cbz x0, switch_to_ns
 	cmp x0, #1
@@ -136,6 +135,7 @@ fiq_called_from_s:
 	set_nsbit x15
 	restore_ns_context
 	clrex
+	spectre_bp_flush
 	eret
 
 fiq_called_from_ns:
@@ -152,6 +152,7 @@ switch_to_ns:
 	restore_ns_context
 	clrex
 #endif
+	spectre_bp_flush
 	eret
 
 #else
@@ -171,6 +172,7 @@ switch_to_ns:
 	restore_ns_context
 	clrex
 #endif
+	spectre_bp_flush
 	eret
 
 /* AArch64 + GICv2 */

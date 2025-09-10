@@ -36,13 +36,18 @@
 							SPSR_IRQ_MASK | SPSR_FIQ_MASK)
 
 #define MPIDR_AFFINITY_MASK		UL(0xFF)
-#define MPIDR_AFFINITY_0(mpidr)	(mpidr & MPIDR_AFFINITY_MASK)
-#define MPIDR_AFFINITY_1(mpidr)	((mpidr >> 8) & MPIDR_AFFINITY_MASK)
-#define MPIDR_AFFINITY_2(mpidr)	((mpidr >> 16) & MPIDR_AFFINITY_MASK)
-#define MPIDR_AFFINITY_3(mpidr)	((mpidr >> 32) & MPIDR_AFFINITY_MASK)
+#define MPIDR_AFFINITY_0(mpidr)	((mpidr) & MPIDR_AFFINITY_MASK)
+#define MPIDR_AFFINITY_1(mpidr)	(((mpidr) >> 8) & MPIDR_AFFINITY_MASK)
+#define MPIDR_AFFINITY_2(mpidr)	(((mpidr) >> 16) & MPIDR_AFFINITY_MASK)
+#define MPIDR_AFFINITY_3(mpidr)	(((mpidr) >> 32) & MPIDR_AFFINITY_MASK)
 #define MPIDR_BITMASK			UL(0xff00ffffff)
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <limits.h>
 #include <sys/cdefs.h>
 
@@ -153,6 +158,10 @@ static inline unsigned long smc_call(
 		BUILD_ERROR_ON(!TYPE_COMPATIBLE(flags, unsigned long)); \
 		flags = arch_irq_save();								\
 	} while (0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 #endif

@@ -23,7 +23,7 @@ _start:
 cpu_setup_el3:
 	bl _cpu_init_el3
 	bl _stack_init_el3
-#	bl _mmu_init_el3
+	bl _mmu_init_el3
 	bl _tpidr_init_el3
 
 	/* Switch to EL1 */
@@ -97,6 +97,22 @@ _cpu_init_el3:
 	ldr x1, =(1 << 8)
 	msr cptr_el3, x1
 	isb
+
+	/*
+	 * If MPAM is implemented:
+	 * Disable MPAM's Function
+	 * Disable MPAM's TrapToEL3
+	 */
+	mrs x1, id_aa64pfr0_el1
+	ubfx x1, x1, #40, #4
+	mrs x2, id_aa64pfr1_el1
+	ubfx x2, x2, #16, #4
+	orr x1, x1, x2
+	cbz x1, skip_mpam
+	msr mpam3_el3, xzr
+	isb
+
+skip_mpam:
 
 	/*
 	 * Set MDCR - Disable Secure self-hosted debugs
@@ -205,6 +221,25 @@ __mmu_early_init_el3:
 	add x12, x12, #1
 	cmp	x10, #(PMDS_PER_PTD - 1) /* within a PTD */
 	blo	1b
+
+#if defined(AARCH64_WITH_LEGACY_GIC)
+	/*
+	 * Map every unused L1 entry in [0..3] as a 1GB device block.
+	 * The entry that already holds the kernel table descriptor
+	 * (non-zero) is skipped.  This lets the EL3 monitor access
+	 * GICv2 GICC/GICD MMIO registers without disabling the MMU.
+	 */
+	ldr x14, =(PMD_TYPE_SECT | PMD_AF | PMD_ATTRINDX(MT_DEVICE_nGnRnE) | \
+		PMD_UXN | PMD_PXN)
+	mov x9, xzr
+3:	ldr x10, [x5, x9, lsl #3]
+	cbnz x10, 4f
+	orr x10, x14, x9, lsl #PTD_SHIFT
+	str x10, [x5, x9, lsl #3]
+4:	add x9, x9, #1
+	cmp x9, #4
+	blo 3b
+#endif
 
 	/* set SCTLR to turn on the MMU, without WXN */
 	ldr x6, =(SCTLR_VAL_EL3)

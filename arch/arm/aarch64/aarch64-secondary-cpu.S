@@ -25,13 +25,13 @@ FUNC_START secondary_cpu_wait
 	cmp x5, x0
 	bne 1b
 
-	/* invalid the cpu_power_id */
+	/* Invalidate the cpu_power_id */
 	ldr x3, =-1
 	str x3, [x1]
 	dsb ish
 
-	/* cpu_power_id[63:40] contains the logic cpu-id
-	 transfer cpu-id to x0 */
+	/* cpu_power_id[63:40] contains the logical CPU ID,
+	 transfer the CPU ID to x0 */
 	lsr x0, x2, 40
 	br lr
 #else
@@ -45,24 +45,21 @@ FUNC_END secondary_cpu_wait
  */
 FUNC_START secondary_cpu_restart
 #if (CONFIG_NR_CPUS > 1)
+	/* MMU + D-Cache + I-Cache off for EL1/EL2/EL3 */
+	mov x1, #((1 << 0) | (1 << 2) | (1 << 12))
+
 	mrs x0, sctlr_el1
-	bic x0, x0, #(1 << 0) /* Translation off */
-	bic x0, x0, #(1 << 2) /* D-Cache off */
-	bic x0, x0, #(1 << 12) /* I-Cache off */
+	bic x0, x0, x1
 	msr sctlr_el1, x0
 	isb
 
 	mrs x0, sctlr_el2
-	bic x0, x0, #(1 << 0) /* Translation off */
-	bic x0, x0, #(1 << 2) /* D-Cache off */
-	bic x0, x0, #(1 << 12) /* I-Cache off */
+	bic x0, x0, x1
 	msr sctlr_el2, x0
 	isb
 
 	mrs x0, sctlr_el3
-	bic x0, x0, #(1 << 0) /* Translation off */
-	bic x0, x0, #(1 << 2) /* D-Cache off */
-	bic x0, x0, #(1 << 12) /* I-Cache off */
+	bic x0, x0, x1
 	msr sctlr_el3, x0
 	isb
 
@@ -78,12 +75,12 @@ FUNC_START secondary_cpu_restart
 FUNC_END secondary_cpu_restart
 
 /*
- * this jumper only be used for the SoC which can't flexibly
- * assign the secondary CPUs' run entry to the '__memstart'
+ * This trampoline is only used for SoCs that cannot flexibly
+ * assign the secondary CPUs' run entry to '__memstart'.
  *
- * copy this jumper (24-bytes) to the SoC's fix secondary-entry
- * and set '__memstart' to the '.dword' of this jumper (offset 0x10)
- * before release the secondary-cpu
+ * Copy this trampoline (24 bytes) to the SoC's fixed secondary-entry
+ * and set '__memstart' to the '.dword' of this trampoline (offset 0x10)
+ * before releasing the secondary CPU.
  */
 .align 3
 .global secondary_trampoline

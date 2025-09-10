@@ -31,9 +31,9 @@ void setup_ree(void)
 
 	memset(ctx, 0, sizeof(*ctx));
 
-	if (_ctxinit == false) {
+	if (!_ctxinit) {
 		_ctxinit = true;
-/* check if the DTS have REE context pointer, use it firstly if prepsent */
+/* check if the DTS have REE context pointer, use it firstly if present */
 		dn = of_find_compatible_node(NULL, "memory");
 		of_read_property_addr_size(dn, "ree-ctx", 0, &dts_ctx, NULL);
 		if (dts_ctx != 0) {

@@ -243,7 +243,11 @@
 #define MMU_TTBR(pt) ((((long)((pt)->asid)) << ASID_SHIFT) | \
 				virt_to_phys((pt)->ptds))
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <cpu.h>
 #include <map.h>
@@ -261,19 +265,17 @@ typedef struct {unsigned long val; } pte_t;
 typedef struct {unsigned long val; } pmd_t;
 typedef struct {unsigned long val; } ptd_t;
 
-#define PMD_SIZE		((unsigned long)PTES_PER_PMD * sizeof(pte_t))
-#define PTD_SIZE		((unsigned long)PMDS_PER_PTD * sizeof(pmd_t))
-#define PT_SIZE			((unsigned long)PTDS_PER_PT * sizeof(ptd_t))
+#define PMD_SIZE		(PTES_PER_PMD * sizeof(pte_t))
+#define PTD_SIZE		(PMDS_PER_PTD * sizeof(pmd_t))
+#define PT_SIZE			(PTDS_PER_PT * sizeof(ptd_t))
 
 #define ptd_index(x)	(((x) >> PTD_SHIFT) & (PTDS_PER_PT - 1))
 #define pmd_index(x)	(((x) >> PMD_SHIFT) & (PMDS_PER_PTD - 1))
 #define pte_index(x)	(((x) >> PAGE_SHIFT) & (PTES_PER_PMD - 1))
 
 #define ptdp_of(pt)		((ptd_t *)(pt)->ptds)
-#define pmdp_of(ptd)	((pmd_t *)phys_to_virt(((ptd)->val) & \
-		((unsigned long)(~(PTD_SIZE - 1)))))
-#define ptep_of(pmd)	((pte_t *)phys_to_virt(((pmd)->val) & \
-		((unsigned long)(~(PMD_SIZE - 1)))))
+#define pmdp_of(ptd)	((pmd_t *)phys_to_virt(((ptd)->val) & (~(PTD_SIZE - 1))))
+#define ptep_of(pmd)	((pte_t *)phys_to_virt(((pmd)->val) & (~(PMD_SIZE - 1))))
 
 static inline ptd_t *ptd_of(struct pt_struct *pt, unsigned long va)
 {
@@ -294,7 +296,7 @@ static inline int ptd_alloc(ptd_t *ptd)
 {
 	void *pmdp = kzalloc(PTD_SIZE);
 
-	if (pmdp == NULL)
+	if (!pmdp)
 		return -ENOMEM;
 
 	/* link the ptd with its sub-level -> PMD array */
@@ -362,7 +364,7 @@ static inline int pmd_alloc(pmd_t *pmd)
 {
 	void *ptep = kzalloc(PMD_SIZE);
 
-	if (ptep == NULL)
+	if (!ptep)
 		return -ENOMEM;
 
 	/* link the pmd with its sub-level -> PTE array */
@@ -501,6 +503,9 @@ static inline void local_flush_tlb_all(void)
 /*
  * The flush_tlb_asid() invalidates
  * the TLB entries that matches the ASID value.
+ *
+ * With global entries in the TLB, (kpt() pages)
+ * the supplied ASID value is not checked.
  */
 static inline void flush_tlb_asid(unsigned long asid)
 {
@@ -524,10 +529,9 @@ static inline void flush_tlb_asid(unsigned long asid)
 	__va; })
 
 /*
- * The flush_tlb_pte() invalidates
- * a single TLB entry that matches the MVA
- * and (or ASID) values provided as an argument
- * to the function.
+ * The flush_tlb_pte() invalidates a single TLB entry
+ * that matches the MVA and (or ASID) values provided
+ * as an argument to the function.
  *
  * With global entries in the TLB, (kpt() pages)
  * the supplied ASID value is not checked.
@@ -548,6 +552,36 @@ static inline void flush_tlb_pte(unsigned long mva,
 		: "r" (va)
 		: "memory", "cc");
 }
+
+/*
+ * flush_tlb_range() - batch VA-based TLB invalidation.
+ * Single dsb ishst before + N TLBI ops + single dsb ish + isb after.
+ * Used for ASID=0 (global kernel) batch unmap to avoid Nx(dsb+isb).
+ * Double-shot vae1is for Cortex-A55/A57 erratum 1742098 / 1742099.
+ */
+static inline void flush_tlb_range(unsigned long va, size_t nr,
+	unsigned long asid)
+{
+	unsigned long v;
+	unsigned long start = va;
+	size_t i;
+
+	asm volatile("dsb ishst" : : : "memory", "cc");
+	for (i = 0; i < nr; i++, va += PAGE_SIZE) {
+		v = TLBI_VA(va, asid);
+		asm volatile("tlbi vae1is, %0\nnop;nop" : : "r" (v) : "memory", "cc");
+	}
+	asm volatile("dsb ish" : : : "memory", "cc");
+	for (i = 0, va = start; i < nr; i++, va += PAGE_SIZE) {
+		v = TLBI_VA(va, asid);
+		asm volatile("tlbi vae1is, %0" : : "r" (v) : "memory", "cc");
+	}
+	asm volatile("dsb ish\nisb" : : : "memory", "cc");
+}
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 #endif

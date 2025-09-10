@@ -53,7 +53,7 @@ serror_el1_sp1:
 synchronous_el0:
 	save_thread_context_el0
 	bl exception_handler
-	mov sp, x0 /* x0 might be changed during syscall */
+	prepare_irq_ksp x1
  	b exception_return
 	.align 7
 irq_el0:

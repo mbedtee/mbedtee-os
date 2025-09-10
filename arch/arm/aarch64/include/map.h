@@ -29,7 +29,11 @@
 
 #define PA_MASK   ((UL(1) << (VA_BITS)) - 1)
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #if defined(CONFIG_MMU)
 /*
@@ -48,18 +52,6 @@ extern unsigned long __memstart;
 #define virt_to_phys(x) (((unsigned long)(x) - VA_OFFSET) + PA_OFFSET)
 
 /*
- * phys_to_dma and dma_to_phys depends on the SoC design
- *
- * e.g. the AArch64 FVP uses the following design (non-linear):
- ** DRAM, 0GB-2GB  0x00_8000_0000 ~ 0x00_FFFF_FFFF
- ** DRAM, 2GB-32GB 0x08_8000_0000 ~ 0x0F_FFFF_FFFF
- */
-#define phys_to_dma(x) ({ unsigned long _x = (unsigned long)(x); \
-	(_x <= UINT32_MAX) ? (_x & UL(0x7FFFFFFF)) : (_x & UL(0x7FFFFFFFF)); })
-#define dma_to_phys(x) ({ unsigned long _x = (unsigned long)(x); \
-	(_x <= INT32_MAX) ? (_x | UL(0x80000000)) : (_x | UL(0x800000000)); })
-
-/*
  * Case 1: VA_OFFSET = 0xFFFFFFC0_00000000, PA_OFFSET=0x80000000
  * PA [0x80000000 ~ 0xFFFFFFFF] --> VA [0xFFFFFFC0_00000000 ~ 0xFFFFFFC0_FFFFFFFF]
  * PA [0x8_80000000 ~ 0xF_FFFFFFFF] --> VA [0xFFFFFFC8_00000000 ~ 0xFFFFFFCF_7FFFFFFF]
@@ -73,7 +65,6 @@ extern unsigned long __memstart;
  * PA [0x80000000 ~ 0xFFFFFFFF] --> VA [0xFFFFFFB8_00000000 ~ 0xFFFFFFB8_7FFFFFFF]
  * PA [0x8_80000000 ~ 0xF_FFFFFFFF] --> VA [0xFFFFFFC0_00000000 ~ 0xFFFFFFC7_7FFFFFFF]
  */
-#endif
 
 /*
  * 512GB for user space, 512GB for kernel space
@@ -84,7 +75,7 @@ extern unsigned long __memstart;
 /*
  * 64G for each process's ASLR space
  */
-#ifdef CONFIG_ASLR
+#if defined(CONFIG_ASLR)
 #define USER_ASLR_SIZE          UL(0x1000000000)
 #else
 #define USER_ASLR_SIZE          UL(0x0000000000)
@@ -116,4 +107,9 @@ extern unsigned long __memstart;
 #define _KERN_VMA_START ((unsigned long)phys_to_virt(0) - KERN_VMA_SIZE)
 #define KERN_VMA_START (_KERN_VMA_START >= (-(UL(1) << (VA_BITS))) ? \
 					_KERN_VMA_START : (-KERN_VMA_SIZE))
+#ifdef __cplusplus
+}
 #endif
+
+#endif /* !__ASSEMBLY__ */
+#endif /* _MAP_H */

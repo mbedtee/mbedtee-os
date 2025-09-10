@@ -7,6 +7,10 @@
 #ifndef _BARRIER_H
 #define _BARRIER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define isb(option) ({asm volatile ("isb" #option : : : "memory", "cc"); })
 #define dsb(option) ({asm volatile ("dsb " #option : : : "memory", "cc"); })
 #define dmb(option) ({asm volatile ("dmb " #option : : : "memory", "cc"); })
@@ -46,5 +50,9 @@
  * on inner shareable CPUs before any later memory stores
  */
 #define smp_wmb()	dsb(ishst) /* STORE memory barrier - inner shareable domain */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

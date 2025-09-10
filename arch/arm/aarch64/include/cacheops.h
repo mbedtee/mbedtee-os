@@ -7,6 +7,10 @@
 #ifndef _CACHEOPS_H
 #define _CACHEOPS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <barrier.h>
 
 /*
@@ -26,5 +30,9 @@ void flush_cache_louis(void);
  * Invalidate whole instruction cache
  */
 void flush_icache_all(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
