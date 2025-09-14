@@ -6,6 +6,7 @@ menu "ARM Architecture"
 
 choice
 	prompt "ARM Selection"
+	default AARCH64
 
 config AARCH32
 	bool "aarch32"

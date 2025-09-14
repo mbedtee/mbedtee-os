@@ -34,6 +34,7 @@ _prefetch_abort:
 
 _undefined_abort:
 	cpsid aif
+	sub lr, lr, #(BYTES_PER_LONG)
 	save_thread_context
 	bl undefined_abort
 	b exception_return
@@ -53,7 +54,8 @@ _data_abort_might_sleep:
 	mov sp, r0
 	bl data_abort
 	cps #(SVC_MODE)
-	mov sp, r0
+	prepare_irq_ksp
+	sub sp, sp, #(GPR_CTX_SIZE)
 	b exception_return
 
 _syscall_handler:
@@ -66,25 +68,15 @@ _syscall_handler:
 	bl sys_handler
 
 	cps #(SVC_MODE)
-	mov sp, r0 /* r0 might be changed during sys_handler */
 
-#ifdef CONFIG_REE_THREAD
-exception_return:
-	/*
-	 * switch-world can only be done in the monitor mode,
-	 * thus we switch to the monitor mode manually.
-	 */
-	add sp, sp, #(THREAD_CTX_SIZE)
-	cps #(MON_MODE)
-	sub sp, sp, #(THREAD_CTX_SIZE)
-	b monitor_return
-#else
+	prepare_irq_ksp
+	sub sp, sp, #(GPR_CTX_SIZE)
+
 exception_return:
 	bl sched_sighandle
 	restore_thread_context
 	clrex
 	movs pc, lr
-#endif
 
 /*
  * schedule routine (yield to other thread).

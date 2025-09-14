@@ -29,10 +29,13 @@ void setup_ree(void)
 	unsigned long ree_dtb = 0;
 	struct device_node *dn = NULL;
 	unsigned long dts_ctx = 0;
-	struct thread_ctx ctx = {0};
-	struct percpu_ctx rctx = {0};
+	struct thread_ctx ctx;
+	struct percpu_ctx rctx;
 
-/* check if the DTS have REE context pointer, use it firstly if prepsent */
+	memset(&ctx, 0, sizeof(ctx));
+	memset(&rctx, 0, sizeof(rctx));
+
+/* check if the DTS have REE context pointer, use it firstly if present */
 	if (pc->id == 0) {
 		dn = of_find_compatible_node(NULL, "memory");
 		of_read_property_addr_size(dn, "ree-ctx", 0, &dts_ctx, NULL);
@@ -40,7 +43,7 @@ void setup_ree(void)
 			void *va = phys_to_virt(dts_ctx);
 
 			memcpy(&ctx, va, sizeof(ctx)); /* thread_ctx */
-			memcpy(&rctx, va + sizeof(ctx), sizeof(rctx)); /* perpcu_ctx */
+			memcpy(&rctx, va + sizeof(ctx), sizeof(rctx)); /* percpu_ctx */
 
 			IMSG("primary ree-ctx @%lx\n", dts_ctx);
 		} else {
@@ -64,16 +67,7 @@ void setup_ree(void)
 #endif
 	}
 
-#ifdef CONFIG_REE_THREAD
-
-	memcpy((void *)&pc->rctx, &rctx, sizeof(rctx)); /* perpcu_ctx */
-	sched_create_ree_thread(&ctx); /* thread_ctx */
-
-#else
-
 	/* thread_ctx_el3 = thread_ctx + percpu_ctx */
 	memcpy(&pc->rctx, &ctx, sizeof(ctx)); /* thread_ctx */
-	memcpy((void *)&pc->rctx + sizeof(ctx), &rctx, sizeof(rctx)); /* perpcu_ctx */
-
-#endif
+	memcpy((void *)&pc->rctx + sizeof(ctx), &rctx, sizeof(rctx)); /* percpu_ctx */
 }

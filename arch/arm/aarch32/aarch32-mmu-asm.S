@@ -47,7 +47,7 @@ __mmu_common_setting:
 	 * Region 7 -> inner/outer write-back and write-allocate
 	 * Region 0 -> Non-cacheable
 	 */
-#ifdef CONFIG_ARM_BIGLITTLE
+#if defined(CONFIG_ARM_BIGLITTLE)
 	ldr	r1, =0x00088000 /* outer-shareable */
 #else
 	ldr	r1, =0x80088000 /* inner-shareable */

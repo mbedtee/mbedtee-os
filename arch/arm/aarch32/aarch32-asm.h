@@ -39,6 +39,18 @@
 	isb
 .endm
 
+/*
+ * Spectre v2 (CVE-2017-5715): invalidate branch predictor
+ * before returning to NS world. Prevents NS from exploiting
+ * poisoned branch predictor entries left by secure world.
+ *
+ * BPIALL: mcr p15, 0, rX, c7, c5, 6
+ */
+.macro spectre_bp_flush rt
+	mcr	p15, 0, \rt, c7, c5, 6
+	isb
+.endm
+
 .macro jump_smc_handler
 #if defined(CONFIG_RPC)
 	bl smc_handler
@@ -49,7 +61,7 @@
 
 .macro FUNC_START name
 	.global \name
-	.type \name, % function
+	.type \name, %function
 \name :
 .endm
 

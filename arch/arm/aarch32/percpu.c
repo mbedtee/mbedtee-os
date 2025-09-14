@@ -19,13 +19,13 @@
  * during the MMU/SMP unready stage.
  */
 struct percpu percpu_dt[CONFIG_NR_CPUS]
-	__section(".bss") __aligned(64) = {{0}};
+	__section(".bss") __aligned(64);
 
 /*
  * for SVC/SYS/IRQ/UND/ABT modes
  */
 unsigned long common_stack[CONFIG_NR_CPUS][STACK_SIZE/sizeof(long)]
-	__section(".bss") __aligned(64) = {{0}};
+	__section(".bss") __aligned(64);
 
 int __init cpu_data_init(void)
 {
@@ -109,7 +109,7 @@ void percpu_info(void)
 		}
 	}
 
-	if (partstr == NULL)
+	if (!partstr)
 		EMSG("unknown partnum 0x%x\n", m.partnum);
 	else {
 		IMSG("Processor %s r%dp%d\n", partstr, m.major, m.minor);

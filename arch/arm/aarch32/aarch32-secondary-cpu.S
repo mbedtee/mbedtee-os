@@ -24,8 +24,8 @@ FUNC_START secondary_cpu_wait
 	and r4, r2, r3
 	cmp	r4, r0
 	bne 1b
-	/* cpu_power_id[31:24] contains the logic cpu-id
-	 transfer cpu-id to r0 */
+	/* cpu_power_id[31:24] contains the logical CPU ID,
+	 transfer the CPU ID to r0 */
 	mov	r0, r2, lsr #24
 	ldr r2, =0
 	str r2, [r1]
@@ -34,14 +34,14 @@ FUNC_START secondary_cpu_wait
 FUNC_END secondary_cpu_wait
 
 /*
- * this jumper only be used for the SoC which can't flexibly
- * assign the secondary CPUs' run entry to the '__memstart'
+ * This trampoline is only used for SoCs that cannot flexibly
+ * assign the secondary CPUs' run entry to '__memstart'.
  *
- * copy this jumper (8-bytes) to the SoC's fix secondary-entry
- * and set '__memstart' to the '.word' of this jumper
- * before release the secondary-cpu
+ * Copy this trampoline (8 bytes) to the SoC's fixed secondary-entry
+ * and set '__memstart' to the '.word' of this trampoline
+ * before releasing the secondary CPU.
  *
- * 3-level pipe-line, pc = current-pc + 8
+ * 3-level pipeline: pc = current-pc + 8
  */
 .global secondary_trampoline
 secondary_trampoline:

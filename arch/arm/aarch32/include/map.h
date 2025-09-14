@@ -13,7 +13,7 @@
 /*
  * Limitation 1: Max to 2G memory supported
  * Limitation 2: VA_OFFSET and PA_OFFSET must be SECTION aligned
- * Limitation 3: VA_OFFSET must be big than or equal to PA_OFFSET
+ * Limitation 3: VA_OFFSET must be greater than or equal to PA_OFFSET
  *
  * Major possible cases:
  *
@@ -37,7 +37,11 @@
  */
 #define VA_OFFSET   CONFIG_OS_ADDR
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #if defined(CONFIG_MMU)
 /*
@@ -62,13 +66,6 @@ extern unsigned long __memstart;
 	(p < UL(0x80000000)) ? p + UL(0x80000000) : p; })
 
 /*
- * phys_to_dma and dma_to_phys depends on the SoC design
- */
-#define phys_to_dma(x) ((unsigned long)(x) & UL(0x7FFFFFFF))
-#define dma_to_phys(x) ((unsigned long)(x) | UL(0x80000000))
-#endif
-
-/*
  * 1GB for user space, 3GB for kernel space
  */
 #define USER_VA_TOP             UL(0x40000000)
@@ -76,7 +73,7 @@ extern unsigned long __memstart;
 /*
  * 128M for each process's ASLR space
  */
-#ifdef CONFIG_ASLR
+#if defined(CONFIG_ASLR)
 #define USER_ASLR_SIZE          UL(0x08000000)
 #else
 #define USER_ASLR_SIZE          UL(0x00000000)
@@ -108,4 +105,9 @@ extern unsigned long __memstart;
 #define KERN_VMA_SIZE UL(0x40000000)
 #define KERN_VMA_START (USER_VA_TOP)
 
+#ifdef __cplusplus
+}
+#endif
+
+#endif
 #endif

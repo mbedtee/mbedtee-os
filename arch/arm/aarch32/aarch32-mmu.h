@@ -125,7 +125,11 @@
  */
 #define MMU_TTBR(pt) (virt_to_phys((pt)->ptds) | MMU_TTBR_FLAGS)
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <cpu.h>
 #include <trace.h>
@@ -190,7 +194,7 @@ static inline int ptd_alloc(ptd_t *ptd)
 {
 	void *ptep = kzalloc(PTD_SIZE);
 
-	if (ptep == NULL)
+	if (!ptep)
 		return -ENOMEM;
 
 	ptd->addr = virt_to_phys(ptep) >> PTE_SHIFT;
@@ -371,6 +375,9 @@ static inline void local_flush_tlb_all(void)
 /*
  * The flush_tlb_asid() invalidates
  * the TLB entries that matches the ASID value.
+ *
+ * With global entries in the TLB, (kpt() pages)
+ * the supplied ASID value is not checked.
  */
 static inline void flush_tlb_asid(unsigned long asid)
 {
@@ -385,10 +392,9 @@ static inline void flush_tlb_asid(unsigned long asid)
 }
 
 /*
- * The flush_tlb_pte() invalidates
- * a single TLB entry that matches the MVA
- * and (or ASID) values provided as an argument
- * to the function. (TLBIMVAIS)
+ * The flush_tlb_pte() invalidates a single TLB entry
+ * that matches the MVA and (or ASID) values provided
+ * as an argument to the function. (TLBIMVAIS)
  *
  * With global entries in the TLB, (kpt() pages)
  * the supplied ASID value is not checked.
@@ -407,6 +413,27 @@ static inline void flush_tlb_pte(unsigned long mva,
 		: "memory", "cc");
 }
 
+/*
+ * flush_tlb_range() - batch VA-based TLB invalidation (TLBIMVAIS).
+ * Single dsb ishst before + N TLBI ops + single dsb ish + isb after.
+ * Used for ASID=0 (global kernel) batch unmap to avoid Nx(dsb+isb).
+ */
+static inline void flush_tlb_range(unsigned long va, size_t nr,
+	unsigned long asid)
+{
+	size_t i;
+
+	asm volatile("dsb ishst" : : : "memory", "cc");
+	for (i = 0; i < nr; i++, va += PAGE_SIZE)
+		asm volatile("mcr p15, 0, %0, c8, c3, 1"
+			: : "r" (va | asid) : "memory", "cc");
+	asm volatile("dsb ish\nisb" : : : "memory", "cc");
+}
+
+#ifdef __cplusplus
+}
 #endif
 
-#endif
+#endif /* !__ASSEMBLY__ */
+
+#endif /* _MMUPRIV_H */

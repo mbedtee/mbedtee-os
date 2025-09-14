@@ -44,7 +44,12 @@
 
 #define MPIDR_AFFINITY_MASK UL(0xFF)
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <limits.h>
 #include <sys/cdefs.h>
 
@@ -91,7 +96,7 @@ static __always_inline void local_irq_disable(void)
 
 static __always_inline void local_irq_enable(void)
 {
-#ifdef CONFIG_IRQ_FORWARD
+#if defined(CONFIG_IRQ_FORWARD)
 	asm volatile("cpsie aif" : : : "memory", "cc");
 #else
 	asm volatile("cpsie af" : : : "memory", "cc");
@@ -141,6 +146,10 @@ static inline unsigned long smc_call(
 		BUILD_ERROR_ON(!TYPE_COMPATIBLE(flags, unsigned long)); \
 		flags = arch_irq_save();								\
 	} while (0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 #endif

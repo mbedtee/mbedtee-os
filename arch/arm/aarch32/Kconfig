@@ -3,14 +3,6 @@
 
 if AARCH32
 
-config REE_THREAD
-	bool "REE Thread"
-	depends on REE
-	default n
-	help
-		Say Y here to create a virtual thread under TEE control,
-		thus TEE scheduler can easily balance the CPU time slice.
-
 config IRQ_FORWARD
 	bool "Forward IRQ to REE"
 	depends on REE

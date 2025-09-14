@@ -33,10 +33,10 @@
  */
 unsigned long __kern_pgtbl[PTDS_PER_KPT]
 	__section(".bss")
-	__aligned(16384) = {0};
+	__aligned(16384);
 
 /* Process ASIDs */
-static struct ida asida = {0};
+static struct ida asida;
 
 static void __init init_asid(void)
 {
@@ -73,7 +73,7 @@ static int map_page(struct pt_struct *pt,
 
 	pte = pte_of(ptd, va);
 	if (pte_null(pte)) {
-		if (newptd == false)
+		if (!newptd)
 			ptd_hold(pt, va);
 		pte_set(pte, pteval);
 	} else {
@@ -87,28 +87,41 @@ out:
 	return ret;
 }
 
-static void unmap_page(struct pt_struct *pt, unsigned long va)
+/*
+ * Batch unmap of nr consecutive pages starting at va.
+ * Replaces Nx(lock + flush_tlb_pte + unlock) with
+ * 1x(lock + Nxpte_clear + flush_tlb_{asid,range} + unlock).
+ * For user ASIDs: single flush_tlb_asid (TLBIASIDIS).
+ * For ASID=0 (global kernel mappings): flush_tlb_range (TLBIMVAIS per VA).
+ */
+static void unmap_pages(struct pt_struct *pt, unsigned long va, size_t nr)
 {
 	ptd_t *ptd = NULL;
 	pte_t *pte = NULL;
 	unsigned long flags = 0;
+	unsigned long start = va;
+	size_t i;
 
 	spin_lock_irqsave(&pt->lock, flags);
 
-	ptd = ptd_of(pt, va);
-
-	if (ptd_type_page(ptd)) {
+	for (i = 0; i < nr; i++, va += PAGE_SIZE) {
+		ptd = ptd_of(pt, va);
+		if (!ptd_type_page(ptd))
+			continue;
 		pte = pte_of(ptd, va);
-		if (!pte_null(pte)) {
-			pte_set(pte, 0);
-			flush_tlb_pte(va, pt->asid);
-
-			if (ptd_refc(pt, va) == 0)
-				ptd_free(ptd);
-			else
-				ptd_put(pt, va);
-		}
+		if (pte_null(pte))
+			continue;
+		pte_set(pte, 0);
+		if (ptd_refc(pt, va) == 0)
+			ptd_free(ptd);
+		else
+			ptd_put(pt, va);
 	}
+
+	if (pt->asid == 0)
+		flush_tlb_range(start, nr, pt->asid);
+	else
+		flush_tlb_asid(pt->asid);
 
 	spin_unlock_irqrestore(&pt->lock, flags);
 }
@@ -145,23 +158,21 @@ out:
 static void unmap_section(struct pt_struct *pt, unsigned long va)
 {
 	ptd_t *ptd = NULL;
-	unsigned long flags = 0, size = 0;
+	unsigned long flags = 0;
 
 	spin_lock_irqsave(&pt->lock, flags);
 
 	ptd = ptd_of(pt, va);
 	if (ptd_type_sect(ptd)) {
 		iowrite32(0, ptd);
-		flush_tlb_asid(pt->asid);
+		if (pt->asid == 0)
+			flush_tlb_pte(va, pt->asid);
+		else
+			flush_tlb_asid(pt->asid);
 	} else if (ptd_type_page(ptd)) {
 		spin_unlock_irqrestore(&pt->lock, flags);
-		size = SECTION_SIZE;
-		while (size) {
-			unmap_page(pt, va);
-			va += PAGE_SIZE;
-			size -= PAGE_SIZE;
-		}
-		spin_lock_irqsave(&pt->lock, flags);
+		unmap_pages(pt, va, PTES_PER_PTD);
+		return;
 	}
 
 	spin_unlock_irqrestore(&pt->lock, flags);
@@ -170,9 +181,7 @@ static void unmap_section(struct pt_struct *pt, unsigned long va)
 static void map_setzero(struct pt_struct *pt,
 	void *va, unsigned long pteval)
 {
-	if (kpt() == pt)
-		memset(va, 0, PAGE_SIZE);
-	else if (pt == current->proc->pt)
+	if (kpt() == pt || pt == current->proc->pt)
 		memset(va, 0, PAGE_SIZE);
 	else {
 		va = phys_to_virt(pteval & PAGE_MASK);
@@ -183,9 +192,7 @@ static void map_setzero(struct pt_struct *pt,
 static void map_section_setzero(struct pt_struct *pt,
 	void *va, unsigned long secval)
 {
-	if (kpt() == pt)
-		memset(va, 0, SECTION_SIZE);
-	else if (pt == current->proc->pt)
+	if (kpt() == pt || pt == current->proc->pt)
 		memset(va, 0, SECTION_SIZE);
 	else {
 		va = phys_to_virt(secval & SECTION_MASK);
@@ -236,7 +243,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 		return -EINVAL;
 	}
 
-	while (size) {
+	while (size != 0) {
 		if (is_kern == user_addr(va)) {
 			ret = -EACCES;
 			goto out;
@@ -273,7 +280,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 			}
 
 			ret = map_page(pt, va, ptdflag, pteval);
-			if (ret)
+			if (ret != 0)
 				goto out;
 
 			if (flags & PG_ZERO)
@@ -300,7 +307,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 			}
 
 			ret = map_section(pt, va, secval);
-			if (ret)
+			if (ret != 0)
 				goto out;
 
 			if (flags & PG_ZERO)
@@ -313,7 +320,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 	}
 
 out:
-	if (ret)
+	if (ret != 0)
 		unmap(pt, (void *)va_start, va - va_start);
 	return ret;
 }
@@ -321,6 +328,8 @@ out:
 void unmap(struct pt_struct *pt, void *_va, unsigned long size)
 {
 	unsigned long va = (unsigned long)_va;
+	unsigned long batch_va;
+	size_t nr;
 
 	if (!va || !size)
 		return;
@@ -330,12 +339,19 @@ void unmap(struct pt_struct *pt, void *_va, unsigned long size)
 		return;
 	}
 
-	while (size) {
+	while (size != 0) {
 		if ((size < SECTION_SIZE) ||
 			(va & (~SECTION_MASK))) {
-			unmap_page(pt, va);
-			va += PAGE_SIZE;
-			size -= PAGE_SIZE;
+			/* collect all consecutive page-level unmaps into one batch */
+			batch_va = va;
+			nr = 0;
+			do {
+				nr++;
+				va += PAGE_SIZE;
+				size -= PAGE_SIZE;
+			} while (size != 0 &&
+				 ((size < SECTION_SIZE) || (va & (~SECTION_MASK))));
+			unmap_pages(pt, batch_va, nr);
 		} else {
 			unmap_section(pt, va);
 			va += SECTION_SIZE;
@@ -510,18 +526,18 @@ static void free_asid(struct pt_struct *pt)
 /* allocate page table base entry for user process */
 int alloc_pt(struct process *proc)
 {
-	void *ptd = 0;
+	void *ptd = NULL;
 	struct pt_struct *pt = NULL;
 
 	pt = kmalloc(sizeof(struct pt_struct));
-	if (pt == NULL)
+	if (!pt)
 		return -ENOMEM;
 
 	spin_lock_init(&pt->lock);
 
 	ptd = pages_alloc_continuous(PG_RW | PG_ZERO,
 				PT_SIZE >> PAGE_SHIFT);
-	if (ptd == NULL)
+	if (!ptd)
 		goto err;
 
 	alloc_asid(pt);
@@ -561,7 +577,7 @@ int __init map_early(unsigned long pa,	size_t size, unsigned long flags)
 		.ptds = __kern_early_pgtbl,
 		.refc = NULL, .asid = 0,
 		.lock = SPIN_LOCK_INIT(0)};
-	int ret = -1, is_kern = true;
+	int ret = 0, is_kern = true;
 	unsigned long secval = 0;
 	unsigned long cache = 1, ap = 0, ns = 0;
 
@@ -582,7 +598,7 @@ int __init map_early(unsigned long pa,	size_t size, unsigned long flags)
 
 	pa &= SECTION_MASK;
 
-	while (size) {
+	while (size != 0) {
 		secval &= ~SECTION_MASK;
 		secval |= pa;
 		if ((secval & MMU_TYPE_SECTION) == 0) {
@@ -599,7 +615,7 @@ int __init map_early(unsigned long pa,	size_t size, unsigned long flags)
 			 * cached in a TLB, determines whether the TLB entry applies
 			 * to all ASID values, or only to the current ASID value
 			 */
-			secval |= 1 << MMU_SECTION_NG_SHIFT; /* early mapping is nG */
+			secval |= 1U << MMU_SECTION_NG_SHIFT; /* early mapping is nG */
 			secval |= MMU_KERN_DOMAIN << MMU_SECTION_DOM_SHIFT;
 			secval |= ns << MMU_SECTION_NS_SHIFT;
 		}
@@ -629,7 +645,6 @@ void __init mmu_init_kpt(struct pt_struct *pt)
 void __init mmu_init(void)
 {
 	/* only called from CPU-0 */
-	/* only called from CPU-0 */
 
 	BUILD_ERROR_ON(VA_OFFSET < USER_VA_TOP);
 
@@ -648,7 +663,7 @@ void __init mmu_init(void)
 
 	/*
 	 * early pgtbl maps the .text with PG_RW|PG_EXEC @ ASID 0, so
-	 * here need to clean the old TLBs with ASID 0 or all local TLBs,
+	 * here we need to clean the old TLBs with ASID 0 or all local TLBs,
 	 * to make the new flags PG_RO|PG_EXEC in use ASAP.
 	 */
 	local_flush_tlb_all();
