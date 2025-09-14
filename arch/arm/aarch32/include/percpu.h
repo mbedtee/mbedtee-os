@@ -7,6 +7,10 @@
 #ifndef _PERCPU_H
 #define _PERCPU_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <ctx.h>
 #include <cpu.h>
 #include <init.h>
@@ -38,19 +42,13 @@ struct percpu {
 	/* current svc, fiq or smc calls' ctx regs */
 	struct thread_ctx *int_ctx;
 
-#ifdef CONFIG_REE_THREAD
-	/* indicate current sched entity is for REE */
-	int is_ns;
-	/* secure world (TEE) context - exclude the thread ctx */
-	struct percpu_ctx ctx;
-	/* non-secure world (REE) context - exclude the hread ctx  */
-	struct percpu_ctx rctx;
-#else
+	/* lazy FPU: thread whose FPU state is in physical D registers */
+	struct thread *fpu_owner;
+
 	/* secure world (TEE) context - thread + cpu ctx */
 	struct thread_ctx_el3 ctx;
 	/* non-secure world (REE) - thread + cpu ctx */
 	struct thread_ctx_el3 rctx;
-#endif
 } __aligned(64);
 
 extern struct percpu percpu_dt[CONFIG_NR_CPUS];
@@ -98,5 +96,9 @@ static __always_inline unsigned long percpu_mpid(void)
 {
 	return thiscpu->mpid;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

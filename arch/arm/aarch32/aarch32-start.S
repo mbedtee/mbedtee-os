@@ -164,6 +164,22 @@ _cpu_init:
 	isb
 
 	/*
+	 * Set CPACR: grant privileged-only access to VFP (cp10/cp11).
+	 * User-mode VFP access denied - causes UNDEF trap -> lazy FPU handler.
+	 */
+	ldr r1, =(0x500000)
+	mcr p15, 0, r1, c1, c0, 2
+	isb
+
+	/*
+	 * Set FPEXC.EN = 1 to enable VFP unit.
+	 * FPEXC is NOT banked between Secure/Non-Secure worlds.
+	 * Linux may clear this; restore_percpu_ctx re-enables it.
+	 */
+	mov r1, #(1 << 30)
+	vmsr fpexc, r1
+
+	/*
 	 * Set SCR
 	 * Set the FIQ bit so as to route FIQs to monitor mode
 	 * The number of cycles required for data operations is forced to be independent of the data values

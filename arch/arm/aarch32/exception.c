@@ -5,12 +5,17 @@
  */
 
 #include <trace.h>
+#include <ctx.h>
 #include <cpu.h>
 #include <string.h>
 #include <thread.h>
 #include <sys/mmap.h>
-#include <thread.h>
 #include <uaccess.h>
+#include <ksyscall.h>
+
+#if defined(CONFIG_USER)
+#include <elf_proc.h>
+#endif
 
 #define STATUS_MASK1 (0xF)
 #define STATUS_MASK2 (0x1)
@@ -27,7 +32,7 @@
  * table B3-23 Short-descriptor format FSR encodings
  */
 static const char * const fault_encodings[] = {
-	"Reverved",
+	"Reserved",
 	"Alignment fault", /* data fault only */
 	"Watchpoint debug event",
 	"Access flag fault - first level",
@@ -37,28 +42,28 @@ static const char * const fault_encodings[] = {
 	"Translation fault - Second level",
 	"Synchronous external abort",
 	"Domain fault - first level",
-	"Reverved",
+	"Reserved",
 	"Domain fault - second level",
 	"Synchronous external abort on translation table walk - first level",
 	"Permission fault - first level",
 	"Synchronous external abort on translation table walk - second level",
 	"Permission fault - second level",
 	"TLB conflict abort",
-	"Reverved",
-	"Reverved",
-	"Reverved",
+	"Reserved",
+	"Reserved",
+	"Reserved",
 	"IMPLEMENTATION DEFINED - Lockdown",
 	"Reserved",
 	"Asynchronous external abort", /* data fault only */
-	"Reverved",
+	"Reserved",
 	"Asynchronous parity error on memory access", /* data fault only */
 	"Synchronous parity error on memory access",
 	"IMPLEMENTATION DEFINED - Coprocessor abort",
 	"Reserved",
 	"Synchronous parity error on translation table walk - first level",
-	"Reverved",
+	"Reserved",
 	"Synchronous parity error on translation table walk - second level",
-	"Reverved",
+	"Reserved",
 };
 
 static inline unsigned long __df_addr(void)
@@ -159,7 +164,7 @@ static inline int vm_fault_handler(struct thread *t,
 	unsigned long dfsr)
 {
 	void *addr = (void *)(__df_addr() & PAGE_MASK);
-	int flags = (dfsr & (1 << DFSR_WNR)) ? PG_RW : PG_RO;
+	int flags = (dfsr & (1U << DFSR_WNR)) ? PG_RW : PG_RO;
 
 	return vm_fault(t->proc, addr, flags);
 }
@@ -197,8 +202,7 @@ static __nosprot void __oops(struct thread *t, struct thread_ctx *regs)
 		t->ustack_size, t->ustack_uva,
 		t->kstack_size, t);
 
-#ifdef CONFIG_USER
-#include <elf_proc.h>
+#if defined(CONFIG_USER)
 
 	symstr = elf_proc_funcname(proc, regs->pc, &offset);
 	EMSG("pc 0x%lx (%s + %lx)\n", regs->pc, symstr ? symstr : "null", offset);
@@ -243,7 +247,7 @@ __nosprot void *data_abort(struct thread_ctx *regs)
 {
 	struct thread *t = current;
 
-#ifdef CONFIG_USER
+#if defined(CONFIG_USER)
 	unsigned long dfsr = __dfsr();
 	int fs = __dfsr_fs(dfsr);
 
@@ -279,11 +283,37 @@ __nosprot void *prefetch_abort(struct thread_ctx *regs)
 
 __nosprot void *undefined_abort(struct thread_ctx *regs)
 {
-	struct thread *t = current;
+	unsigned long cpacr = 0;
+
+	asm volatile("mrc p15, 0, %0, c1, c0, 2"
+		: "=r" (cpacr) : : "memory", "cc");
+
+	/*
+	 * Lazy FPU trap: when CPACR restricts user-mode VFP access
+	 * (cp10/cp11 = 01, privileged only), a user-mode VFP instruction
+	 * causes an undefined instruction exception. Detect this and
+	 * lazily restore the FPU context.
+	 */
+	if ((regs->spsr & 0x1F) == USR_MODE) {
+		/* cp10/cp11 = 01 (privileged only) -> FPU trap from user */
+		if ((cpacr & 0xF00000) == 0x500000) {
+			struct thread *t = current;
+
+			/* Restore current thread's FPU from sched->regs */
+			restore_fpu_ctx(t->sched_ctx);
+			thiscpu->fpu_owner = t;
+
+			/* Enable full VFP access (cp10/cp11 = 11) */
+			cpacr |= 0xF00000;
+			asm volatile("mcr p15, 0, %0, c1, c0, 2\n\tisb"
+				: : "r" (cpacr) : "memory");
+			return regs;
+		}
+	}
 
 	__undefined_oops();
 
-	__oops(t, regs);
+	__oops(current, regs);
 
 	sched_abort(regs);
 
@@ -295,9 +325,7 @@ __nosprot void *undefined_abort(struct thread_ctx *regs)
  */
 __nosprot void *sys_handler(struct thread_ctx *regs)
 {
-#ifdef CONFIG_SYSCALL
-	extern void *syscall_handler(struct thread_ctx *);
-
+#if defined(CONFIG_SYSCALL)
 	return syscall_handler(regs);
 #else
 	__oops(current, regs);

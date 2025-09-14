@@ -4,7 +4,7 @@ CONFIG_ARM_GICV2=y
 CONFIG_REE=y
 CONFIG_MMU=y
 CONFIG_IRQ_FORWARD=y
-CONFIG_CFLAGS="-mno-thumb-interwork -marm -march=armv7-a -mno-unaligned-access"
+CONFIG_CFLAGS="-mno-thumb-interwork -marm -march=armv7-a -mfloat-abi=softfp -mfpu=vfpv4-d16 -mno-unaligned-access"
 CONFIG_PIC_CFLAGS="-fPIC"
 CONFIG_QEMU_AST2600=y
 CONFIG_NR_CPUS=2

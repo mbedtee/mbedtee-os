@@ -26,100 +26,6 @@ monitor_irq:
 	b   monitor_irq
 	b	monitor_fiq_handler
 
-#ifdef CONFIG_REE_THREAD
-
-.macro check_ns_flag rd
-	mrc p15, 0, \rd, c13, c0, 4
-	ldr \rd, [\rd, #(PERCPU_NS_FLAG)]
-	cmp \rd, #1
-.endm
-
-/* restore secure world in MON mode */
-.macro restore_s_context
-	unset_nsbit r12
-
-	ree_context_ptr r12
-	bl save_precpu_ctx
-
-	tee_context_ptr r12
-	bl restore_precpu_ctx
-.endm
-
-/* restore ns world in MON mode */
-.macro restore_ns_context
-	tee_context_ptr r12
-	bl save_precpu_ctx
-
-	ree_context_ptr r12
-	bl restore_precpu_ctx
-
-	set_nsbit r12
-.endm
-
-/*
- * FIQ is routed to monitor mode
- * but the link value is following FIQ mode (lr + 4).
- */
-monitor_fiq_handler:
-	sub lr, lr, #(BYTES_PER_LONG)
-	is_nsbit_unset r12
-	beq fiq_called_from_s
-	bne fiq_called_from_ns
-
-monitor_smc_handler:
-	is_nsbit_unset r12
-	beq smc_called_from_s
-	bne smc_called_from_ns
-
-fiq_called_from_s:
-	save_thread_context
-	bl irq_handler
-	b monitor_return
-
-fiq_called_from_ns:
-	save_thread_context
-	restore_s_context
-	bl irq_handler
-	b monitor_return
-
-/*
- * TEE2Monitor calls:
- *
- * r0 == 2: secondary_cpu_restart
- */
-smc_called_from_s:
-	cmp r0, #2
-	beq secondary_cpu_restart
-	b .
-
-smc_called_from_ns:
-	save_thread_context
-	restore_s_context
-	jump_smc_handler
-	b monitor_return
-
-.global monitor_return
-monitor_return:
-	check_ns_flag r12
-	beq monitor_return_ns
-monitor_return_s:
-	/* call sighandle only for secure-world */
-	bl sched_sighandle
-	/* s/ns thread might be changed during sighandle, check again */
-	check_ns_flag r12
-	beq monitor_return_ns
-	restore_thread_context
-	clrex
-	movs pc, lr
-
-monitor_return_ns:
-	restore_ns_context
-	restore_thread_context
-	clrex
-	movs pc, lr
-
-#else
-
 /*
  * FIQ is routed to monitor mode
  * but the link value is following FIQ mode (lr + 4).
@@ -144,11 +50,11 @@ fiq_called_from_ns:
 	pop {r7}
 	bl save_thread_ctx
 	unset_nsbit r7
-	bl save_precpu_ctx
+	bl save_percpu_ctx
 
 	tee_context_ptr r0
 	add r12, r0, #(THREAD_CTX_SIZE)
-	bl restore_precpu_ctx
+	bl restore_percpu_ctx
 	bl restore_thread_ctx
 
 	tee_context_ptr r0
@@ -164,11 +70,11 @@ smc_called_from_ns:
 	pop {r7}
 	bl save_thread_ctx
 	unset_nsbit r7
-	bl save_precpu_ctx
+	bl save_percpu_ctx
 
 	tee_context_ptr r0
 	add r12, r0, #(THREAD_CTX_SIZE)
-	bl restore_precpu_ctx
+	bl restore_percpu_ctx
 	bl restore_thread_ctx
 
 	tee_context_ptr r0
@@ -179,6 +85,7 @@ fiq_called_from_s:
 	push {r12, lr}
 	tee_context_ptr r12
 	bl save_thread_ctx
+	bl save_fpu_ctx_eager
 	sub r0, r12, #(THREAD_CTX_SIZE)
 	bl irq_handler
 	b monitor_return
@@ -209,16 +116,17 @@ smc_called_from_s:
 	push {r12, lr}
 	tee_context_ptr r12
 	bl save_thread_ctx
-	bl save_precpu_ctx
+	bl save_fpu_ctx_eager
+	bl save_percpu_ctx
 
 	ree_context_ptr r0
 	add r12, r0, #(THREAD_CTX_SIZE)
-	bl restore_precpu_ctx
+	bl restore_percpu_ctx
 	set_nsbit r12
 	bl restore_thread_ctx
 	clrex
+	spectre_bp_flush r12
 	movs pc, lr
-#endif
 
 /* r0 holds the cpu-id */
 FUNC_START _monitor_stack_init
