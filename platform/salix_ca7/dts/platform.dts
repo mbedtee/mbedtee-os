@@ -89,7 +89,7 @@
 		#size-cells = <1>;
 
 		serial16550@18018600 {
-			compatible = "ns16550"; /* uart2 */
+			compatible = "ns16550a"; /* uart2 */
 			reg = <0x18018600 0x0C>;
 			interrupts = <12>;
 			interrupt-parent = <&intcsoc>;

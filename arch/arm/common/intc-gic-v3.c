@@ -24,6 +24,7 @@
 #define GICD_IGROUPR                (0x0080)
 #define GICD_ISENABLER              (0x0100)
 #define GICD_ICENABLER              (0x0180)
+#define GICD_ICPENDR                (0x0280)
 #define GICD_ICACTIVER              (0x0380)
 #define GICD_IPRIORITY              (0x0400)
 #define GICD_ICFGR                  (0x0C00)
@@ -46,6 +47,7 @@
 #define GICR_IGROUPR                (0x0080 + GICR_SGI_BASE)
 #define GICR_ISENABLER              (0x0100 + GICR_SGI_BASE)
 #define GICR_ICENABLER              (0x0180 + GICR_SGI_BASE)
+#define GICR_ICPENDR                (0x0280 + GICR_SGI_BASE)
 #define GICR_ICACTIVER              (0x0380 + GICR_SGI_BASE)
 #define GICR_IPRIORITY              (0x0400 + GICR_SGI_BASE)
 #define GICR_ICFGR                  (0x0C00 + GICR_SGI_BASE)
@@ -66,7 +68,7 @@
 
 #define GIC_SECURE_PRIORITY_MASK    U(0xFF)
 #define GICD_SECURE_PRIORITY        U(0x00)
-#define GICC_SECURE_PRIORITY        U(0x80)
+#define GICC_SECURE_PRIORITY        U(0xFF)
 
 #define GIC_REG_OFFSET(n)			(BYTES_PER_INT * ((n) / BITS_PER_INT))
 #define GIC_BIT_OFFSET(n)			((n) % BITS_PER_INT)
@@ -417,10 +419,19 @@ static void gic_dist_init(void)
 	version = (gic_read_dist(GICD_PIDR2) >> GICD_VERSION_SHIFT)
 			& GICD_VERSION_MASK;
 
-	IMSG("%d interrupts\n", total);
-	IMSG("GICDv%d\n", version);
+	IMSG("%d interrupts @ GICDv%d\n", total, version);
 
 	assert(version == gic_desc.version);
+
+	/*
+	 * Disable All SPIs
+	 * ID32-ID1019 for SPIs.
+	 */
+	for (i = GIC_SPI_START; i < total; i += BITS_PER_INT) {
+		gic_write_dist(0xFFFFFFFF, GICD_ICENABLER + GIC_REG_OFFSET(i));
+		gic_write_dist(0xFFFFFFFF, GICD_ICPENDR + GIC_REG_OFFSET(i));
+		gic_write_dist(0xFFFFFFFF, GICD_ICACTIVER + GIC_REG_OFFSET(i));
+	}
 
 	/*
 	 * Deault Route SPIs to NS-group1 (non-secure),
@@ -429,15 +440,6 @@ static void gic_dist_init(void)
 	for (i = GIC_SPI_START; i < total; i += BITS_PER_INT) {
 		gic_write_dist(0xFFFFFFFF, GICD_IGROUPR + GIC_REG_OFFSET(i));
 		gic_write_dist(0, GICD_IGRPMODR + GIC_REG_OFFSET(i));
-	}
-
-	/*
-	 * Disable All SPIs
-	 * ID32-ID1019 for SPIs.
-	 */
-	for (i = GIC_SPI_START; i < total; i += BITS_PER_INT) {
-		gic_write_dist(0xFFFFFFFF, GICD_ICACTIVER + GIC_REG_OFFSET(i));
-		gic_write_dist(0xFFFFFFFF, GICD_ICENABLER + GIC_REG_OFFSET(i));
 	}
 
 	/*
@@ -450,13 +452,13 @@ static void gic_dist_init(void)
 	gic_dist_wait_rwp();
 
 	/*
-	 * ARE Enabled
+	 * ARE_S/ARS_NS Enabled
 	 */
 	gic_write_dist((3 << 4), GICD_CTRL);
 	gic_dist_wait_rwp();
 
 	/*
-	 * NS-group1/Secure-group1 interrupts will be forwarded
+	 * NS-group1/Secure-group1 interrupts will be enabled
 	 */
 	gic_write_dist(gic_read_dist(GICD_CTRL) | 6, GICD_CTRL);
 	gic_dist_wait_rwp();
@@ -496,8 +498,10 @@ static void gic_rdist_init(void)
 	 * ID0-ID15 for SGIs.
 	 * ID16-ID31 for PPIs.
 	 */
-	gic_write_rdist(0xFFFFFFFF, GICR_ICACTIVER);
 	gic_write_rdist(0xFFFFFFFF, GICR_ICENABLER);
+	gic_rdist_wait_uwp();
+	gic_write_rdist(0xFFFFFFFF, GICR_ICACTIVER);
+	gic_write_rdist(0xFFFFFFFF, GICR_ICPENDR);
 
 	/*
 	 * Route SGI/PPI to NS-group1
@@ -592,7 +596,6 @@ static void gic_enable_int(struct irq_desc *d)
 	unsigned int gic_num = d->hwirq, cpu = 0;
 
 	spin_lock_irqsave(&gic_desc.lock, flags);
-
 
 	gic_configure_group(gic_num);
 	gic_configure_prio(gic_num);

@@ -40,7 +40,6 @@ static uint64_t armv8_read_cycles(void)
 				:
 				: "memory", "cc");
 
-
 	return v0;
 }
 

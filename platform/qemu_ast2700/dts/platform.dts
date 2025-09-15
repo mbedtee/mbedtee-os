@@ -1,0 +1,124 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ */
+
+/dts-v1/;
+
+#include "memory.dtsi"
+
+#include <generated/autoconf.h>
+
+#define GIC_SPI(x) ((x) + 32)
+#define GIC_PPI(x) ((x))
+
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	cpu {
+		compatible = "arm,cpu";
+		/* mpid of each CPU */
+		cpus = <0x0 0x1 0x2 0x3>;
+	};
+
+	platform {
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/*
+		 * pinctrls cells information
+		 * 0: reg offset,
+		 * 1: first bit position,
+		 * 2: number of bits,
+		 * 3: value
+		 */
+		pinctrl@0 {
+			/* unnecessary for QEMU */
+			compatible = "module,pinctrl";
+			reg = <0 0>;
+			pinctrls = <0 0 0 0>;
+		};
+
+		cpu-power@1 {
+			compatible = "module,cpu-power";
+			/* unnecessary for QEMU */
+			reg = <0 0>;
+		};
+	};
+
+	/* interrupt-controller: CPU side */
+	gic: interrupt-controller@12200000 {
+		compatible = "arm,gic-v3";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+
+		reg = <0 0x12200000 0 0x10000>, /* GICD */
+			<0 0x12280000 0 0x100000>; /* GICR RD_Base / SGI_Base */
+	};
+
+#if !defined(CONFIG_REE) /* Give the GIC132/133 to REE */
+	/* interrupt-controller: GIC132's SoC side */
+	intc_gic132: ast2700-intc-gic132@12101400 {
+		compatible = "aspeed,ast2700-intc";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+
+		interrupts = <GIC_SPI(132)>;
+
+		interrupt-parent = <&gic>;
+
+		reg = <0 0x12101400 0 0x8>;
+
+		max-irqs = <32>;
+	};
+
+	/* interrupt-controller: GIC133's SoC side */
+	intc_gic133: ast2700-intc-gic133@12101500 {
+		compatible = "aspeed,ast2700-intc";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+
+		interrupts = <GIC_SPI(133)>;
+
+		interrupt-parent = <&gic>;
+
+		reg = <0 0x12101500 0 0x8>;
+
+		max-irqs = <32>;
+	};
+#endif
+
+	uart {
+		compatible = "module,uart";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		serial16550@14c33b00 {
+			compatible = "ns16550a";
+			reg = <0x14c33b00 0x100>;
+#if !defined(CONFIG_REE) /* Give the UART INT to REE */
+			interrupt-parent = <&intc_gic132>;
+			interrupts = <18>;
+#endif
+			clock-frequency = <1846153>;
+			current-speed = <115200>;
+			clock-divisor = <64>;
+			reg-shift = <2>;
+			reg-io-width = <4>;
+		};
+	};
+
+	timer {
+		compatible = "arm,armv8-timer";
+		interrupts = <GIC_PPI(29)>; /* PPI 29 for SecureWorld tick_timer, 30 for REE */
+		interrupt-parent = <&gic>;
+		clock-frequency = <125000000>;
+	};
+};

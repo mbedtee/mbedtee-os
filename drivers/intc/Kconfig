@@ -34,6 +34,11 @@ config SALIX_ARM_INTC
 	help
 		Enable salix ARM SoC interrupt-controller.
 		usually connects to the ARM GIC
+config ASPEED_AST2700_INTC
+	bool "ASPEED AST2700 INTC"
+	depends on ARM
+	help
+		Enable ASPEED AST2700 INTC interrupt-controller.
 endchoice
 
 endif

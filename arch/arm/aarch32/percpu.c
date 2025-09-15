@@ -85,9 +85,15 @@ void percpu_info(void)
 	int i = 0;
 	struct midr_struct m = {0};
 	const char *partstr = NULL;
+	unsigned long mpidr = 0;
 
 	asm volatile("mrc p15, 0, %0, c0, c0, 0\n"
 				 : "=r" (m)
+				 :
+				 : "memory", "cc");
+
+	asm volatile("mrc p15, 0, %0, c0, c0, 5\n"
+				 : "=r" (mpidr)
 				 :
 				 : "memory", "cc");
 
@@ -104,5 +110,6 @@ void percpu_info(void)
 	if (partstr == NULL)
 		EMSG("unknown partnum 0x%x\n", m.partnum);
 	else
-		IMSG("Processor %s r%dp%d\n", partstr, m.major, m.minor);
+		IMSG("Processor %s r%dp%d, mpidr %lx\n", partstr,
+			m.major, m.minor, mpidr);
 }

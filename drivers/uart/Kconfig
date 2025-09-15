@@ -13,9 +13,9 @@ choice
 	prompt "UART Selection"
 	default UART_PL011 if ARM
 config UART_16550
-	bool "UART 16550"
+	bool "UART 16550A"
 	help
-		Enable UART 16550.
+		Enable UART 16550A.
 config UART_PL011
 	bool "UART PL011"
 	help

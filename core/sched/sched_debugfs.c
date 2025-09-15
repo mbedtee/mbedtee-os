@@ -21,6 +21,7 @@ static int sched_debugfs_info_read(struct debugfs_file *d)
 	struct thread *t = NULL;
 	unsigned long flags = 0;
 	uint64_t cur_cycles = 0;
+	int digits = 0, percentage = 0;
 	unsigned short cnts[6] = {0};
 	unsigned short total = 0, i = 0, aligned = false, stat = 0;
 	struct timespec tmp;
@@ -76,17 +77,10 @@ static int sched_debugfs_info_read(struct debugfs_file *d)
 		debugfs_printf(d, " | %04d %s", cnts[i], sched_state(i));
 	debugfs_printf(d, "\n");
 
-	debugfs_printf(d, "Cpuidle:");
+	debugfs_printf(d, "Todo:");
 	for_each_online_cpu(i) {
 		sp = &__sched_priv[i];
-		dst = sp->idle;
-		if (dst == NULL)
-			continue;
-
-		/* idle thread's instantaneous loading */
-		debugfs_printf(d, " CPU%d=%02d.%02d%%",
-			i, (int)((uint64_t)dst->lruntime * 100 / sp->lruntime),
-			(int)((((uint64_t)dst->lruntime * 100) % sp->lruntime) * 100 / sp->lruntime));
+		debugfs_printf(d, " CPU%d=[%d/%d]", i, sp->ready_num, sp->total_num);
 		aligned = ((i + 1) % 8 == 0);
 		if (aligned)
 			debugfs_printf(d, "\n");
@@ -94,10 +88,25 @@ static int sched_debugfs_info_read(struct debugfs_file *d)
 	if (!aligned)
 		debugfs_printf(d, "\n");
 
-	debugfs_printf(d, "ReadyCnt:");
+	debugfs_printf(d, "Loading:");
 	for_each_online_cpu(i) {
 		sp = &__sched_priv[i];
-		debugfs_printf(d, " CPU%d=[%d/%d]", i, sp->ready_num, sp->total_num);
+		dst = sp->idle;
+		if (dst == NULL)
+			continue;
+
+		/* CpuLoding = 100 - idle thread's instantaneous loading */
+		percentage = (uint64_t)dst->lruntime * 100 / sp->lruntime;
+		digits = (((uint64_t)dst->lruntime * 100) % sp->lruntime) * 100 / sp->lruntime;
+		if (digits == 0) {
+			percentage = 100 - percentage;
+		} else {
+			percentage = 99 - percentage;
+			digits = 100 - digits;
+		}
+		if (percentage < 0)
+			digits = percentage = 0;
+		debugfs_printf(d, " CPU%d=%02d.%02d%%", i, percentage, digits);
 		aligned = ((i + 1) % 8 == 0);
 		if (aligned)
 			debugfs_printf(d, "\n");

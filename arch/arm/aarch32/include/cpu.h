@@ -38,7 +38,11 @@
 
 #define VALID_CPUID(x)      ((unsigned int)(x) < CONFIG_NR_CPUS)
 
+#if defined(CONFIG_ARM_BIGLITTLE)
 #define MPIDR_BITMASK       UL(0x00ffffff)
+#else
+#define MPIDR_BITMASK       UL(0xff)
+#endif
 
 #define MPIDR_AFFINITY_MASK UL(0xFF)
 

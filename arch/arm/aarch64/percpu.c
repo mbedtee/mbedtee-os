@@ -120,6 +120,7 @@ void percpu_info(void)
 	int i = 0;
 	struct midr_struct m = {0};
 	const char *partstr = NULL;
+	unsigned long mpidr = 0;
 
 	BUILD_ERROR_ON(sizeof(struct thread_ctx_el3) > 1024);
 
@@ -128,6 +129,7 @@ void percpu_info(void)
 				 :
 				 : "memory", "cc");
 
+	mpidr = read_system_reg(mpidr_el1);
 
 	assert(m.impl == MIDR_ARM_IMPL);
 	assert(m.arch == MIDR_ARM_ARCH);
@@ -142,5 +144,6 @@ void percpu_info(void)
 	if (partstr == NULL)
 		EMSG("unknown partnum 0x%x\n", m.partnum);
 	else
-		IMSG("Processor %s r%dp%d\n", partstr, m.major, m.minor);
+		IMSG("Processor %s r%dp%d, mpidr %lx\n", partstr,
+			m.major, m.minor, mpidr);
 }

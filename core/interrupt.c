@@ -595,6 +595,7 @@ void irq_migrating(void)
 void __init irq_init(void)
 {
 	struct device_node *dn = NULL, *parent = NULL;
+	struct device_node *from = NULL;
 	struct of_compat_init *start = NULL;
 	struct of_compat_init *end = NULL;
 	struct of_compat_init *oci = NULL;
@@ -615,30 +616,36 @@ void __init irq_init(void)
 		if (oci->init == NULL)
 			continue;
 
-		dn = of_find_compatible_node(NULL, oci->compat);
-		if (dn == NULL)
-			continue;
+		from = NULL;
 
-		if (!of_property_read_bool(dn, "interrupt-controller"))
-			continue;
+		do {
+			dn = of_find_compatible_node(from, oci->compat);
+			if (dn == NULL)
+				break;
 
-		d = kmalloc(sizeof(struct of_irq_init_desc));
-		if (d == NULL)
-			return;
+			if (!of_property_read_bool(dn, "interrupt-controller"))
+				break;
 
-		parent = of_irq_find_parent(dn);
+			d = kmalloc(sizeof(struct of_irq_init_desc));
+			if (d == NULL)
+				return;
 
-		d->oci = oci;
-		d->dn = dn;
-		d->parent = parent;
+			parent = of_irq_find_parent(dn);
 
-		/* root controller, init it directly */
-		if (parent == NULL) {
-			oci->init(dn);
-			list_add_tail(&d->node, &finished);
-		} else {
-			list_add_tail(&d->node, &unfinished);
-		}
+			d->oci = oci;
+			d->dn = dn;
+			d->parent = parent;
+
+			/* root controller, init it directly */
+			if (parent == NULL) {
+				oci->init(dn);
+				list_add_tail(&d->node, &finished);
+			} else {
+				list_add_tail(&d->node, &unfinished);
+			}
+
+			from = dn;
+		} while (1);
 	}
 
 	do {

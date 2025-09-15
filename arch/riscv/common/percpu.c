@@ -59,6 +59,7 @@ void percpu_info(void)
 			if (isa & (1ul << (isa_order[i] - 'a')))
 				isastr[pos++] = isa_order[i];
 		}
+		isastr[pos] = 0;
 		IMSG("cpu%d @ hart%ld - %s S:%d U:%d\n", pc->id,
 			pc->hartid, isastr, isa & (1 << 18) ? 1 : 0,
 			isa & (1 << 20) ? 1 : 0);

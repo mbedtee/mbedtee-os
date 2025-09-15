@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
- * UART 16550 driver internal definition
+ * UART 16550A driver internal definition
  */
 
 #ifndef _UART16550_H

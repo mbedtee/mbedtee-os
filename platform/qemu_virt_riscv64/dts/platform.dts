@@ -76,7 +76,7 @@
 		#size-cells = <1>;
 
 		serial16550@10000000 {
-			compatible = "ns16550";
+			compatible = "ns16550a";
 			reg = <0 0x10000000 0x0C>;
 			interrupts = <10>;
 			interrupt-parent = <&plic>;

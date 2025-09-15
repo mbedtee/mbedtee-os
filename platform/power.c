@@ -89,13 +89,13 @@ int cpu_up(unsigned int cpu, unsigned long pa)
 	unsigned long flags = 0;
 	struct sched_param p = {SCHED_PRIO_MAX};
 
-	if (INVALID_PM_CPU(cpu) || (!pa))
-		return -EINVAL;
-
 	if (in_interrupt())
 		IMSG("Powering on CPU%d@0x%lx\n", cpu, pa);
 	else
 		IMSG("Powering on CPU%d\n", cpu);
+
+	if (INVALID_PM_CPU(cpu) || (!pa))
+		return -EINVAL;
 
 	spin_lock_irqsave(&onlock, flags);
 
