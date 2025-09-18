@@ -1,11 +1,15 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * per-cpu structure
  */
 
 #ifndef _PERCPU_H
 #define _PERCPU_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <ctx.h>
 #include <cpu.h>
@@ -94,5 +98,9 @@ static __always_inline int percpu_hartid(void)
 {
 	return thiscpu->hartid;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

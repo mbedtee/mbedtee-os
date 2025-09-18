@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * scheduler implementation @ RISCV32/RISCV64 related contexts
  */
 
@@ -60,15 +60,19 @@ static void sched_init_ctx(struct sched *s,
 		regs->gp = (unsigned long)&__global_pointer$;
 	}
 
+	regs->sp = regs->sp & ~7UL;
+
 #if defined(CONFIG_MMU)
-	struct pt_struct *pt = t->proc->pt;
+	{
+		struct pt_struct *pt = t->proc->pt;
 
-	regs->satp = SATP_VAL(pt);
+		regs->satp = SATP_VAL(pt);
 
-	if (pt != kpt()) {
-		off_t o = (USER_VA_TOP >> PTD_SHIFT) * sizeof(ptd_t);
+		if (pt != kpt()) {
+			off_t o = (USER_VA_TOP >> PTD_SHIFT) * sizeof(ptd_t);
 
-		memcpy(pt->ptds + o, kpt()->ptds + o, PT_SIZE - o);
+			memcpy(pt->ptds + o, kpt()->ptds + o, PT_SIZE - o);
+		}
 	}
 #endif
 }
@@ -101,7 +105,7 @@ static inline void sched_set_thread_mm(struct sched *s)
 
 		/*
 		 * Saw this reserved ASID, means OS was run out of the ASID,
-		 * here need to clean the all indexed TLBs
+		 * here we need to clean all indexed TLBs
 		 */
 		if (pt->asid == ASID_RESVD)
 			local_flush_tlb_asid(pt->asid);
@@ -184,7 +188,7 @@ void __sched_restore_fuerctx(struct thread_ctx *regs)
 	struct thread *t = current;
 
 	/* FPU is dirty now ? (might be touched by kernel) */
-	if ((regs->fusersaved == true) && user_addr(regs->pc)) {
+	if (regs->fusersaved && user_addr(regs->pc)) {
 		__sched_restore_fctx(sched_of(t), regs);
 		regs->stat |= SR_FS_DIRTY;
 	}
@@ -271,7 +275,7 @@ static void sched_create_idle(struct sched_priv *sp)
 	pid_t id = -1;
 	struct sched_param p = {SCHED_PRIO_MIN};
 
-	id = kthread_create_on(sched_idle, NULL, sp->pc->id, "idle");
+	id = kthread_create_on((void *)sched_idle, NULL, sp->pc->id, "idle");
 	if (id < 0) {
 		EMSG("kthread_create failed %d\n", id);
 		cpu_set_error();

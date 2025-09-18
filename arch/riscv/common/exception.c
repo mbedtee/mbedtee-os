@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * Handle RISCV Exceptions
  */
 
@@ -14,7 +14,11 @@
 #include <sys/mmap.h>
 #include <riscv-mmu.h>
 
-#define RISCV_CAUSE(c) ((c) & 0xF)
+#if defined(CONFIG_USER)
+#include <elf_proc.h>
+#endif
+
+#define RISCV_CAUSE(c) ((c) & LONG_MAX)
 #define IS_INTERRUPT(c) ((c) & BIT(BITS_PER_LONG - 1))
 
 typedef void *(*exc_fn)(struct thread_ctx *);
@@ -100,10 +104,11 @@ static __nosprot void __oops(struct thread *t, struct thread_ctx *regs)
 	EMSG("satp 0x%lx\n", regs->satp);
 	EMSG("cause 0x%lx\n", cause);
 	EMSG("address: 0x%lx\n", addr);
-	EMSG("encoding: %s\n", fault_encodings[RISCV_CAUSE(cause)]);
+	EMSG("encoding: %s\n",
+		RISCV_CAUSE(cause) < ARRAY_SIZE(fault_encodings) ?
+		fault_encodings[RISCV_CAUSE(cause)] : "Unknown");
 
-#ifdef CONFIG_USER
-#include <elf_proc.h>
+#if defined(CONFIG_USER)
 	symstr = elf_proc_funcname(proc, regs->pc, &offset);
 	EMSG("pc 0x%lx (%s + %lx)\n", regs->pc, symstr ? symstr : "null", offset);
 	offset = 0;
@@ -136,7 +141,7 @@ static __nosprot void *abort_handler(struct thread_ctx *regs)
 
 static __nosprot void *page_fault(struct thread_ctx *regs, int flags)
 {
-#ifdef CONFIG_USER
+#if defined(CONFIG_USER)
 	struct process *proc = current->proc;
 	unsigned long addr = __bad_addr() & PAGE_MASK;
 
@@ -158,6 +163,11 @@ static __nosprot void *page_fault(struct thread_ctx *regs, int flags)
 static __nosprot void *page_fault_load(struct thread_ctx *regs)
 {
 	return page_fault(regs, PG_RO);
+}
+
+static __nosprot void *page_fault_exec(struct thread_ctx *regs)
+{
+	return page_fault(regs, PG_RO | PG_EXEC);
 }
 
 static __nosprot void *page_fault_store(struct thread_ctx *regs)
@@ -260,21 +270,22 @@ static const exc_fn exception_routines[] = {
 	abort_handler, abort_handler, instr_handler, abort_handler,
 	abort_handler, abort_handler, abort_handler, abort_handler,
 	ecall_handler, abort_handler, abort_handler, abort_handler,
-	abort_handler, page_fault_load, abort_handler, page_fault_store,
+	page_fault_exec, page_fault_load, abort_handler, page_fault_store,
 };
 
 __nosprot void *exception_handler(struct thread_ctx *regs)
 {
 	unsigned long cause = regs->cause;
 
-	assert((cause & LONG_MAX) < ARRAY_SIZE(exception_routines));
-
 	if (IS_INTERRUPT(cause)) {
 		regs = irq_handler(regs);
 		/* helps to check if there is any timer expired */
 		tevent_isr();
-	} else
+	} else if (RISCV_CAUSE(cause) < ARRAY_SIZE(exception_routines)) {
 		regs = exception_routines[RISCV_CAUSE(cause)](regs);
+	} else {
+		regs = abort_handler(regs);
+	}
 
 	return regs;
 }

@@ -1,15 +1,20 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * RISCV32/RISCV64 context structure
  */
 
 #ifndef _CTX_H
 #define _CTX_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/cdefs.h>
 
-/* a0 offset @ struct thread_ctx.r[]
+/*
+ * a0 offset @ struct thread_ctx.r[]
  * supposed to be x10, but the struct thread_ctx.r[]
  * counts from x5, so the val is 10 - 5 = 5
  */
@@ -21,17 +26,18 @@
  */
 struct thread_ctx {
 	/* 32 generic regs */
-	unsigned long zr;	 // x0 - zero
-	unsigned long lr;    // x1 - ra
-	unsigned long sp;    // x2 - stack
-	unsigned long gp;    // x3 - gp
-	unsigned long tp;    // x4 - current
-	unsigned long r[27]; // x5 ~ x31
+	unsigned long zr;	 /* x0 - zero */
+	unsigned long lr;    /* x1 - ra */
+	unsigned long sp;    /* x2 - stack */
+	unsigned long gp;    /* x3 - gp */
+	unsigned long tp;    /* x4 - current */
+	unsigned long r[27]; /* x5 ~ x31 */
 
 	/* CSR_STATUS */
 	unsigned long stat;
 
-	/* CSR_EPC
+	/*
+	 * CSR_EPC
 	 * pc of the thread before
 	 * enter the exception
 	 */
@@ -40,7 +46,8 @@ struct thread_ctx {
 	/* CSR_CAUSE */
 	unsigned long cause;
 
-	/* current process's SATP for MMU Translation
+	/*
+	 * current process's SATP for MMU Translation
 	 * Table Base (pointer of PTDs) + ASID
 	 */
 	unsigned long satp;
@@ -60,6 +67,8 @@ struct thread_ctx {
 #endif
 } __aligned(8);
 
+#define GPR_CTX_SIZE sizeof(struct thread_ctx)
+
 /* low level save/restore functions for fpu context @ ASM */
 extern void save_fpu_ctx(struct thread_ctx *regs);
 extern void restore_fpu_ctx(struct thread_ctx *regs);
@@ -68,6 +77,10 @@ extern void restore_fpu_ctx(struct thread_ctx *regs);
 extern void __sched_save_fabtctx(void *thread);
 extern void __sched_restore_fuerctx(struct thread_ctx *regs);
 extern void __sched_reset_fuserctx(void *thread, struct thread_ctx *regs);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 
