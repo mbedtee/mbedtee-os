@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * MMU Private Definitions for Sv32 PageTable/TLB Handing.
  */
 
@@ -62,7 +62,11 @@
 #define SATP_VAL(pt) (SATP_MODE | (virt_to_phys((pt)->ptds) >> PAGE_SHIFT) | \
 			(((unsigned long)((pt)->asid)) << SATP_ASID_SHIFT))
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <cpu.h>
 #include <kmalloc.h>
@@ -89,7 +93,7 @@ typedef struct {unsigned long val; } ptd_t;
 
 #define ptdp_of(pt)		((ptd_t *)(pt)->ptds)
 #define ptep_of(ptd)	((pte_t *)phys_to_virt((((ptd)->val) << PPN_BIAS) & \
-						((unsigned long)(~(PTD_SIZE - 1)))))
+						(~(PTD_SIZE - 1))))
 
 static inline ptd_t *ptd_of(struct pt_struct *pt, unsigned long va)
 {
@@ -115,7 +119,7 @@ static inline int ptd_alloc(ptd_t *ptd)
 {
 	void *t = kzalloc(PTD_SIZE);
 
-	if (t == NULL)
+	if (!t)
 		return -ENOMEM;
 
 	/* link the ptd with its sub-level -> PTE array */
@@ -198,6 +202,10 @@ static inline int pte_null(pte_t *pte)
 	return !pte->val;
 }
 
+#ifdef __cplusplus
+}
 #endif
 
-#endif
+#endif /* !__ASSEMBLY__ */
+
+#endif /* _MMUPRIV_H */

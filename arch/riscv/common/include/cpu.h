@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * Definitions related to RISCV32 based CPU
  */
 
@@ -105,6 +105,24 @@
 #define ECALL_SENDIPI     0x51110620 /* Send IPI */
 #define ECALL_APLIC_D     0x51110621 /* APLIC delegation */
 #define ECALL_APLIC_MSI   0x51110622 /* APLIC MSIAddrCfg */
+#define ECALL_SET_PMP     0x51110630 /* Set PMP entries */
+#define ECALL_CCTL_CMD    0x51110631 /* Andes CCTL command */
+
+/*
+ * RISC-V ISA extension feature flags (detected at boot).
+ * Stored as a bitmap in __riscv_features for unified access.
+ *
+ * Standard extensions (bits 0~7)
+ */
+#define RISCV_FEAT_SVPBMT    BIT(0)  /* Svpbmt: page-based memory types */
+#define RISCV_FEAT_ZICBOM    BIT(1)  /* Zicbom: cache-block management */
+#define RISCV_FEAT_SSTC      BIT(2)  /* Sstc: stimecmp CSR */
+
+/*
+ * Vendor extensions (bits 8~15)
+ */
+#define RISCV_FEAT_ANDES     BIT(8)  /* Andes: CCTL cache ops */
+#define RISCV_FEAT_THEAD     BIT(9)  /* T-Head: xtheadcmo cache ops */
 
 #define REG_STR(x) #x
 #define read_csr(reg) ({					\
@@ -156,18 +174,49 @@
 		"memory", "cc");					\
 	__v;									})
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
 #include <limits.h>
 #include <sys/cdefs.h>
 
-extern unsigned long __misa;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-bool is_io_readable(void *addr);
+extern unsigned long __misa;
+extern unsigned long __riscv_features;
+
+bool riscv_io_readable(void *addr);
+
+void riscv_pmp_init(void);
+
+static __always_inline bool riscv_feature(unsigned long feat)
+{
+	return (__riscv_features & feat) != 0;
+}
+
+static __always_inline bool svpbmt_supported(void)
+{
+	return riscv_feature(RISCV_FEAT_SVPBMT);
+}
+
+static __always_inline bool zicbom_supported(void)
+{
+	return riscv_feature(RISCV_FEAT_ZICBOM);
+}
 
 static __always_inline bool sstc_supported(void)
 {
-	extern bool __sstc_supported;
-	return __sstc_supported;
+	return riscv_feature(RISCV_FEAT_SSTC);
+}
+
+static __always_inline bool andes_supported(void)
+{
+	return riscv_feature(RISCV_FEAT_ANDES);
+}
+
+static __always_inline bool thead_supported(void)
+{
+	return riscv_feature(RISCV_FEAT_THEAD);
 }
 
 static __always_inline unsigned int supervisor_bmap(void)
@@ -223,18 +272,22 @@ static inline unsigned long ecall(
 	unsigned long arg0, unsigned long arg1,
 	unsigned long arg2, unsigned long arg3)
 {
-	unsigned long ret = 0;
-
 	register long a0 asm ("a0") = arg0;
 	register long a1 asm ("a1") = arg1;
 	register long a2 asm ("a2") = arg2;
 	register long a3 asm ("a3") = arg3;
 
-	asm volatile("ecall" : "=r" (ret)
-				: "r" (a0), "r" (a1), "r" (a2), "r" (a3)
+	asm volatile("ecall" : "+r" (a0)
+				: "r" (a1), "r" (a2), "r" (a3)
 				: "memory", "cc");
 
-	return ret;
+	return a0;
+}
+
+#ifdef __cplusplus
 }
 #endif
-#endif
+
+#endif /* !__ASSEMBLY__ */
+
+#endif /* _CPU_H */

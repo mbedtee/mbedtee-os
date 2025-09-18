@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * MMU Private Definitions for Sv39 PageTable/TLB Handing.
  */
 
@@ -52,11 +52,27 @@
 #define PTE_ACCESSED    (UL(1) << 6)
 #define PTE_DIRTY       (UL(1) << 7)
 
+/*
+ * Svpbmt: Page-Based Memory Types (PTE bits [62:61])
+ * PMA (00) - Use Physical Memory Attributes (default, cacheable)
+ * NC  (01) - Non-cacheable, idempotent, weakly-ordered (e.g. DMA buffers)
+ * IO  (10) - Non-cacheable, non-idempotent, strongly-ordered (e.g. MMIO)
+ */
+#define PTE_PBMT_PMA    (UL(0) << 61)
+#define PTE_PBMT_NC     (UL(1) << 61)
+#define PTE_PBMT_IO     (UL(2) << 61)
+#define PTE_PBMT_MASK   (UL(3) << 61)
+
 #define PMD_VALID       (UL(1) << 0)
 #define PMD_USER        (UL(1) << 4)
 #define PMD_GLOBAL      (UL(1) << 5)
 #define PMD_ACCESSED    (UL(1) << 6)
 #define PMD_DIRTY       (UL(1) << 7)
+
+#define PMD_PBMT_PMA    PTE_PBMT_PMA
+#define PMD_PBMT_NC     PTE_PBMT_NC
+#define PMD_PBMT_IO     PTE_PBMT_IO
+#define PMD_PBMT_MASK   PTE_PBMT_MASK
 
 #define PTE_RWX         (PTE_READ | PTE_WRITE | PTE_EXECUTABLE)
 
@@ -79,7 +95,11 @@
 #define SATP_VAL(pt) (SATP_MODE | (((long)((pt)->asid)) << SATP_ASID_SHIFT) | \
 			(virt_to_phys((pt)->ptds) >> PAGE_SHIFT))
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <cpu.h>
 #include <kmalloc.h>
@@ -94,9 +114,9 @@ typedef struct {unsigned long val; } pte_t;
 typedef struct {unsigned long val; } pmd_t;
 typedef struct {unsigned long val; } ptd_t;
 
-#define PMD_SIZE		((unsigned long)PTES_PER_PMD * sizeof(pte_t))
-#define PTD_SIZE		((unsigned long)PMDS_PER_PTD * sizeof(pmd_t))
-#define PT_SIZE			((unsigned long)PTDS_PER_PT * sizeof(ptd_t))
+#define PMD_SIZE		(PTES_PER_PMD * sizeof(pte_t))
+#define PTD_SIZE		(PMDS_PER_PTD * sizeof(pmd_t))
+#define PT_SIZE			(PTDS_PER_PT * sizeof(ptd_t))
 
 #define ptd_index(x)	(((x) >> PTD_SHIFT) & (PTDS_PER_PT - 1))
 #define pmd_index(x)	(((x) >> PMD_SHIFT) & (PMDS_PER_PTD - 1))
@@ -104,9 +124,9 @@ typedef struct {unsigned long val; } ptd_t;
 
 #define ptdp_of(pt)		((ptd_t *)(pt)->ptds)
 #define pmdp_of(ptd)	((pmd_t *)phys_to_virt((((ptd)->val) << PPN_BIAS) & \
-						((unsigned long)(~(PTD_SIZE - 1)))))
+						(~(PTD_SIZE - 1))))
 #define ptep_of(pmd)	((pte_t *)phys_to_virt((((pmd)->val) << PPN_BIAS) & \
-						((unsigned long)(~(PMD_SIZE - 1)))))
+						(~(PMD_SIZE - 1))))
 
 static inline ptd_t *ptd_of(struct pt_struct *pt, unsigned long va)
 {
@@ -132,7 +152,7 @@ static inline int ptd_alloc(ptd_t *ptd)
 {
 	void *pmdp = kzalloc(PTD_SIZE);
 
-	if (pmdp == NULL)
+	if (!pmdp)
 		return -ENOMEM;
 
 	/* link the ptd with its sub-level -> PMD array */
@@ -162,7 +182,7 @@ static inline int ptd_refc(struct pt_struct *pt,
 	unsigned long va)
 {
 	if (pt->refc) {
-		unsigned short *refc = (pt->ptds +
+		unsigned short *refc = (pt->refc +
 			ptd_index(va) * sizeof(short));
 
 		return *refc;
@@ -177,7 +197,7 @@ static inline void ptd_hold(struct pt_struct *pt,
 	unsigned long va)
 {
 	if (pt->refc) {
-		unsigned short *refc = (pt->ptds +
+		unsigned short *refc = (pt->refc +
 			ptd_index(va) * sizeof(short));
 
 		*refc += 1;
@@ -191,7 +211,7 @@ static inline void ptd_put(struct pt_struct *pt,
 	unsigned long va)
 {
 	if (pt->refc) {
-		unsigned short *refc = (pt->ptds +
+		unsigned short *refc = (pt->refc +
 			ptd_index(va) * sizeof(short));
 
 		*refc -= 1;
@@ -222,7 +242,7 @@ static inline int pmd_alloc(pmd_t *pmd)
 {
 	void *ptep = kzalloc(PMD_SIZE);
 
-	if (ptep == NULL)
+	if (!ptep)
 		return -ENOMEM;
 
 	/* link the pmd with its sub-level -> PTE array */
@@ -300,6 +320,10 @@ static inline int pte_null(pte_t *pte)
 	return !pte->val;
 }
 
+#ifdef __cplusplus
+}
 #endif
 
-#endif
+#endif /* !__ASSEMBLY__ */
+
+#endif /* _MMUPRIV_H */

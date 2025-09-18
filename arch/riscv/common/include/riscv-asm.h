@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * ASM macros for RISCV
  */
 
@@ -9,6 +9,7 @@
 
 #include <cpu.h>
 #include <map.h>
+#include <cacheops.h>
 
 #include <generated/autoconf.h>
 #include <generated/asm-offsets.h>
@@ -17,7 +18,7 @@
 .option norelax
 	.balign 4
 	.global \name
-	.type \name, % function
+	.type \name, %function
 \name :
 .endm
 
@@ -123,6 +124,10 @@
 	or a2, a2, 0xf0  /* CBZE / CBCFE / CBIE / without-FIOM */
 	csrw menvcfg, a2
 #else
+	/*
+	 * Clear mstatush to ensure MBE/SBE (big-endian bits) are zero,
+	 * guaranteeing little-endian operation before configuring menvcfg.
+	 */
 	csrw mstatush, zero
 	li a2, (1 << 31) | (1 << 30) /* STCE / PBMTE */
 	csrw menvcfgh, a2
@@ -153,56 +158,170 @@
 44:	csrw mtvec, a1 /* resume m-mode exception entry */
 .endm
 
-/* Using PMP TOR: pmpaddr[i-1] <= y < pmpaddr[i] */
-.macro set_pmp
-	/* pmp0cfg: 0 ~ 0x7FFFFFFF is set to RW (major for IO) */
-	li t1, 0x80000000 >> 2
-	csrw pmpaddr0, t1
-	li t2, 1 << 3 | 1 << 7 | 3
-
-	/* pmp1cfg: .data between 0x80000000 ~ PA_OFFSET is set to RWX and Locked */
-	la t3, _start /* physical start */
-	srli t1, t3, 2
-	csrw pmpaddr1, t1
-	li t3, 1 << 3 | 1 << 7 | 7
-	slli t3, t3, 8
-	or t2, t2, t3
-
-	/* pmp2cfg: .text is set to RX and Locked */
-	la t1, __TEXT_END
-	srli t1, t1, 2
-	csrw pmpaddr2, t1
-	li t3, 1 << 3 | 1 << 7 | 5
-	slli t3, t3, 16
-	or t2, t2, t3
-
-	/* pmp3cfg: .rodata is set to R and Locked */
-	la t1, __RODATA_END
-	srli t1, t1, 2
-	csrw pmpaddr3, t1
-	li t3, 1 << 3 | 1 << 7 | 1
-	slli t3, t3, 24
-	or t2, t2, t3
-
-	/* pmp4cfg: others are set to RWX and Locked */
-	li t1, -1
-	csrw pmpaddr4, t1
+/*
+ * Detect ISA extension features by checking if menvcfg's
+ * STCE (Sstc), PBMTE (Svpbmt) and CBCFE (Zicbom) bits stuck
+ * after set_menvcfg. Results are stored as a unified bitmap
+ * in __riscv_features for extensible feature detection.
+ *
+ * Must be called after set_menvcfg.
+ */
+.macro detect_riscv_features
+	la t3, __riscv_features
+	LDR t4, (t3)
+	csrr a1, mtvec
+	la a2, 55f
+	csrw mtvec, a2
 #if defined(CONFIG_64BIT)
-	li t3, 1 << 3 | 1 << 7 | 7
-	slli t3, t3, 32
-	or t2, t2, t3
-
-	/* pmp0cfg ~ pmp4cfg @ pmpcfg0 */
-	csrw pmpcfg0, t2
+	csrr t2, menvcfg
+	/* PBMTE (bit 62) -> RISCV_FEAT_SVPBMT */
+	slli t0, t2, 1
+	srli t0, t0, 63
+	or t4, t4, t0
+	/* CBCFE (bit 6) -> RISCV_FEAT_ZICBOM */
+	srli t0, t2, 6
+	andi t0, t0, 1
+	slli t0, t0, 1
+	or t4, t4, t0
+	/* STCE (bit 63) -> RISCV_FEAT_SSTC */
+	srli t0, t2, 63
+	slli t0, t0, 2
+	or t4, t4, t0
 #else
-	/* pmp0cfg ~ pmp3cfg @ pmpcfg0 */
-	csrw pmpcfg0, t2
-
-	/* pmp4cfg @ pmpcfg1 */
-	li t2, 1 << 3 | 1 << 7 | 7
-	csrw pmpcfg1, t2
+	csrr t2, menvcfgh
+	/* PBMTE (bit 30 of menvcfgh) -> RISCV_FEAT_SVPBMT */
+	srli t0, t2, 30
+	andi t0, t0, 1
+	or t4, t4, t0
+	/* STCE (bit 31 of menvcfgh) -> RISCV_FEAT_SSTC */
+	srli t0, t2, 31
+	slli t0, t0, 2
+	or t4, t4, t0
+	csrr t2, menvcfg
+	/* CBCFE (bit 6) -> RISCV_FEAT_ZICBOM */
+	srli t0, t2, 6
+	andi t0, t0, 1
+	slli t0, t0, 1
+	or t4, t4, t0
 #endif
-	sfence.vma
+	STR t4, (t3)
+	.align 2
+55:	csrw mtvec, a1
+.endm
+
+/*
+ * Andes vendor-specific cache initialization.
+ * Detect Andes CPU by mvendorid (0x31e), invalidate L1 I/D caches
+ * via CCTL, enable caches with CCTL S/U-mode access.
+ * Set RISCV_FEAT_ANDES in __riscv_features.
+ *
+ * Andes CCTL CSRs:
+ *   mcache_ctl (0x7ca) - Cache control register
+ *   mcctlcommand (0x7cc) - CCTL command register
+ *
+ * Must be called after detect_riscv_features.
+ */
+.macro andes_cache_init
+	csrr a1, mtvec
+	csrr t0, mvendorid
+	li t1, 0x31e /* Andes mvendorid */
+	bne t0, t1, 66f
+
+	/* Invalidate L1 I-cache and D-cache via CCTL */
+	la a2, 66f
+	csrw mtvec, a2
+
+	li t0, CCTL_L1I_INVAL_ALL
+	csrw 0x7cc, t0
+	li t0, CCTL_L1D_INVAL_ALL
+	csrw 0x7cc, t0
+
+	/*
+	 * Enable I-cache (bit 0), D-cache (bit 1),
+	 * CCTL S/U-mode access (bit 8)
+	 */
+	csrr t0, 0x7ca
+	li t1, (1 << 0) | (1 << 1) | (1 << 8)
+	or t0, t0, t1
+	csrw 0x7ca, t0
+
+	/* Set RISCV_FEAT_ANDES in __riscv_features */
+	la t3, __riscv_features
+	LDR t4, (t3)
+	li t0, (1 << 8) /* RISCV_FEAT_ANDES */
+	or t4, t4, t0
+	STR t4, (t3)
+
+	.align 2
+66:	csrw mtvec, a1
+.endm
+
+/*
+ * T-Head vendor-specific cache initialization.
+ * Detect T-Head CPU by mvendorid (0x5b7), enable caches via
+ * mhcr (0x7c1), and set RISCV_FEAT_THEAD in __riscv_features
+ * for xtheadcmo cache operations.
+ *
+ * T-Head CSRs:
+ *   mhcr (0x7c1) - Machine Hardware Config Register
+ *     bit 0: IE - I-cache enable
+ *     bit 1: DE - D-cache enable
+ *     bit 2: WA - D-cache write-allocate enable
+ *     bit 3: WB - D-cache write-back enable
+ *     bit 4: RS - Return stack enable
+ *     bit 5: BPE - Branch prediction enable
+ *     bit 6: BTB - Branch target buffer enable
+ *
+ * Must be called after detect_riscv_features.
+ */
+.macro thead_cache_init
+	csrr a1, mtvec
+	csrr t0, mvendorid
+	li t1, 0x5b7 /* T-Head mvendorid */
+	bne t0, t1, 77f
+
+	la a2, 77f
+	csrw mtvec, a2
+
+	/*
+	 * Invalidate L1 I-cache and D-cache before enabling.
+	 * Cache SRAMs may contain stale data after power-on or
+	 * warm reset; enabling without invalidation first could
+	 * cause the CPU to use garbage cache entries.
+	 */
+	.long 0x0100000b /* th.icache.iall */
+	.long 0x0020000b /* th.dcache.iall */
+	.long 0x0190000b /* th.sync.s */
+
+	/* Enable caches via mhcr (0x7c1) if not already enabled */
+	csrr t0, 0x7c1
+	li t1, (1 << 0) | (1 << 1) /* IE | DE */
+	or t0, t0, t1
+	csrw 0x7c1, t0
+
+	csrw mtvec, a1
+
+	/* Set RISCV_FEAT_THEAD in __riscv_features */
+	la t3, __riscv_features
+	LDR t4, (t3)
+	li t0, (1 << 9) /* RISCV_FEAT_THEAD */
+	or t4, t4, t0
+	STR t4, (t3)
+
+	.align 2
+77:	csrw mtvec, a1
+.endm
+
+/*
+ * Set a permissive PMP entry (RWX for all addresses, not locked)
+ * to allow S-mode execution. Fine-grained PMP will be configured
+ * later from S-mode via ecall after DTS is available.
+ */
+.macro set_pmp
+	li t1, -1
+	csrw pmpaddr0, t1
+	li t2, 0xf /* NAPOT | RWX (not locked) */
+	csrw pmpcfg0, t2
 .endm
 
 /*

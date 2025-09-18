@@ -1,11 +1,15 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * Barrier (RISCV)
  */
 
 #ifndef _BARRIER_H
 #define _BARRIER_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define fence(pred, succ) ({asm volatile("fence " #pred "," #succ : : : "memory", "cc"); })
 
@@ -46,5 +50,9 @@
 #define smp_wmb()	fence(w, w)
 
 #define isb() ({asm volatile ("fence.i" : : : "memory", "cc"); })
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

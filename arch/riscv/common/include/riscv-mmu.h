@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * RISCV MMU common header file.
  */
 
@@ -17,7 +17,11 @@
 #include "sv39-mmu.h"
 #endif
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <uaccess.h>
 #include "riscv-tlb.h"
@@ -71,8 +75,12 @@ static inline void mmu_enable(struct pt_struct *pt)
 	write_csr(satp, SATP_VAL(pt));
 }
 
+#ifdef __cplusplus
+}
 #endif
 
-#endif
+#endif /* !__ASSEMBLY__ */
 
-#endif
+#endif /* CONFIG_MMU */
+
+#endif /* _MMU_RISCV_H */

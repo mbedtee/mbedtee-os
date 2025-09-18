@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * lock dependences (32-bits)
  */
 
@@ -34,7 +34,7 @@ FUNC_END arch_atomic_acquire
 
 FUNC_START arch_atomic_release
 #   void arch_atomic_release(struct lockval *lv);
-	amoswap.w zero, zero, (a0)
+	amoswap.w.rl zero, zero, (a0)
 	ret
 FUNC_END arch_atomic_release
 
@@ -61,7 +61,7 @@ FUNC_START arch_semaphore_release
 	lw a3, (a1)
 	bgeu a2, a3, __invalid_release
 	addi a2, a2, 1
-	sc.w.aq a3, a2, (a0)
+	sc.w.rl a3, a2, (a0)
 	bnez a3, 1b
 	mv a0, zero
 	ret

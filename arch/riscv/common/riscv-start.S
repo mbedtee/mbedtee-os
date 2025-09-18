@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * startup entry
  */
 
@@ -122,7 +122,7 @@ check_set_s_mode_delege:
 	 * check if current hart has the supervisor mode,
 	 * usually secondary harts have the supervisor mode
 	 *
-	 * the misa maybe not been implemented (zero), so set
+	 * the misa may not have been implemented (reads as zero), so set
 	 * the S-Mode register to check if exception asserted
 	 *
 	 * beqz a0, means current hart does not have supervisor mode
@@ -146,6 +146,12 @@ check_set_s_mode_delege:
 
 	set_menvcfg
 
+	detect_riscv_features
+
+	andes_cache_init
+
+	thead_cache_init
+
 	set_mstateen0
 
 	/* pass the misa value to supervisor mode software */
@@ -161,6 +167,10 @@ check_set_s_mode_delege:
 	li t1, (1 << 11) | (3 << 18) | (1 << 8)
 	csrw mstatus, t1
 	csrw mepc, t2
+
+	/* Enable M-IPI so this hart can receive software interrupts */
+	csrs mie, 1 << MSIE
+
 	mret
 
 __mmode_harts_routine:
@@ -181,14 +191,17 @@ __smode_start:
 	la a1, exception_entry
 	csrw stvec, a1
 
-	/* check if sstc present */
-	csr_writeable stvec, stimecmp, -1
-	la t0, __sstc_supported
-	sb a0, (t0)
 #else
-	csrr a7, mhartid
+	set_menvcfg
+
+	detect_riscv_features
+
+	andes_cache_init
+
+	thead_cache_init
 
 	/* set the supervisor bitmap if supervisor mode present */
+	csrr a7, mhartid
 	csr_writeable mtvec, sie, 0
 	set_supervisor_map a7, a0
 #endif
@@ -197,27 +210,28 @@ __smode_start:
 FUNC_END _start
 
 #if defined(CONFIG_RISCV_S_MODE)
-FUNC_START is_io_readable
+FUNC_START riscv_io_readable
 	is_readable a0
 	ret
-FUNC_END is_io_readable
-
-.data
-.global __sstc_supported
-__sstc_supported:
-.byte 0
-
-.data
-.balign BYTES_PER_LONG, 0
-.global __misa
-__misa:
-.fill 1, BYTES_PER_LONG, 0
+FUNC_END riscv_io_readable
 
 .bss
 .balign BYTES_PER_LONG, 0
 __mscratch_data: /* +1 for E-Core, e.g. sifive_u */
 .fill MSCRATCH_SIZE * (CONFIG_NR_CPUS + 1), 1, 0
 #endif
+
+.data
+.balign BYTES_PER_LONG, 0
+.global __riscv_features
+__riscv_features:
+.fill 1, BYTES_PER_LONG, 0
+
+.data
+.balign BYTES_PER_LONG, 0
+.global __misa
+__misa:
+.fill 1, BYTES_PER_LONG, 0
 
 .data
 __bss_init_done:

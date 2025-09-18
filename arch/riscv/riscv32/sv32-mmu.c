@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * MMU related functionalities for Sv32 based SoCs.
  */
 
@@ -30,10 +30,10 @@
  */
 unsigned long __kern_pgtbl[PTDS_PER_PT]
 	__section(".bss")
-	__aligned(PAGE_SIZE) = {0};
+	__aligned(PAGE_SIZE);
 
 /* Process ASIDs - 256 */
-static struct ida asida = {0};
+static struct ida asida;
 
 static void __init init_asid(void)
 {
@@ -69,11 +69,11 @@ static int map_page(struct pt_struct *pt,
 
 	pte = pte_of(ptd, va);
 	if (pte_null(pte)) {
-		if (newptd == false)
+		if (!newptd)
 			ptd_hold(pt, va);
 		pte_set(pte, pteval);
 		/*
-		 * in case of the current pt is an userspace proc pt
+		 * if the current pt is a userspace proc pt
 		 *
 		 * for a kernel va, this va might be accessed soon,
 		 * so sync its mapping from kpt() to current proc's pt
@@ -91,38 +91,53 @@ out:
 	return ret;
 }
 
-static void unmap_page(struct pt_struct *pt, unsigned long va)
+/*
+ * Batch unmap of nr consecutive pages starting at va.
+ * Replaces Nx(lock + local_flush_tlb_pte + unlock) with
+ * 1x(lock + Nxpte_clear + unlock + flush).
+ * For ASID=0 (G-bit kernel pages), per-VA global flush is required;
+ * local_flush_tlb_asid(0) does NOT flush G-bit entries.
+ */
+static void unmap_pages(struct pt_struct *pt, unsigned long va, size_t nr)
 {
 	ptd_t *ptd = NULL;
 	pte_t *pte = NULL;
-	unsigned long flags = 0;
-	bool flushtlb = false, clearptd = false;
+	unsigned long flags = 0, clearptd_va = 0;
+	unsigned long start = va;
+	size_t i;
+	bool flushtlb = false;
 
 	spin_lock_irqsave(&pt->lock, flags);
 
-	ptd = ptd_of(pt, va);
-
-	if (!ptd_null(ptd)) {
+	for (i = 0; i < nr; i++, va += PAGE_SIZE) {
+		ptd = ptd_of(pt, va);
+		if (ptd_null(ptd))
+			continue;
 		pte = pte_of(ptd, va);
-		if (!pte_null(pte)) {
-			pte_set(pte, 0);
-			if (PROCESS_ALIVE(pt->proc))
-				flushtlb = true;
-
-			if (ptd_refc(pt, va) == 0) {
-				ptd_free(ptd);
-				clearptd = true;
-			} else
-				ptd_put(pt, va);
-		}
+		if (pte_null(pte))
+			continue;
+		pte_set(pte, 0);
+		if (PROCESS_ALIVE(pt->proc))
+			flushtlb = true;
+		if (ptd_refc(pt, va) == 0) {
+			ptd_free(ptd);
+			clearptd_va = va;
+		} else
+			ptd_put(pt, va);
 	}
 
 	spin_unlock_irqrestore(&pt->lock, flags);
 
-	if (flushtlb)
-		flush_tlb_pte(va, pt->asid);
-	if (clearptd)
-		ptd_sync_clear(va);
+	if (flushtlb) {
+		if (pt->asid == 0) {
+			for (i = 0; i < nr; i++, start += PAGE_SIZE)
+				local_flush_tlb_global_pte(start);
+		} else {
+			local_flush_tlb_asid(pt->asid);
+		}
+	}
+	if (clearptd_va)
+		ptd_sync_clear(clearptd_va);
 }
 
 /*
@@ -146,7 +161,7 @@ static int map_section(struct pt_struct *pt,
 	ptd_set(ptd, val);
 
 	/*
-	 * in case of the current pt is an userspace proc pt
+		 * if the current pt is a userspace proc pt
 	 *
 	 * for a kernel va, this va might be accessed soon,
 	 * so sync its mapping from kpt() to current proc's pt
@@ -166,7 +181,7 @@ out:
 static void unmap_section(struct pt_struct *pt, unsigned long va)
 {
 	ptd_t *ptd = NULL;
-	unsigned long flags = 0, size = 0;
+	unsigned long flags = 0;
 	bool flushtlb = false, clearptd = false;
 
 	spin_lock_irqsave(&pt->lock, flags);
@@ -179,19 +194,18 @@ static void unmap_section(struct pt_struct *pt, unsigned long va)
 		clearptd = true;
 	} else if (!ptd_null(ptd)) {
 		spin_unlock_irqrestore(&pt->lock, flags);
-		size = SECTION_SIZE;
-		while (size) {
-			unmap_page(pt, va);
-			va += PAGE_SIZE;
-			size -= PAGE_SIZE;
-		}
-		spin_lock_irqsave(&pt->lock, flags);
+		unmap_pages(pt, va, PTES_PER_PTD);
+		return;
 	}
 
 	spin_unlock_irqrestore(&pt->lock, flags);
 
-	if (flushtlb)
-		flush_tlb_asid(pt->asid);
+	if (flushtlb) {
+		if (pt->asid == 0)
+			local_flush_tlb_global_pte(va);
+		else
+			local_flush_tlb_asid(pt->asid);
+	}
 	if (clearptd)
 		ptd_sync_clear(va);
 }
@@ -199,9 +213,7 @@ static void unmap_section(struct pt_struct *pt, unsigned long va)
 static void map_setzero(struct pt_struct *pt,
 	void *va, unsigned long pteval)
 {
-	if (kpt() == pt)
-		memset(va, 0, PAGE_SIZE);
-	else if (pt == current->proc->pt)
+	if (kpt() == pt || pt == current->proc->pt)
 		memset(va, 0, PAGE_SIZE);
 	else {
 		va = phys_to_virt((pteval << PPN_BIAS) & PAGE_MASK);
@@ -212,9 +224,7 @@ static void map_setzero(struct pt_struct *pt,
 static void map_section_setzero(struct pt_struct *pt,
 	void *va, unsigned long secval)
 {
-	if (kpt() == pt)
-		memset(va, 0, SECTION_SIZE);
-	else if (pt == current->proc->pt)
+	if (kpt() == pt || pt == current->proc->pt)
 		memset(va, 0, SECTION_SIZE);
 	else {
 		va = phys_to_virt((secval << PPN_BIAS) & SECTION_MASK);
@@ -222,6 +232,13 @@ static void map_section_setzero(struct pt_struct *pt,
 	}
 }
 
+/*
+ * Sv32 uses 32-bit PTE and cannot support Svpbmt (which requires
+ * PTE bits [62:61]). PG_DMA mappings rely on explicit cache management
+ * via flush_cache()/invalidate_cache() when Zicbom is available.
+ * For MMIO, the Physical Memory Attributes (PMA) at platform level
+ * provide the non-cacheable, strongly-ordered behavior.
+ */
 int map(struct pt_struct *pt, unsigned long pa, void *_va,
 	unsigned long size, unsigned long flags)
 {
@@ -257,7 +274,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 	if (flags & PG_EXEC)
 		rwx |= PTE_EXECUTABLE;
 
-	while (size) {
+	while (size != 0) {
 		if (is_kern == user_addr(va)) {
 			ret = -EACCES;
 			goto out;
@@ -281,7 +298,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 			}
 
 			ret = map_page(pt, pteval, va);
-			if (ret)
+			if (ret != 0)
 				goto out;
 
 			if (flags & PG_ZERO)
@@ -306,7 +323,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 			}
 
 			ret = map_section(pt, va, secval);
-			if (ret)
+			if (ret != 0)
 				goto out;
 
 			if (flags & PG_ZERO)
@@ -319,7 +336,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 	}
 
 out:
-	if (ret)
+	if (ret != 0)
 		unmap(pt, (void *)va_start, va - va_start);
 	return ret;
 }
@@ -327,6 +344,8 @@ out:
 void unmap(struct pt_struct *pt, void *_va, unsigned long size)
 {
 	unsigned long va = (unsigned long)_va;
+	unsigned long batch_va;
+	size_t nr;
 
 	if (!va || !size)
 		return;
@@ -336,17 +355,36 @@ void unmap(struct pt_struct *pt, void *_va, unsigned long size)
 		return;
 	}
 
-	while (size) {
+	while (size != 0) {
 		if ((size < SECTION_SIZE) ||
 			(va & (~SECTION_MASK))) {
-			unmap_page(pt, va);
-			va += PAGE_SIZE;
-			size -= PAGE_SIZE;
+			/* collect all consecutive page-level unmaps into one batch */
+			batch_va = va;
+			nr = 0;
+			do {
+				nr++;
+				va += PAGE_SIZE;
+				size -= PAGE_SIZE;
+			} while (size != 0 &&
+				 ((size < SECTION_SIZE) || (va & (~SECTION_MASK))));
+			unmap_pages(pt, batch_va, nr);
 		} else {
 			unmap_section(pt, va);
 			va += SECTION_SIZE;
 			size -= SECTION_SIZE;
 		}
+	}
+
+	/*
+	 * Batch the remote TLB flush: instead of per-page
+	 * IPIs, issue a single ASID-wide flush covering
+	 * all the unmapped pages at once.
+	 */
+	if (PROCESS_ALIVE(pt->proc)) {
+		if (pt->asid)
+			flush_tlb_asid(pt->asid);
+		else
+			flush_tlb_all();
 	}
 }
 
@@ -549,7 +587,7 @@ int __init map_early(unsigned long pa,	size_t size, unsigned long flags)
 		.ptds = __kern_early_pgtbl,
 		.refc = NULL, .asid = 0,
 		.lock = SPIN_LOCK_INIT(0)};
-	int ret = -1, is_kern = true;
+	int ret = 0, is_kern = true;
 	unsigned long secval = 0;
 	unsigned long rwx = PTE_READ;
 
@@ -565,7 +603,7 @@ int __init map_early(unsigned long pa,	size_t size, unsigned long flags)
 
 	pa &= SECTION_MASK;
 
-	while (size) {
+	while (size != 0) {
 		secval &= (1UL << (SECTION_SHIFT - PPN_BIAS)) - 1;
 		secval |= (pa >> PPN_BIAS);
 		if ((secval & PTD_VALID) == 0) {
@@ -576,7 +614,6 @@ int __init map_early(unsigned long pa,	size_t size, unsigned long flags)
 			 * cached in a TLB, determines whether the TLB entry applies
 			 * to all ASID values, or only to the current ASID value
 			 */
-			secval |= is_kern ? 0 : 0; /* early mapping is nG */
 			secval |= is_kern ? 0 : PTD_USER;
 		}
 
@@ -605,7 +642,6 @@ void __init mmu_init_kpt(struct pt_struct *pt)
 void __init mmu_init(void)
 {
 	/* only called from CPU-0 */
-	/* only called from CPU-0 */
 
 	init_asid();
 
@@ -613,7 +649,7 @@ void __init mmu_init(void)
 
 	/*
 	 * early pgtbl maps the .text with PG_RW|PG_EXEC @ ASID 0, so
-	 * here need to clean the old TLBs with ASID 0 or all local TLBs,
+	 * here we need to clean the old TLBs with ASID 0 or all local TLBs,
 	 * to make the new flags PG_RO|PG_EXEC in use ASAP.
 	 */
 	local_flush_tlb_all();

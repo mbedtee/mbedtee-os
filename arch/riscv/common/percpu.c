@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * Define the per-cpu structs
  */
 
@@ -12,24 +12,28 @@
 #include <thread.h>
 
 #include <percpu.h>
+#include <cacheops.h>
 
 unsigned long common_stack[CONFIG_NR_CPUS][STACK_SIZE/sizeof(long)]
-	__section(".bss") __aligned(64) = {0};
+	__section(".bss") __aligned(64);
 
 struct percpu percpu_dt[CONFIG_NR_CPUS]
-	__section(".bss") __aligned(64) = {0};
+	__section(".bss") __aligned(64);
 
 int __init cpu_data_init(void)
 {
 	int ret = -1, i = 0, start = 0, cnt = 0;
 /* +1 for E-Core, e.g. sifive_u S-mode */
 	unsigned int hartid_array[CONFIG_NR_CPUS * 8] = {0};
+	struct device_node *cpu_dn = NULL;
+	unsigned int cacheline = 0;
+
+	cpu_dn = of_find_compatible_node(NULL, "riscv,cpu");
 
 	if (IS_ENABLED(CONFIG_RISCV_S_MODE))
 		start = __ctz(supervisor_bmap());
 
-	ret = __of_property_read_u32_array(
-			of_find_compatible_node(NULL, "riscv,cpu"),
+	ret = __of_property_read_u32_array(cpu_dn,
 			"cpus", hartid_array, CONFIG_NR_CPUS + start);
 	if (ret < 0)
 		return ret;
@@ -42,6 +46,11 @@ int __init cpu_data_init(void)
 		percpu_dt[i].stack = &common_stack[i + 1];
 		cpu_affinity_set(cpus_possible, i);
 	}
+
+	/* Read cache line size from DTS */
+	if (of_property_read_u32(cpu_dn, "cache-line-size", &cacheline) == 0)
+		if (cacheline && !(cacheline & (cacheline - 1)))
+			riscv_cacheline_size = cacheline;
 
 	return 0;
 }
@@ -65,8 +74,8 @@ void percpu_info(void)
 		}
 		isastr[pos] = 0;
 		IMSG("cpu%d @ hart%ld - %s S:%d U:%d\n", pc->id,
-			pc->hartid, isastr, isa & (1 << 18) ? 1 : 0,
-			isa & (1 << 20) ? 1 : 0);
+			pc->hartid, isastr, isa & (1ul << 18) ? 1 : 0,
+			isa & (1ul << 20) ? 1 : 0);
 	} else {
 		IMSG("cpu%d @ hart%ld\n", pc->id, pc->hartid);
 	}

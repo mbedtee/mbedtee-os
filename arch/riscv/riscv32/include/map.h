@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * RISCV32 memory map (layout / Address Spaces)
  */
 
@@ -13,7 +13,7 @@
 /*
  * Limitation 1: Max to 2G memory supported
  * Limitation 2: VA_OFFSET and PA_OFFSET must be SECTION aligned
- * Limitation 3: VA_OFFSET must be big than or equal to PA_OFFSET
+ * Limitation 3: VA_OFFSET must be greater than or equal to PA_OFFSET
  *
  * Major possible cases:
  *
@@ -31,10 +31,18 @@
  * PA [0xC0100000 ~ 0xFFFFFFFF] --> VA [0x80000000 ~ 0xBFEFFFFF]
  * PA [0x80000000 ~ 0x800FFFFF] --> VA [0xBFF00000 ~ 0xBFFFFFFF]
  *
+ * Case 4: VA_OFFSET = 0xC0000000, PA_OFFSET=0x00000000
+ * PA [0x00000000 ~ 0x3FFFFFFF] --> VA [0xC0000000 ~ 0xFFFFFFFF]
+ * PA [0x40000000 ~ 0x7FFFFFFF] --> VA [0x80000000 ~ 0xBFFFFFFF]
+ *
  */
 #define VA_OFFSET   CONFIG_OS_ADDR
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #if defined(CONFIG_MMU)
 /*
@@ -52,17 +60,16 @@ extern unsigned long __memstart;
 #define __phys_to_virt(x) (((unsigned long)(x) - PA_OFFSET) + VA_OFFSET)
 #define __virt_to_phys(x) (((unsigned long)(x) - VA_OFFSET) + PA_OFFSET)
 
+#if defined(CONFIG_MMU)
 #define phys_to_virt(x) ({unsigned long v = __phys_to_virt(x); \
 	(void *)((v < UL(0x80000000)) ? v + UL(0x80000000) : v); })
 
 #define virt_to_phys(x) ({unsigned long p = __virt_to_phys(x); \
-	(p < UL(0x80000000)) ? p + UL(0x80000000) : p; })
-
-/*
- * phys_to_dma and dma_to_phys depends on the SoC design
- */
-#define phys_to_dma(x) ((unsigned long)(x) & UL(0x7FFFFFFF))
-#define dma_to_phys(x) ((unsigned long)(x) | UL(0x80000000))
+	((p - PA_OFFSET) >= UL(0x80000000)) ? p + UL(0x80000000) : p; })
+#else
+/* no MMU: physical address equals virtual address */
+#define phys_to_virt(x) ((void *)(unsigned long)(x))
+#define virt_to_phys(x) ((unsigned long)(x))
 #endif
 
 /*
@@ -73,7 +80,7 @@ extern unsigned long __memstart;
 /*
  * 256M for each process's ASLR space
  */
-#ifdef CONFIG_ASLR
+#if defined(CONFIG_ASLR)
 #define USER_ASLR_SIZE          UL(0x10000000)
 #else
 #define USER_ASLR_SIZE          UL(0x00000000)
@@ -101,4 +108,10 @@ extern unsigned long __memstart;
 #define KERN_VMA_SIZE UL(0x04000000)
 #define KERN_VMA_START ((unsigned long)phys_to_virt(UL(-1)) - KERN_VMA_SIZE + 1)
 
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
 #endif

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * routines for secondary cpus
  */
 
@@ -74,12 +74,12 @@ __is_boot_hart:
 FUNC_END secondary_cpu_wait
 
 /*
- * this jumper only be used for the SoC which can't flexibly
- * assign the secondary CPUs' run entry to the '__memstart'
+ * This trampoline is only used for SoCs that cannot flexibly
+ * assign the secondary CPUs' run entry to '__memstart'.
  *
- * copy this jumper (24-bytes) to the SoC's fix secondary-entry
- * and set '__memstart' to the '.dword' of this jumper (offset 0x10)
- * before release the secondary-cpu
+ * Copy this trampoline (24 bytes) to the SoC's fixed secondary-entry
+ * and set '__memstart' to the '.dword' of this trampoline (offset 0x10)
+ * before releasing the secondary CPU.
  */
 .align 3
 FUNC_START secondary_trampoline

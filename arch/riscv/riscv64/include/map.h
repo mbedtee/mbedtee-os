@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  * RISCV64 memory map (layout / Address Spaces)
  */
 
@@ -29,7 +29,11 @@
 
 #define PA_MASK		((UL(1) << (56)) - 1)
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #if defined(CONFIG_MMU)
 /*
@@ -44,17 +48,14 @@ extern unsigned long __memstart;
 /*
  * convert the kernel phys/virt addresses
  */
+#if defined(CONFIG_MMU)
 #define phys_to_virt(x) ((void *)(((unsigned long)(x) - PA_OFFSET) + VA_OFFSET))
 #define virt_to_phys(x) (((unsigned long)(x) - VA_OFFSET) + PA_OFFSET)
-
-/*
- * phys_to_dma and dma_to_phys depends on the SoC design
- *
- * e.g. the riscv64 virt platform uses the following design:
- ** DRAM, 0GB-32GB  0x00_8000_0000 ~ 0x08_7FFF_FFFF (linear mapping)
- */
-#define phys_to_dma(x) ((unsigned long)(x) - UL(0x80000000))
-#define dma_to_phys(x) ((unsigned long)(x) + UL(0x80000000))
+#else
+/* no MMU: physical address equals virtual address */
+#define phys_to_virt(x) ((void *)(unsigned long)(x))
+#define virt_to_phys(x) ((unsigned long)(x))
+#endif
 
 /*
  * assume the max physical memory is 128GB
@@ -66,7 +67,6 @@ extern unsigned long __memstart;
  * PA [0x80200000 ~ 0x20_7FFFFFFF] --> VA [0xFFFFFFE0_00000000 ~ 0xFFFFFFFF_FFDFFFFF]
  * PA [0x80000000 ~ 0x801FFFFF] --> VA [0xFFFFFFDF_FFE00000 ~ 0xFFFFFFDF_FFFFFFFF]
  */
-#endif
 
 /*
  * 256GB for user space, 256GB for kernel space
@@ -79,7 +79,7 @@ extern unsigned long __memstart;
 /*
  * 16G for each process's ASLR space
  */
-#ifdef CONFIG_ASLR
+#if defined(CONFIG_ASLR)
 #define USER_ASLR_SIZE          UL(0x0400000000)
 #else
 #define USER_ASLR_SIZE          UL(0x0000000000)
@@ -109,4 +109,10 @@ extern unsigned long __memstart;
 #define KERN_VMA_SIZE UL(0x1000000000)
 #define KERN_VMA_START ((unsigned long)(phys_to_virt(0) - KERN_VMA_SIZE) >= KERN_VA_START \
 	 ? ((unsigned long)phys_to_virt(0) - KERN_VMA_SIZE) : (-KERN_VMA_SIZE))
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
 #endif
