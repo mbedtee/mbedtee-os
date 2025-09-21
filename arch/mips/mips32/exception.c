@@ -7,11 +7,17 @@
 #include <ctx.h>
 #include <trace.h>
 #include <thread.h>
+#include <percpu.h>
 #include <uaccess.h>
 #include <syscall.h>
+#include <ksyscall.h>
 #include <interrupt.h>
 #include <sys/mmap.h>
 #include <mips32-tlb.h>
+
+#if defined(CONFIG_USER)
+#include <elf_proc.h>
+#endif
 
 #define MIPS32_CAUSE_MASK (0x1F)
 #define MIPS32_CAUSE ((regs->cause >> 2) & MIPS32_CAUSE_MASK)
@@ -35,22 +41,22 @@ static const char * const fault_encodings[] = {
 	"Condition met on one of the conditional trap instructions teq etc",
 	"Reserved",
 	"Floating point unit exception, more details in the FPU control/status registers", /* 15 */
-	"Reverved",
-	"Reverved",
-	"Reverved",
-	"Reverved",
-	"Reverved", /* 20 */
-	"Reverved",
-	"Reverved",
+	"Reserved",
+	"Reserved",
+	"Reserved",
+	"Reserved",
+	"Reserved", /* 20 */
+	"Reserved",
+	"Reserved",
 	"Instruction or data reference matched a watchpoint",
 	"Machine check",
-	"Reverved",	/* 25 */
+	"Reserved",	/* 25 */
 	"Tried to run an instruction from the MIPS DSP ASE, not enabed",
-	"Reverved",
-	"Reverved",
-	"Reverved",
+	"Reserved",
+	"Reserved",
+	"Reserved",
 	"Cache Error", /* 30 */
-	"Reverved"
+	"Reserved"
 };
 
 /* register names under MIPS oabi 32 */
@@ -104,7 +110,6 @@ static __nosprot void __oops(struct thread *t, struct thread_ctx *regs)
 		t->kstack_size, t);
 
 #if defined(CONFIG_USER)
-#include <elf_proc.h>
 
 	symstr = elf_proc_funcname(proc, regs->pc, &offset);
 	EMSG("pc 0x%lx (%s + %lx)\n", regs->pc, symstr ? symstr : "null", offset);
@@ -142,8 +147,6 @@ static __nosprot void *abort_handler(struct thread_ctx *regs)
 static __nosprot void *sys_handler(struct thread_ctx *regs)
 {
 #if defined(CONFIG_SYSCALL)
-	extern void *syscall_handler(struct thread_ctx *);
-
 	regs->pc += BYTES_PER_INT;
 
 	return syscall_handler(regs);
@@ -246,10 +249,39 @@ static __nosprot void *instr_abort_handler(struct thread_ctx *regs)
 	return abort_handler(regs);
 }
 
+/*
+ * Coprocessor Unusable handler (cause = 11)
+ *
+ * When CONFIG_FPU is set, CP1 (FPU) access is trapped via CU1=0
+ * for lazy FPU context switching. If the exception is for CP1,
+ * restore the thread's FPU state and set CU1 in the saved Status.
+ */
+static __nosprot void *cpu_handler(struct thread_ctx *regs)
+{
+#if defined(CONFIG_FPU)
+	/* Cause.CE bits [29:28] encode which coprocessor */
+	unsigned long ce = (regs->cause >> 28) & 0x3;
+
+	if (ce == 1 && user_addr(regs->pc)) {
+		struct thread *t = current;
+
+		/* Restore current thread's FPU from sched->regs */
+		restore_fpu_ctx(t->sched_ctx);
+		thiscpu->fpu_owner = t;
+
+		/* Set CU1 in saved Status so eret enables CP1 */
+		regs->stat |= STAT_CU1;
+		return regs;
+	}
+#endif
+
+	return abort_handler(regs);
+}
+
 static const exc_fn exception_routines[] = {
 	irq_handler, abort_handler, tlbr_handler, tlbw_handler,
 	abort_handler, abort_handler, abort_handler, abort_handler,
-	sys_handler, abort_handler, instr_abort_handler, abort_handler,
+	sys_handler, abort_handler, instr_abort_handler, cpu_handler,
 	abort_handler, abort_handler, abort_handler, abort_handler,
 	abort_handler, abort_handler, abort_handler, abort_handler,
 	abort_handler, abort_handler, abort_handler, abort_handler,

@@ -14,7 +14,7 @@
 
 .macro FUNC_START name
 	.global \name
-	.type \name, % function
+	.type \name, %function
 \name :
 .endm
 
@@ -49,7 +49,7 @@
 .endm
 
 /*
- * although the pie kernel is not in use,
+ * jump to C, although the pie kernel is not in use,
  * but to keep the compatibility, still use t9 as jumper.
  * In case when you building a pie kernel, remember to add
  * the gap between link/run addresses to t9
@@ -74,12 +74,12 @@
 .macro save_thread_context
 	mfc0	k0, C0_STATUS
 	sll		k0, 27
-	move	k1, sp     /*  continues on the original sp if from kernel */
-	bgez	k0, 1f     /* great than zero means: we come from kernel */
+	move	k1, sp     /* continues on the original sp if from kernel */
+	bgez	k0, 1f     /* greater than zero means: we come from kernel */
 	move	k0, sp
 
 	prepare_thread_ksp k1 /* PERCPU_THREAD_KSP */
-1 : addi	sp, k1, -THREAD_CTX_SIZE
+1 : addi	sp, k1, -GPR_CTX_SIZE
 
 	/*
 	 * old sp -> k0
@@ -89,6 +89,10 @@
 
 	bal		save_thread_ctx
 	nop
+#if defined(CONFIG_FPU)
+	bal		save_fpu_ctx_eager
+	nop
+#endif
 .endm
 
 /*
@@ -101,7 +105,6 @@
 	ori		k1, STAT_EXL
 	mtc0	k1, C0_STATUS
 	mtc0	ra, C0_EPC
-
 	ehb
 
 	move	k0, sp
@@ -114,27 +117,42 @@
 	 * old ra -> k1
 	 */
 	bal		save_thread_ctx
-	addi	sp, -THREAD_CTX_SIZE
+	addi	sp, -GPR_CTX_SIZE
+#if defined(CONFIG_FPU)
+	bal		save_fpu_ctx_eager
+	nop
+#endif
 .endm
 
 /*
  * restore the thread context
  */
 .macro restore_thread_context
-	/* sighandle with ctx @ v0, use v0 as sp top */
-	move sp, v0
+	/*
+	 * Switch to IRQ stack before calling sched_sighandle.
+	 *
+	 * The exception frame (GPR_CTX_SIZE) lives on the thread's
+	 * kernel stack. When CONFIG_FPU is set, signal delivery inside
+	 * sched_sighandle saves a full sizeof(thread_ctx) (GPR + FPU)
+	 * to t->kstack. That destination overlaps with the C stack
+	 * growing downward from the exception frame if we stay on the
+	 * thread kernel stack. Switching to the IRQ stack gives
+	 * sched_sighandle a separate stack, matching AArch32/64 design.
+	 */
+	move	a0, v0
 
-	move a0, v0
+	prepare_irq_ksp sp
+	addi	sp, -GPR_CTX_SIZE
 
-	jump sched_sighandle
+	jump	sched_sighandle
 
 	/* restore context @ v0 */
-	bal restore_thread_ctx
-	move sp, v0
+	bal		restore_thread_ctx
+	move	sp, v0
 
 	/* clear k0/k1 */
-	move k0, zero
-	move k1, zero
+	move	k0, zero
+	move	k1, zero
 .endm
 
 .macro align_ebase

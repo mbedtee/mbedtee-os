@@ -137,4 +137,157 @@ FUNC_START restore_thread_ctx
 	lw		sp, THREAD_CTX_SP(sp)
 FUNC_END restore_thread_ctx
 
+#if defined(CONFIG_FPU)
+
+/*
+ * save_fpu_ctx(struct thread_ctx *ctx)
+ *
+ * Save CP1/FPU state (FCSR + f0/f1..f30/f31 as 16 doubles)
+ * from physical registers to the FPU area of struct thread_ctx.
+ * a0 - pointer to struct thread_ctx (sched->regs)
+ *
+ * Temporarily enables CP1 (CU1) in Status to access FP registers,
+ * then disable CP1 (CU1) - kernel always run with CU1 disabled.
+ */
+FUNC_START save_fpu_ctx
+	.set	push
+	.set	mips32r2
+	.set	hardfloat
+
+	/* enable CP1 access (CU1) while saving */
+	mfc0	t1, C0_STATUS
+	lui		t6, %hi(STAT_CU1)
+	nor		t5, t6, zero
+	and		t5, t5, t1 /* t5 - disable CP1 (CU1) */
+	or		t6, t6, t1 /* t6 - enable CP1 (CU1) */
+	mtc0	t6, C0_STATUS
+	ehb
+
+	/* save FCSR at GPR_CTX_SIZE(a0) */
+	cfc1	t0, $31
+	sw	t0, GPR_CTX_SIZE(a0)
+
+	/* save f0/f1..f30/f31 as 16 doubles starting at GPR_CTX_SIZE+8(a0) */
+	addiu	a1, a0, GPR_CTX_SIZE + 8
+	sdc1	$f0,  0(a1)
+	sdc1	$f2,  8(a1)
+	sdc1	$f4,  16(a1)
+	sdc1	$f6,  24(a1)
+	sdc1	$f8,  32(a1)
+	sdc1	$f10, 40(a1)
+	sdc1	$f12, 48(a1)
+	sdc1	$f14, 56(a1)
+	sdc1	$f16, 64(a1)
+	sdc1	$f18, 72(a1)
+	sdc1	$f20, 80(a1)
+	sdc1	$f22, 88(a1)
+	sdc1	$f24, 96(a1)
+	sdc1	$f26, 104(a1)
+	sdc1	$f28, 112(a1)
+	sdc1	$f30, 120(a1)
+
+	/* disable CP1 (CU1) */
+	mtc0	t5, C0_STATUS
+	ehb
+
+	.set	pop
+	jr		ra
+	nop
+FUNC_END save_fpu_ctx
+
+/*
+ * restore_fpu_ctx(struct thread_ctx *ctx)
+ *
+ * Restore CP1/FPU state (FCSR + f0/f1..f30/f31 as 16 doubles)
+ * from the FPU area of struct thread_ctx to physical registers.
+ * a0 - pointer to struct thread_ctx (sched->regs)
+ *
+ * Temporarily enables CP1 (CU1) in Status to access FP registers.
+ */
+FUNC_START restore_fpu_ctx
+	.set	push
+	.set	mips32r2
+	.set	hardfloat
+
+	/* enable CP1 access (CU1) while restoring */
+	mfc0	t1, C0_STATUS
+	lui		t0, %hi(STAT_CU1)
+	or		t0, t1, t0
+	mtc0	t0, C0_STATUS
+	ehb
+
+	/* restore f0/f1..f30/f31 as 16 doubles */
+	addiu	a1, a0, GPR_CTX_SIZE + 8
+	ldc1	$f0,  0(a1)
+	ldc1	$f2,  8(a1)
+	ldc1	$f4,  16(a1)
+	ldc1	$f6,  24(a1)
+	ldc1	$f8,  32(a1)
+	ldc1	$f10, 40(a1)
+	ldc1	$f12, 48(a1)
+	ldc1	$f14, 56(a1)
+	ldc1	$f16, 64(a1)
+	ldc1	$f18, 72(a1)
+	ldc1	$f20, 80(a1)
+	ldc1	$f22, 88(a1)
+	ldc1	$f24, 96(a1)
+	ldc1	$f26, 104(a1)
+	ldc1	$f28, 112(a1)
+	ldc1	$f30, 120(a1)
+
+	/* restore FCSR */
+	lw		t0, GPR_CTX_SIZE(a0)
+	ctc1	t0, $31
+
+	/* restore original Status */
+	mtc0	t1, C0_STATUS
+	ehb
+
+	.set	pop
+	jr		ra
+	nop
+FUNC_END restore_fpu_ctx
+
+/*
+ * save_fpu_ctx_eager
+ *
+ * Eagerly save FPU state on exception/interrupt entry.
+ * If fpu_owner is set, save f0-f31/FCSR to fpu_owner->sched_ctx,
+ * clear fpu_owner, and clear CU1 from the exception frame's stat
+ * so that the thread traps on the next FPU access.
+ *
+ * Called from save_thread_context macro (sp = exception frame top).
+ * save_fpu_ctx only clobbers t0, t1, t5, t6, a0, a1.
+ */
+FUNC_START save_fpu_ctx_eager
+	la		t3, percpu_dt
+	lw		t1, PERCPU_FPU_OWNER(t3)
+	beqz	t1, 1f
+	nop
+
+	move	t4, ra					/* save own LR */
+	move	t2, a0					/* save a0 (exception frame ptr) */
+	lw		a0, THREAD_SCHED_CTX(t1)	/* a0 = fpu_owner->sched_ctx */
+	bal		save_fpu_ctx
+	nop
+	move	a0, t2					/* restore a0 */
+
+	sw		zero, PERCPU_FPU_OWNER(t3)	/* fpu_owner = NULL */
+
+	/* clear CU1 from exception frame stat so thread traps on next FPU use */
+	lw		t0, THREAD_CTX_STAT(sp)
+	lui		t5, %hi(STAT_CU1)
+	nor		t5, t5, zero
+	and		t0, t0, t5
+	sw		t0, THREAD_CTX_STAT(sp)
+
+	jr		t4
+	nop
+1:
+	jr		ra
+	nop
+FUNC_END save_fpu_ctx_eager
+
+#endif /* CONFIG_FPU */
+
 .set	pop

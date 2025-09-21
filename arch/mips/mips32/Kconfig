@@ -3,9 +3,18 @@
 
 if MIPS32
 
+config FPU
+	bool "MIPS32 Hardware FPU (CP1)"
+	default y
+	help
+		Say Y to enable hardware coprocessor 1 (CP1 / FPU) support.
+		Select for CPUs with a hardware FPU (e.g. MIPS74Kf).
+		Enables Lazy-FPU context save/restore and GPR-only
+		compressed exception frames.
+
 config CFLAGS
 	string "MIPS32_CFLAGS"
-	default "-EL -mips32r2 -G0 -msoft-float -minterlink-mips16 -mcode-readable=pcrel -mno-gpopt"
+	default "-EL -mips32r2 -G0 -minterlink-mips16 -mcode-readable=pcrel -mno-gpopt"
 	help
 		Define the default compile FLAGS.
 

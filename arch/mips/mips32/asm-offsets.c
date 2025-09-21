@@ -6,6 +6,7 @@
 
 #include <ctx.h>
 #include <percpu.h>
+#include <thread.h>
 #include <sys/types.h>
 
 #define DEFINE(name, value) \
@@ -54,10 +55,16 @@ int main(void)
 	DEFINE(THREAD_CTX_UL, offsetof(struct thread_ctx, userlocal));
 
 	DEFINE(THREAD_CTX_SIZE, sizeof(struct thread_ctx));
+	DEFINE(GPR_CTX_SIZE, GPR_CTX_SIZE);
+	DEFINE(FPU_CTX_SIZE, FPU_CTX_SIZE);
 
 	DEFINE(PERCPU_DATA_ASID, offsetof(struct percpu, asid));
 	DEFINE(PERCPU_THREAD_KSP, offsetof(struct percpu, thread_ksp));
 	DEFINE(PERCPU_IRQ_KSP, offsetof(struct percpu, stack));
+#if defined(CONFIG_FPU)
+	DEFINE(PERCPU_FPU_OWNER, offsetof(struct percpu, fpu_owner));
+	DEFINE(THREAD_SCHED_CTX, offsetof(struct thread, sched_ctx));
+#endif
 
 	return 0;
 }

@@ -68,12 +68,16 @@ static void sched_init_ctx(struct sched *s,
 	}
 
 	/*
-	 * patch:
-	 * in case of the gcc gives instructions like:
-	 * "addiu sp,sp,-40"
-	 * "sw v0,40(sp)"
+	 * Ensure 8-byte alignment for MIPS O32 ABI.
+	 *
+	 * Signal delivery inherits the interrupted user SP which
+	 * may be only 4-byte aligned mid-function. sdc1 (store
+	 * double) requires 8-byte alignment, so round down.
+	 *
+	 * The extra 16-byte reservation guards against the GCC
+	 * callee pattern: "addiu sp,sp,-N" / "sw v0,N(sp)".
 	 */
-	regs->sp -= 16;
+	regs->sp = (regs->sp - 16) & ~7UL;
 
 	/*
 	 * From: MIPSABI Position Independent Function Prologue
@@ -84,6 +88,9 @@ static void sched_init_ctx(struct sched *s,
 	 * of the called function in t9.
 	 */
 	regs->r[25] = regs->pc;
+
+	/* lazy FPU: link sched_ctx for FPU trap restore */
+	t->sched_ctx = regs;
 }
 
 /* set the thread and MM info to global */
@@ -106,21 +113,25 @@ static inline void sched_set_thread_mm(struct sched *s)
 	set_current(t);
 
 #if defined(CONFIG_MMU)
-	if (t->tuser)
-		t->tuser->cpuid = pc->id;
+	{
+		unsigned long asid = 0;
 
-	/*
-	 * Saw this reserved ASID, means OS was run out of the ASID,
-	 * here need to clean the all indexed TLBs
-	 */
-	unsigned long asid = t->proc->pt->asid;
-	/*
-	 * Set the PROC specific information -> ASID
-	 */
-	pc->asid = asid;
+		if (t->tuser)
+			t->tuser->cpuid = pc->id;
 
-	if (asid == ASID_RESVD)
-		tlb_invalidate_all();
+		/*
+		 * Saw this reserved ASID, means OS was run out of the ASID,
+		 * here we need to clean all indexed TLBs
+		 */
+		asid = t->proc->pt->asid;
+		/*
+		 * Set the PROC specific information -> ASID
+		 */
+		pc->asid = asid;
+
+		if (asid == ASID_RESVD)
+			tlb_invalidate_all();
+	}
 #endif
 }
 
@@ -132,11 +143,21 @@ static void sched_switch_ctx
 )
 {
 	if (curr)
-		memcpy(&curr->regs, regs, sizeof(*regs));
+		memcpy(&curr->regs, regs, GPR_CTX_SIZE);
 
 	if (next) {
-		memcpy(regs, &next->regs, sizeof(*regs));
+		memcpy(regs, &next->regs, GPR_CTX_SIZE);
 		sched_set_thread_mm(next);
+
+#if defined(CONFIG_FPU)
+		/* Trap FPU - lazy restore on first access */
+		thiscpu->fpu_owner = NULL;
+		/*
+		 * Clear CU1 in CP0_Status so that any FPU access from
+		 * user mode triggers a CpU exception (cause = 11).
+		 */
+		write_cp0_register(C0_STATUS, read_cp0_register(C0_STATUS) & ~STAT_CU1);
+#endif
 	}
 }
 
@@ -145,14 +166,39 @@ static void sched_save_sigctx(struct sched *s,
 {
 	struct thread_ctx *dst = s->thread->kstack;
 
+	/* Copy GPR from exception frame */
 	if (dst != regs)
-		memcpy(dst, regs, sizeof(*regs));
+		memcpy(dst, regs, GPR_CTX_SIZE);
+
+	if (IS_ENABLED(CONFIG_FPU)) {
+		/* Copy FPU from sched->regs (saved by save_fpu_ctx_eager at entry) */
+		memcpy((char *)dst + GPR_CTX_SIZE,
+			(char *)&s->regs + GPR_CTX_SIZE, FPU_CTX_SIZE);
+		/*
+		 * On the CpU trap -> signal path, cpu_handler() set
+		 * fpu_owner and CU1 *after* save_fpu_ctx_eager() had
+		 * already run.  Clear both so the thread takes a clean
+		 * CpU trap on its next FPU access after sigreturn,
+		 * reloading from s->regs (restored by restore_sigctx).
+		 */
+		if (thiscpu->fpu_owner == s->thread) {
+			thiscpu->fpu_owner = NULL;
+			dst->stat &= ~STAT_CU1;
+		}
+	}
 }
 
 static void sched_restore_sigctx(struct sched *s,
 	struct thread_ctx *regs)
 {
-
+	if (IS_ENABLED(CONFIG_FPU)) {
+		/*
+		 * Copy FPU state from saved signal context back to sched->regs.
+		 * The physical FP registers will be lazily restored on next FPU use.
+		 */
+		memcpy((char *)&s->regs + GPR_CTX_SIZE,
+			(char *)regs + GPR_CTX_SIZE, FPU_CTX_SIZE);
+	}
 }
 
 static struct sched *sched_pick_hook(struct sched_priv *sp)
@@ -165,7 +211,7 @@ static void sched_create_idle(struct sched_priv *sp)
 	pid_t id = -1;
 	struct sched_param p = {SCHED_PRIO_MIN};
 
-	id = kthread_create_on(sched_idle, NULL, sp->pc->id, "idle");
+	id = kthread_create_on((void *)sched_idle, NULL, sp->pc->id, "idle");
 
 	assert(id > 0);
 
