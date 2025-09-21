@@ -30,10 +30,10 @@
  * kernel page table directories
  */
 static ptd_t __kern_pgtbl[PTDS_PER_PT]
-	__section(".bss") __aligned(PAGE_SIZE) = {0};
+	__section(".bss") __aligned(PAGE_SIZE);
 
 /* Process ASIDs - 256 */
-static struct ida asida = {0};
+static struct ida asida;
 
 static void __init init_asid(void)
 {
@@ -52,7 +52,7 @@ static int map_page(struct pt_struct *pt,
 
 	spin_lock_irqsave(&pt->lock, flags);
 
-	pteval = phys_to_dma(pteval) | TLB_VALID;
+	pteval = phys_to_tlbpfn(pteval) | TLB_VALID;
 
 	ptd = ptd_of(pt, va);
 	if (ptd_null(ptd)) {
@@ -116,9 +116,7 @@ static void unmap_page(struct pt_struct *pt, unsigned long va)
 static void map_setzero(struct pt_struct *pt,
 	unsigned long pa, void *va)
 {
-	if (kpt() == pt)
-		memset(va, 0, PAGE_SIZE);
-	else if (pt == current->proc->pt)
+	if (kpt() == pt || pt == current->proc->pt)
 		memset(va, 0, PAGE_SIZE);
 	else {
 		va = phys_to_virt(pa & PAGE_MASK);
@@ -166,14 +164,14 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 	if ((flags & PG_RW) == PG_RW)
 		pa |= TLB_WRITEABLE;
 
-	while (size) {
+	while (size != 0) {
 		if (is_kern == user_addr(va)) {
 			ret = -EACCES;
 			goto out;
 		}
 
 		ret = map_page(pt, pa, va);
-		if (ret)
+		if (ret != 0)
 			goto out;
 
 		if (flags & PG_ZERO)
@@ -185,7 +183,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 	}
 
 out:
-	if (ret)
+	if (ret != 0)
 		unmap(pt, (void *)va_start, va - va_start);
 
 	return ret;
@@ -206,7 +204,7 @@ void unmap(struct pt_struct *pt, void *_va, unsigned long size)
 		return;
 	}
 
-	while (size) {
+	while (size != 0) {
 		unmap_page(pt, va);
 		va += PAGE_SIZE;
 		size -= PAGE_SIZE;
@@ -231,7 +229,7 @@ unsigned long user_virt_to_phys_pt(struct pt_struct *pt, void *_va)
 		pte = pte_of(ptd, va);
 		pa = pte->val & (TLB_PFN_MASK << TLB_PFN_SHIFT);
 		if (pa)
-			pa = dma_to_phys(pa);
+			pa = tlbpfn_to_phys(pa);
 	}
 	local_irq_restore(flags);
 

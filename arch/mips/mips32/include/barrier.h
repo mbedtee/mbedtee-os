@@ -7,6 +7,10 @@
 #ifndef _BARRIER_H
 #define _BARRIER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* memory barrier */
 #define mb(option) ({asm volatile ("sync " #option : : : "memory", "cc"); })
 
@@ -31,5 +35,9 @@
  * be finished before any later memory stores
  */
 #define smp_wmb()	wmb()
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

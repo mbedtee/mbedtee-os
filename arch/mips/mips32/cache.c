@@ -26,7 +26,7 @@ static void dcache_va_range_ops(unsigned long start,
 	/* config1 DL [12:10] */
 	line_len = (config1 >> 10) & 7;
 	/* 2 * (1 << DL) */
-	line_len = 1 << (line_len + 1);
+	line_len = 1U << (line_len + 1);
 
 	/* check if there is L2 - for DCACHE_SECONDARY_TAG */
 	config2 = read_cp0_register_ex(C0_CONFIG, 2);
@@ -59,7 +59,6 @@ static void dcache_va_range_ops(unsigned long start,
 		/* patch for memory write-back latency in SOC */
 		ioread32((void *)(start | KSEG1));
 		ioread32((void *)((stop | KSEG1) - line_len));
-		/* patch for memory write-back latency in SOC */
 
 		break;
 	case DCACHE_INV_RANGE:

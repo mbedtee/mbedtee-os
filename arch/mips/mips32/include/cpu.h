@@ -67,6 +67,8 @@
 #define C0_ERROREPC      $30    /* Error Exception Program Counter */
 #define C0_DESAVE        $31    /* Debug Save Register for DSU */
 
+#define STAT_CU1		(UL(1) << 29)
+#define STAT_FR			(UL(1) << 26)
 #define STAT_USER		(UL(1) << 4)
 #define STAT_ERL		(UL(1) << 2)
 #define STAT_EXL		(UL(1) << 1)
@@ -103,7 +105,12 @@
 		: : "r" (v) : "memory", "cc");			})
 
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <limits.h>
 #include <sys/cdefs.h>
 #include <percpu.h>
@@ -112,14 +119,15 @@ static __always_inline struct thread *get_current(void)
 {
 	struct thread *curr = NULL;
 
-/* rdhwr not work @ part of the qemu malta boards!!
+/*
+ * rdhwr not work @ part of the qemu malta boards!!
  *	asm(".set push\n"
 		".set noreorder\n"
 		".set mips32r2\n"
 		"rdhwr %0, $29\n"
 		".set pop\n"
 		: "=r" (curr));
-*/
+ */
 
 	curr = thiscpu->current_thread;
 	return curr;
@@ -200,6 +208,10 @@ static __always_inline unsigned long arch_irq_save(void)
 		BUILD_ERROR_ON(!TYPE_COMPATIBLE(flags, unsigned long)); \
 		flags = arch_irq_save();								\
 	} while (0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 #endif

@@ -22,7 +22,7 @@ FUNC_START _mmu_init
 	mtc0 t1, C0_TLBHI
 	ehb
 
-	/* MIPS has fix-mapping-table */
+/* MIPS has a fixed mapping table */
 
 	la t1, __memstart
 	la t2, _start

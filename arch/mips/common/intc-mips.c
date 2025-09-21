@@ -32,7 +32,7 @@ static void mips_irq_disable(struct irq_desc *d)
 	 */
 	unsigned long stat = read_cp0_register(C0_STATUS);
 
-	stat &= ~(1 << (d->hwirq + MIPS32_INT_SHIFT));
+	stat &= ~(1U << (d->hwirq + MIPS32_INT_SHIFT));
 
 	write_cp0_register(C0_STATUS, stat);
 }
@@ -44,7 +44,7 @@ static void mips_irq_enable(struct irq_desc *d)
 	 */
 	unsigned long stat = read_cp0_register(C0_STATUS);
 
-	stat |= 1 << (d->hwirq + MIPS32_INT_SHIFT);
+	stat |= 1U << (d->hwirq + MIPS32_INT_SHIFT);
 
 	write_cp0_register(C0_STATUS, stat);
 }
@@ -65,7 +65,7 @@ static void mips_softint_raise(struct irq_desc *d,
 
 	cause = read_cp0_register(C0_CAUSE);
 
-	cause |= 1 << (d->hwirq + MIPS32_INT_SHIFT);
+	cause |= 1U << (d->hwirq + MIPS32_INT_SHIFT);
 
 	write_cp0_register(C0_CAUSE, cause);
 }
@@ -74,7 +74,7 @@ static inline void mips_clear_softint(void)
 {
 	unsigned long cause = read_cp0_register(C0_CAUSE);
 
-	cause &= ~(1 << (MIPS32_INT_SHIFT + MIPS32_SOFTINT_SOURCE));
+	cause &= ~(1U << (MIPS32_INT_SHIFT + MIPS32_SOFTINT_SOURCE));
 
 	write_cp0_register(C0_CAUSE, cause);
 }
@@ -88,7 +88,7 @@ static void mips_irq_handler(struct irq_controller *ic,
 	val >>= MIPS32_INT_SHIFT;
 	val &= MIPS32_INT_MASK;
 
-	if (val & (1 << MIPS32_SOFTINT_SOURCE))
+	if (val & (1U << MIPS32_SOFTINT_SOURCE))
 		mips_clear_softint();
 
 	while (val != 0) {

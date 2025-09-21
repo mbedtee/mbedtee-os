@@ -7,6 +7,10 @@
 #ifndef _CACHEOPS_H
 #define _CACHEOPS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * local core only
  * Invalid whole instruction cache
@@ -15,5 +19,9 @@ void local_flush_icache_all(void);
 
 /* currently no SMP for mips32 */
 #define flush_icache_all local_flush_icache_all
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -21,21 +21,21 @@
 #define ASID_RESVD (ASID_END)
 
 #define TLB_PFN_SHIFT (6)
-#define TLB_PFN_MASK (~((1 << TLB_PFN_SHIFT) - 1))
+#define TLB_PFN_MASK (~((1U << TLB_PFN_SHIFT) - 1))
 
-#define TLB_GLOBAL (1 << TLB_PFN_SHIFT)
+#define TLB_GLOBAL (1U << TLB_PFN_SHIFT)
 #define TLB_PRIV (0 << TLB_PFN_SHIFT)
 
-#define TLB_VALID (1 << (1 + TLB_PFN_SHIFT))
+#define TLB_VALID (1U << (1 + TLB_PFN_SHIFT))
 #define TLB_INVALID (0 << (1 + TLB_PFN_SHIFT))
 
-#define TLB_WRITEABLE (1 << (2 + TLB_PFN_SHIFT))
+#define TLB_WRITEABLE (1U << (2 + TLB_PFN_SHIFT))
 #define TLB_READONLY (0 << (2 + TLB_PFN_SHIFT))
 
 #define TLB_CACHE_WRITETHROUGH (0 << (3 + TLB_PFN_SHIFT))
-#define TLB_CACHE_WRITEBACK (3 << (3 + TLB_PFN_SHIFT))
+#define TLB_CACHE_WRITEBACK (3U << (3 + TLB_PFN_SHIFT))
 
-#define TLB_PROBE_FAIL(x) (((x) & (1 << 31)) != 0)
+#define TLB_PROBE_FAIL(x) (((x) & (1U << 31)) != 0)
 
 #define PTD_SHIFT		(22)
 #define PTDS_PER_PT		UL(1024)
@@ -45,7 +45,11 @@
 /* dummy */
 #define SECTION_SIZE    (UL(1) << PTD_SHIFT)
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <cpu.h>
 #include <kmalloc.h>
@@ -92,7 +96,7 @@ static inline ptd_t *ptd_of(struct pt_struct *pt, unsigned long va)
 
 static inline int ptd_null(ptd_t *ptd)
 {
-	return ptd->addr ? false : true;
+	return !ptd->addr;
 }
 
 static inline void ptd_clear(ptd_t *ptd)
@@ -105,7 +109,7 @@ static inline int ptd_alloc(ptd_t *ptd)
 {
 	void *t = kzalloc(PTD_SIZE);
 
-	if (t == NULL)
+	if (!t)
 		return -ENOMEM;
 
 	assert(!((uintptr_t)t & (PTD_SIZE - 1)));
@@ -223,7 +227,7 @@ static inline int tlb_size(void)
 static inline void flush_tlb_pte(pte_t *pte,
 	unsigned long asid, unsigned long va)
 {
-	long id = -1;
+	int id = -1;
 	unsigned long old = tlb_get_entryhi() & ASID_MASK;
 	unsigned long vpn = va & (PAGE_MASK << 1);
 
@@ -247,7 +251,7 @@ static inline void flush_tlb_pte(pte_t *pte,
 static inline void update_tlb_pte(pte_t *pte,
 	unsigned long asid, unsigned long va)
 {
-	unsigned long id = -1;
+	int id = -1;
 	unsigned long vpn = va & (PAGE_MASK << 1);
 
 	pte -= (va != vpn) ? 1 : 0;
@@ -263,6 +267,10 @@ static inline void update_tlb_pte(pte_t *pte,
 		tlb_write_indexed();
 	tlb_set_entryhi(asid);
 }
+#ifdef __cplusplus
+}
 #endif
 
-#endif
+#endif /* !__ASSEMBLY__ */
+
+#endif /* _MMUPRIV_H */

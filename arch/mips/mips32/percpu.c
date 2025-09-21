@@ -13,10 +13,10 @@
 #include <percpu.h>
 
 unsigned long common_stack[CONFIG_NR_CPUS][STACK_SIZE/sizeof(long)]
-	__section(".bss") __aligned(64) = {{0}};
+	__section(".bss") __aligned(64);
 
 struct percpu percpu_dt[CONFIG_NR_CPUS]
-	__section(".bss") __aligned(64) = {{0}};
+	__section(".bss") __aligned(64);
 
 int __init cpu_data_init(void)
 {
@@ -70,7 +70,7 @@ void percpu_info(void)
 	const char *partstr = NULL;
 	long prid = read_cp0_register(C0_PRID);
 
-	memcpy((struct prid_struct *)&m, &prid, sizeof(m));
+	memcpy(&m, &prid, sizeof(m));
 
 	assert(m.comp == PRID_MIPS_COMP);
 
@@ -81,7 +81,7 @@ void percpu_info(void)
 		}
 	}
 
-	if (partstr == NULL)
+	if (!partstr)
 		EMSG("unknown partnum 0x%x\n", m.impl);
 	else
 		IMSG("Processor %s r%d.%dp%d\n", partstr, m.major, m.minor, m.patch_l);

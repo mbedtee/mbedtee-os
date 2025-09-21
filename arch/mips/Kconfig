@@ -11,6 +11,10 @@ config MIPS32
 	bool "MIPS32"
 config MIPS64
 	bool "MIPS64"
+	depends on n
+	help
+		MIPS64 architecture. Not yet implemented - no platform or
+		toolchain support exists. Do not select.
 endchoice
 
 source "arch/mips/common/Kconfig"

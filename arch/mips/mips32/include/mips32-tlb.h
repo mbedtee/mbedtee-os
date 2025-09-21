@@ -7,16 +7,22 @@
 #ifndef _MIPS32_TLB_H
 #define _MIPS32_TLB_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <mmu.h>
 
 /*
- * walks the page table and refills
- * a TLB entry that matches the
- * va in this given page table
- * prot: permission flag
+ * walks the page table and refills a TLB entry that matches the
+ * va in this given page table prot: permission flag
  */
 int tlb_refill(struct pt_struct *pt, unsigned long va, int prot);
 
 void tlb_invalidate_all(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -16,7 +16,11 @@
 #define VA_OFFSET	CONFIG_OS_ADDR
 #define PA_OFFSET	VA_OFFSET
 
-#ifndef __ASSEMBLY__
+#if !defined(__ASSEMBLY__)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 extern unsigned long __memstart;
 
@@ -27,14 +31,14 @@ extern unsigned long __memstart;
 #define virt_to_phys(x) (((unsigned long)(x) - VA_OFFSET) + PA_OFFSET)
 
 /*
- * phys_to_dma and dma_to_phys depends on the SoC design
+ * MIPS TLB EntryLo PFN format: bit31 must be 0 in the PTE value
+ * stored in the page table (hardware constraint, not a DMA address).
  *
- * 0xA0000000 doesn't mean KSEG1 here, DMA addr is 0x20000000
- * 0xC0000000 doesn't mean KSEG2 here, DMA addr is 0x40000000
+ * 0xA0000000 TLB PFN is 0x20000000
+ * 0xC0000000 TLB PFN is 0x40000000
  */
-#define phys_to_dma(x) ((unsigned long)(x) & UL(0x7FFFFFFF))
-#define dma_to_phys(x) ((unsigned long)(x) | UL(0x80000000))
-#endif
+#define phys_to_tlbpfn(x) ((unsigned long)(x) & UL(0x7FFFFFFF))
+#define tlbpfn_to_phys(x) ((unsigned long)(x) | UL(0x80000000))
 
 /*
  * 2GB for user space, 2GB for kernel space
@@ -44,7 +48,7 @@ extern unsigned long __memstart;
 /*
  * 256M for each process's ASLR space
  */
-#ifdef CONFIG_ASLR
+#if defined(CONFIG_ASLR)
 #define USER_ASLR_SIZE          UL(0x10000000)
 #else
 #define USER_ASLR_SIZE          UL(0x00000000)
@@ -73,4 +77,9 @@ extern unsigned long __memstart;
 #define KERN_VMA_SIZE UL(0x04000000)
 #define KERN_VMA_START (-KERN_VMA_SIZE)
 
+#ifdef __cplusplus
+}
+#endif
+
+#endif
 #endif
