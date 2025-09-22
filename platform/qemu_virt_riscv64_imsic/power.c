@@ -30,8 +30,8 @@ static int virt_riscv_cpu_up(unsigned int cpu)
 
 	do {
 		/*
-		 * #cpu_power_id is possibly updating by peer,
-		 * make sure it's update to date for current CPU
+		 * #cpu_power_id may be updated by a peer CPU,
+		 * make sure it is up to date for the current CPU
 		 */
 		smp_mb();
 
@@ -39,9 +39,9 @@ static int virt_riscv_cpu_up(unsigned int cpu)
 			break;
 
 		udelay(5);
-	} while (--intime);
+	} while (--intime != 0);
 
-	if (cpu_power_id == CPU_HARTID(cpu) || !intime)
+	if (cpu_power_id == CPU_HARTID(cpu) || intime == 0)
 		return -1;
 
 	return 0;
@@ -70,8 +70,6 @@ static const struct cpu_pm_ops virt_riscv_pm_ops = {
 static int __init cpu_power_probe(struct device *dev)
 {
 	int ret = -1;
-	unsigned long addr = 0;
-	size_t bsize = 0;
 	struct device_node *dn = NULL;
 
 	cpu_pm_register(&virt_riscv_pm_ops);
@@ -80,7 +78,7 @@ static int __init cpu_power_probe(struct device *dev)
 
 	IMSG("init %s\n", dn->id.compat);
 
-	ret = of_parse_io_resource(dn, 0, &addr, &bsize);
+	ret = of_parse_io_resource(dn, 0, NULL, NULL);
 	if (ret != 0) {
 		WMSG("cpu-power dts\n");
 		return ret;
