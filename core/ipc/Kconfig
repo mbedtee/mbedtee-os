@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+
+menu "IPC"
+
+config IPC_PIPE
+	bool "Enable pipe()"
+	depends on FS
+	default y if USER
+	help
+		Enable the pipe() implementation.
+
+config IPC_SEM
+	bool "Enable semaphores (sem_*)"
+	depends on FS
+	default y if USER
+	help
+		Enable POSIX unnamed semaphores.
+
+config IPC_EVENTFD
+	bool "Enable eventfd()"
+	depends on FS
+	default y if USER
+	help
+		Enable eventfd() support (pollable event counter).
+
+config IPC_SHM
+	bool "Enable POSIX Shared Memory"
+	depends on TMPFS && USER
+	help
+		Say Y here to enable the POSIX Shared Memory
+
+config IPC_MSGQ
+	bool "Enable POSIX Message Queue"
+	depends on TMPFS && USER
+	help
+		Say Y here to enable the POSIX Message Queue
+
+endmenu
