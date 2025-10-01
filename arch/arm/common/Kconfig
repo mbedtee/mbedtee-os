@@ -5,6 +5,8 @@ if ARM
 
 choice
 	prompt "ARM GIC Selection"
+	default ARM_GICV3 if AARCH64
+	default ARM_GICV2
 	help
 		choose the GIC version
 		By default this option is essential.

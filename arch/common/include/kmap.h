@@ -8,6 +8,10 @@
 #ifndef _KMAP_H
 #define _KMAP_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 
 /*
@@ -31,5 +35,9 @@ void *iomap(unsigned long pa, size_t size);
  * unmap and free the va
  */
 void iounmap(void *va);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

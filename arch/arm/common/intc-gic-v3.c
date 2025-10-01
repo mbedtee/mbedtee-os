@@ -12,7 +12,6 @@
 #include <delay.h>
 #include <trace.h>
 #include <driver.h>
-#include <thread.h>
 
 #include <interrupt.h>
 #include <generated/autoconf.h>
@@ -25,6 +24,7 @@
 #define GICD_ISENABLER              (0x0100)
 #define GICD_ICENABLER              (0x0180)
 #define GICD_ICPENDR                (0x0280)
+#define GICD_ISPENDR                (0x0200)
 #define GICD_ICACTIVER              (0x0380)
 #define GICD_IPRIORITY              (0x0400)
 #define GICD_ICFGR                  (0x0C00)
@@ -36,6 +36,8 @@
 #define GICD_VERSION_SHIFT          (4)
 #define GICD_VERSION_MASK           (0xF)
 #define GICD_CTRL_RWP               (U(1) << 31)
+#define GICD_TYPER_NO1N             (U(1) << 25)
+#define GICD_IROUTER_IRM            (U(1) << 31)
 
 #define GICR_SIZE					(0x20000)
 #define GICR_RD_BASE                (0x00000)
@@ -93,7 +95,8 @@ static struct gic_desc {
 	struct spinlock lock;
 	int8_t version;
 	bool security_extn;
-} gic_desc = {0};
+	bool spi_no1n;
+} gic_desc;
 
 #define RDIST_BASE (gic_desc.rdist_base + (GICR_SIZE * percpu_id()))
 
@@ -248,7 +251,7 @@ static inline void gic_rdist_wait_uwp(void)
 
 static void gic_clear_enable(unsigned int gic_num)
 {
-	uint32_t val = 1 << GIC_BIT_OFFSET(gic_num);
+	uint32_t val = 1U << GIC_BIT_OFFSET(gic_num);
 	uint32_t reg_off = GIC_REG_OFFSET(gic_num);
 	void *reg = NULL;
 	void (*sync_wp)(void) = NULL;
@@ -269,7 +272,6 @@ static void gic_clear_enable(unsigned int gic_num)
 
 static void gic_set_enable(unsigned int gic_num)
 {
-	uint32_t val = 0;
 	uint32_t reg_off = GIC_REG_OFFSET(gic_num);
 	void *reg = NULL;
 	void (*sync_wp)(void) = NULL;
@@ -283,9 +285,7 @@ static void gic_set_enable(unsigned int gic_num)
 		sync_wp = gic_rdist_wait_uwp;
 	}
 
-	val = ioread32(reg);
-	val |= 1U << GIC_BIT_OFFSET(gic_num);
-	iowrite32(val, reg);
+	iowrite32(1U << GIC_BIT_OFFSET(gic_num), reg);
 
 	sync_wp();
 }
@@ -303,7 +303,7 @@ static bool gic_is_enabled(unsigned int gic_num)
 		reg = gic_desc.rdist_base + GICR_ISENABLER + reg_off;
 	}
 
-	val = ioread32(reg) & 1U << GIC_BIT_OFFSET(gic_num);
+	val = ioread32(reg) & (1U << GIC_BIT_OFFSET(gic_num));
 
 	return !!val;
 }
@@ -372,6 +372,14 @@ static void gic_configure_target(unsigned int gic_num,
 	iowrite64(affinity, gic_desc.dist_base + reg_off);
 }
 
+static void gic_configure_target_1ofn(unsigned int gic_num)
+{
+	uint32_t reg_off = GICD_IROUTER + (gic_num * 8);
+
+	/* IRM=1 requests hardware 1-of-N delivery among eligible PEs. */
+	iowrite64(GICD_IROUTER_IRM, gic_desc.dist_base + reg_off);
+}
+
 static inline void gic_rdist_enable(void)
 {
 	uint32_t val = 0;
@@ -416,10 +424,10 @@ static inline void gic_rdist_disable(void)
 
 static void gic_dist_init(void)
 {
-	int i = 0;
-	int total = 0;
-	int version = 0;
-	int typer = 0;
+	uint32_t i = 0;
+	uint32_t total = 0;
+	uint32_t version = 0;
+	uint32_t typer = 0;
 
 	/*
 	 * interrupts not forwarded
@@ -433,7 +441,7 @@ static void gic_dist_init(void)
 	typer = gic_read_dist(GICD_TYPE);
 	total = typer & 0x1F;
 	total = 32 * (total + 1);
-	gic_desc.total = min(total, GIC_MAX_INT);
+	gic_desc.total = min(total, (uint32_t)GIC_MAX_INT);
 
 	/*
 	 * validate the version
@@ -441,10 +449,12 @@ static void gic_dist_init(void)
 	version = (gic_read_dist(GICD_PIDR2) >> GICD_VERSION_SHIFT)
 			& GICD_VERSION_MASK;
 
-	gic_desc.security_extn = typer >> 10 & 1;
+	gic_desc.security_extn = (typer >> 10) & 1;
+	gic_desc.spi_no1n = !!(typer & GICD_TYPER_NO1N);
 
-	IMSG("%d interrupts @ GICDv%d SecurityExtn %d\n",
-		total, version, gic_desc.security_extn);
+	IMSG("%d interrupts @ GICDv%d SecurityExtn %d No1N %d\n",
+		(int)total, (int)version, gic_desc.security_extn,
+		gic_desc.spi_no1n);
 
 	assert(version == gic_desc.version);
 
@@ -459,7 +469,7 @@ static void gic_dist_init(void)
 	}
 
 	/*
-	 * Deault Route SPIs to NS-group1 (non-secure),
+	 * Default Route SPIs to NS-group1 (non-secure),
 	 * will route to Secure-group1 when needed
 	 */
 	for (i = GIC_SPI_START; i < total; i += BITS_PER_INT) {
@@ -491,7 +501,7 @@ static void gic_dist_init(void)
 
 static void gic_rdist_init(void)
 {
-	int version = 0;
+	uint32_t version = 0;
 	long mpidr = percpu_mpid();
 	uint64_t typer = 0;
 
@@ -505,7 +515,7 @@ static void gic_rdist_init(void)
 
 	if (typer >> 32 == mpidr)
 		IMSG("GICRv%d for mpid %lx @ %p\n",
-			version, mpidr, RDIST_BASE);
+			(int)version, mpidr, RDIST_BASE);
 	else
 		return;
 
@@ -597,8 +607,10 @@ static void gic_cpuif_init(void)
 	case 7:
 		icc_write_ap1r3(0);
 		icc_write_ap1r2(0);
+		/* fall through */
 	case 6:
 		icc_write_ap1r1(0);
+		/* fall through */
 	case 5:
 	case 4:
 		icc_write_ap1r0(0);
@@ -643,7 +655,8 @@ static int gic_set_affinity(struct irq_desc *d,
 {
 	unsigned int cpu = -1;
 	struct cpu_affinity tmp;
-	unsigned long flags = 0, is_enabled = false;
+	unsigned long flags = 0;
+	bool is_enabled = false;
 
 	if (!GIC_IS_SPI(d->hwirq))
 		return -EINVAL;
@@ -663,7 +676,8 @@ static int gic_set_affinity(struct irq_desc *d,
 
 	spin_lock_irqsave(&gic_desc.lock, flags);
 
-	if ((is_enabled = gic_is_enabled(d->hwirq)))
+	is_enabled = gic_is_enabled(d->hwirq);
+	if (is_enabled)
 		gic_clear_enable(d->hwirq);
 
 	cpu_affinity_copy(d->affinity, affinity);
@@ -704,7 +718,7 @@ static int gic_set_type(struct irq_desc *d, unsigned int type)
 	offset = GICD_ICFGR + ((d->hwirq / 16) * BYTES_PER_INT);
 
 	val <<= bit;
-	mask = 3 << bit;
+	mask = 3U << bit;
 	gic_write_dist((gic_read_dist(offset) & ~mask) | val, offset);
 
 	return 0;
@@ -712,7 +726,7 @@ static int gic_set_type(struct irq_desc *d, unsigned int type)
 
 
 #define SGIR_VAL(mpidr, intid) (          \
-	((unsigned long)intid << 24)        | \
+	((unsigned long)(intid) << 24)      | \
 	(1UL << MPIDR_AFFINITY_0(mpidr))    | \
 	(MPIDR_AFFINITY_1(mpidr) << 16)     | \
 	(MPIDR_AFFINITY_2(mpidr) << 32)     | \
@@ -729,10 +743,13 @@ static int gic_set_type(struct irq_desc *d, unsigned int type)
 static void gic_softint_raise(struct irq_desc *d, unsigned int cpu_id)
 {
 	int gic_num = d->hwirq;
+	unsigned long mpidr = 0;
+	unsigned long sgir = 0;
 	unsigned long flags = 0;
+	uint32_t nsatt = 0;
 
 	/* not support security_extn, so should not trigger NS SGIs */
-	if (!gic_desc.security_extn && gic_num <= GIC_SECURE_SGI_START)
+	if (!gic_desc.security_extn && gic_num < GIC_SECURE_SGI_START)
 		return;
 
 	if (gic_num >= GIC_SECURE_SGI_START + SOFTINT_MAX)
@@ -741,9 +758,9 @@ static void gic_softint_raise(struct irq_desc *d, unsigned int cpu_id)
 	if (icc_read_igrpen1()) {
 		local_irq_save(flags);
 
-		unsigned long mpidr = mpid_of(cpu_id);
-		unsigned long sgir = SGIR_VAL(mpidr, gic_num);
-		uint32_t nsatt = gic_read_rdist(GICR_IGROUPR) & (1 << gic_num);
+		mpidr = mpid_of(cpu_id);
+		sgir = SGIR_VAL(mpidr, gic_num);
+		nsatt = gic_read_rdist(GICR_IGROUPR) & (1U << gic_num);
 
 		/* Aff3.Aff2.Aff1.<target list> */
 		if (nsatt)
@@ -753,6 +770,50 @@ static void gic_softint_raise(struct irq_desc *d, unsigned int cpu_id)
 
 		local_irq_restore(flags);
 	}
+}
+
+/*
+ * Raise the T2R notification SPI.
+ *
+ * TrustZone shares physical CPUs between Linux and TEE; no cpumask from
+ * Linux is needed.  Route via hardware 1-of-N (IRM=1) when the GIC
+ * supports it, otherwise fall back to software round-robin across the
+ * currently online TEE CPUs (cpus_online).
+ */
+void gic_pend_spi(unsigned int spi)
+{
+	/* Round-robin cursor for the spi_no1n fallback path. */
+	static unsigned int gic_pend_spi_rr;
+	unsigned int gic_num = spi + GIC_SPI_START;
+	unsigned long flags = 0;
+	unsigned int target_cpu;
+
+	if (gic_num >= gic_desc.total)
+		return;
+
+	spin_lock_irqsave(&gic_desc.lock, flags);
+
+	if (!gic_desc.spi_no1n) {
+		/* Hardware 1-of-N: IRM=1 delivers to any available CPU. */
+		gic_configure_target_1ofn(gic_num);
+	} else {
+		/*
+		 * No hardware 1-of-N: round-robin through online TEE CPUs.
+		 * Wrap around when gic_pend_spi_rr exceeds the highest
+		 * online CPU index.
+		 */
+		target_cpu = cpu_affinity_next_one(cpus_online, gic_pend_spi_rr);
+		if (!cpu_affinity_valid(target_cpu))
+			target_cpu = cpu_affinity_next_one(cpus_online, 0);
+		if (cpu_affinity_valid(target_cpu)) {
+			gic_pend_spi_rr = target_cpu + 1;
+			gic_configure_target(gic_num, target_cpu);
+		}
+	}
+
+	gic_write_dist(1U << GIC_BIT_OFFSET(gic_num),
+		       GICD_ISPENDR + GIC_REG_OFFSET(gic_num));
+	spin_unlock_irqrestore(&gic_desc.lock, flags);
 }
 
 static void gic_suspend(struct irq_controller *ic)
@@ -854,7 +915,6 @@ static void __init gic_init(struct device_node *dn)
 	struct gic_desc *d = &gic_desc;
 	struct irq_controller *ic = NULL;
 	unsigned int softint_source[SOFTINT_MAX] = {
-		GIC_SECURE_SGI_START + SOFTINT_RPC_CALLER,
 		GIC_SECURE_SGI_START + SOFTINT_RPC_CALLEE,
 		GIC_SECURE_SGI_START + SOFTINT_IPI
 	};

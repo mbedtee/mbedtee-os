@@ -16,10 +16,10 @@
 
 #define CCI_SLAVE_PORT_CTRL		0x0
 
-#define CCI_SUPPORT_SNOOP_REQ	(1 << 30)
-#define CCI_SUPPORT_DVM_REQ		(1 << 31)
-#define CCI_ENABLE_SNOOP_REQ	(1 << 0)
-#define CCI_ENABLE_DVM_REQ		(1 << 1)
+#define CCI_SUPPORT_SNOOP_REQ	(1U << 30)
+#define CCI_SUPPORT_DVM_REQ		(1U << 31)
+#define CCI_ENABLE_SNOOP_REQ	(1U << 0)
+#define CCI_ENABLE_DVM_REQ		(1U << 1)
 
 static struct device_node *ccidn;
 
@@ -46,7 +46,7 @@ static int cci_enable_slave(void *base)
 
 static int cci_enable(void *data)
 {
-	int ret = -1;
+	int ret = 0;
 	struct device_node *child = NULL;
 	struct device_node *dn = ccidn;
 	void *base = NULL;
@@ -55,7 +55,7 @@ static int cci_enable(void *data)
 
 	for_each_matching_child_of_node(dn, child, &cci_slave_if) {
 		base = of_iomap(child, 0);
-		if (base == NULL) {
+		if (!base) {
 			EMSG("cci dts\n");
 			return -EINVAL;
 		}

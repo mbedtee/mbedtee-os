@@ -7,6 +7,14 @@
 #ifndef _ARCH_SPECIFIC_H
 #define _ARCH_SPECIFIC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void arch_specific_init(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

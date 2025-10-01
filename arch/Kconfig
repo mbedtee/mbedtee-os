@@ -3,6 +3,7 @@
 
 choice
 	prompt "Architecture Choice"
+	default ARM
 
 config ARM
 	bool "ARM"

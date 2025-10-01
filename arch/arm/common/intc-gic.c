@@ -24,6 +24,7 @@
 #define GICD_IGROUP					(0x080)
 #define GICD_ISENABLER				(0x100)
 #define GICD_ICENABLER				(0x180)
+#define GICD_ISPENDR				(0x200)
 #define GICD_ICPENDR                (0x280)
 #define GICD_ICACTIVER              (0x380)
 #define GICD_IPRIORITY				(0x400)
@@ -80,7 +81,7 @@ static struct gic_desc {
 	struct spinlock lock;
 	int8_t version;
 	bool security_extn;
-} gic_desc = {0};
+} gic_desc;
 
 static inline void gic_write_dist(uint32_t val, uint32_t offset)
 {
@@ -104,7 +105,7 @@ static inline uint32_t gic_read_cpuif(uint32_t offset)
 
 static void gic_clear_enable(unsigned int gic_num)
 {
-	uint32_t val = 1 << GIC_BIT_OFFSET(gic_num);
+	uint32_t val = 1U << GIC_BIT_OFFSET(gic_num);
 
 	gic_write_dist(val, GICD_ICENABLER +
 		GIC_REG_OFFSET(gic_num));
@@ -112,13 +113,9 @@ static void gic_clear_enable(unsigned int gic_num)
 
 static void gic_set_enable(unsigned int gic_num)
 {
-	uint32_t val = 0;
+	uint32_t val = 1U << GIC_BIT_OFFSET(gic_num);
 	uint32_t reg_off = GICD_ISENABLER +
 			GIC_REG_OFFSET(gic_num);
-
-	val = gic_read_dist(reg_off);
-
-	val |= (1 << GIC_BIT_OFFSET(gic_num));
 
 	gic_write_dist(val, reg_off);
 }
@@ -129,7 +126,7 @@ static bool gic_is_enabled(unsigned int gic_num)
 	uint32_t reg = GICD_ISENABLER +
 			GIC_REG_OFFSET(gic_num);
 
-	val = gic_read_dist(reg) & (1 << GIC_BIT_OFFSET(gic_num));
+	val = gic_read_dist(reg) & (1U << GIC_BIT_OFFSET(gic_num));
 
 	return !!val;
 }
@@ -155,8 +152,6 @@ static void gic_configure_prio(unsigned int gic_num)
 	uint32_t reg_off = GICD_IPRIORITY + (gic_num & ~3);
 	uint32_t val = gic_read_dist(reg_off);
 
-	val = gic_read_dist(reg_off);
-
 	reg_shift = (gic_num % 4) * 8;
 	val &= ~(GIC_SECURE_PRIORITY_MASK << reg_shift);
 	val |= GICD_SECURE_PRIORITY << reg_shift;
@@ -175,8 +170,8 @@ static void gic_configure_target(unsigned int gic_num,
 	uint32_t reg_off = GICD_ITARGETS + (gic_num & ~3);
 	uint32_t bit_off = (gic_num % 4) * 8;
 
-	gic_write_dist((gic_read_dist(reg_off) & ~(0xFF << bit_off)) |
-		(1 << (target_cpu + bit_off)), reg_off);
+	gic_write_dist((gic_read_dist(reg_off) & ~(0xFFU << bit_off)) |
+		(1U << (target_cpu + bit_off)), reg_off);
 }
 
 static void gic_dist_init(void)
@@ -233,7 +228,7 @@ static void gic_dist_init(void)
 	}
 
 	/*
-	 * Deault Route SPIs to group1 (non-secure),
+	 * Default Route SPIs to group1 (non-secure),
 	 * will route to group0 when needed
 	 */
 	for (i = GIC_SPI_START; i < total; i += BITS_PER_INT)
@@ -294,7 +289,7 @@ static void gic_cpuif_init(void)
 	gic_write_cpuif(GICC_SECURE_PRIORITY, GICC_PMR);
 
 	/*
-	 * Deault Route SGI/PPI to group1 (non-secure),
+	 * Default Route SGI/PPI to group1 (non-secure),
 	 * will route to group0 when needed
 	 */
 	gic_write_dist(0xFFFFFFFF, GICD_IGROUP);
@@ -337,7 +332,8 @@ static int gic_set_affinity(struct irq_desc *d,
 {
 	unsigned int cpu = -1;
 	struct cpu_affinity tmp;
-	unsigned long flags = 0, is_enabled = false;
+	unsigned long flags = 0;
+	bool is_enabled = false;
 
 	if (!GIC_IS_SPI(d->hwirq))
 		return -EINVAL;
@@ -357,7 +353,8 @@ static int gic_set_affinity(struct irq_desc *d,
 
 	spin_lock_irqsave(&gic_desc.lock, flags);
 
-	if ((is_enabled = gic_is_enabled(d->hwirq)))
+	is_enabled = gic_is_enabled(d->hwirq);
+	if (is_enabled)
 		gic_clear_enable(d->hwirq);
 
 	cpu_affinity_copy(d->affinity, affinity);
@@ -398,7 +395,7 @@ static int gic_set_type(struct irq_desc *d, unsigned int type)
 	offset = GICD_ICFGR + ((d->hwirq / 16) * BYTES_PER_INT);
 
 	val <<= bit;
-	mask = 3 << bit;
+	mask = 3U << bit;
 	gic_write_dist((gic_read_dist(offset) & ~mask) | val, offset);
 
 	return 0;
@@ -419,7 +416,7 @@ static void gic_softint_raise(struct irq_desc *d, unsigned int cpu_id)
 	int gic_num = d->hwirq;
 
 	/* not support security_extn, so should not trigger NS SGIs */
-	if (!gic_desc.security_extn && gic_num <= GIC_SECURE_SGI_START)
+	if (!gic_desc.security_extn && gic_num < GIC_SECURE_SGI_START)
 		return;
 
 	if (gic_num >= GIC_SECURE_SGI_START + SOFTINT_MAX)
@@ -427,11 +424,36 @@ static void gic_softint_raise(struct irq_desc *d, unsigned int cpu_id)
 
 	spin_lock_irqsave(&gic_desc.lock, flags);
 
-	nsatt = gic_read_dist(GICD_IGROUP) & (1 << gic_num);
+	nsatt = gic_read_dist(GICD_IGROUP) & (1U << gic_num);
 
 	gic_write_dist(gic_num | (GICC_SOFTINT_TARGET << cpu_id) |
 					(nsatt ? GICC_SOFTINT_NSATT : 0), GICD_SGI);
 
+	spin_unlock_irqrestore(&gic_desc.lock, flags);
+}
+
+/*
+ * Raise the T2R notification SPI.
+ *
+ * TrustZone shares physical CPUs between Linux and TEE; no cpumask from
+ * Linux is needed.  Write 0xFF to GICD_ITARGETSR to broadcast to all
+ * 8 CPU interfaces; the GIC hardware silently ignores absent ones.
+ */
+void gic_pend_spi(unsigned int spi)
+{
+	unsigned int gic_num = spi + GIC_SPI_START;
+	uint32_t reg_off = GICD_ITARGETS + (gic_num & ~3);
+	uint32_t bit_off = (gic_num % 4) * 8;
+	unsigned long flags = 0;
+
+	if (gic_num >= gic_desc.total)
+		return;
+
+	spin_lock_irqsave(&gic_desc.lock, flags);
+	/* 0xFF targets all 8 CPU interfaces; GIC delivers to present ones. */
+	gic_write_dist((gic_read_dist(reg_off) | (0xFFU << bit_off)), reg_off);
+	gic_write_dist(1U << GIC_BIT_OFFSET(gic_num),
+		       GICD_ISPENDR + GIC_REG_OFFSET(gic_num));
 	spin_unlock_irqrestore(&gic_desc.lock, flags);
 }
 
@@ -493,7 +515,7 @@ static void gic_handler(struct irq_controller *ic,
 		handled++;
 	} while (1);
 
-	/* patch for the weird AArch64 + GICv2v1 SoC */
+	/* patch for the weird AArch64 + GICv2 or GICv1 SoC */
 #if defined(CONFIG_AARCH64)
 	/* maybe NS Interrupt */
 	if (IS_ENABLED(CONFIG_REE) && (!handled || (gic_num == 1022)))
@@ -545,7 +567,6 @@ static void __init gic_init(struct device_node *dn)
 	struct gic_desc *d = &gic_desc;
 	struct irq_controller *ic = NULL;
 	unsigned int softint_source[SOFTINT_MAX] = {
-		GIC_SECURE_SGI_START + SOFTINT_RPC_CALLER,
 		GIC_SECURE_SGI_START + SOFTINT_RPC_CALLEE,
 		GIC_SECURE_SGI_START + SOFTINT_IPI
 	};

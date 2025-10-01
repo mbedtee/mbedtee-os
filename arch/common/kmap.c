@@ -69,7 +69,7 @@ void *kmap(unsigned long pa, size_t size, int flags)
 
 		if (va) {
 			vm = kzalloc(sizeof(struct vps));
-			if (vm == NULL) {
+			if (!vm) {
 				kvma_free(va);
 				return NULL;
 			}
@@ -148,6 +148,6 @@ void *iomap(unsigned long pa, size_t size)
 void iounmap(void *va)
 {
 #if defined(CONFIG_MMU) && !defined(CONFIG_MIPS)
-	return kunmap(va);
+	kunmap(va);
 #endif
 }
