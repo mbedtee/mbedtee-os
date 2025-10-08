@@ -42,8 +42,6 @@
 #include <uart.h>
 #endif
 
-#include <power.h>
-
 static void __init kern_info(void)
 {
 	struct tm t;
@@ -94,17 +92,6 @@ static void __rest_init(void *d)
 	__rest_init_once();
 
 	arch_specific_init();
-
-	if (!IS_ENABLED(CONFIG_REE) || IS_ENABLED(CONFIG_RISCV)) {
-		/* only CPU 0 does this, up the other CPUs */
-		if (percpu_id() == 0)
-			for (int i = 1; i < CONFIG_NR_CPUS; i++)
-				cpu_up(i, -1);
-	} else {
-		/* wait the REE startup */
-		if (percpu_id() != 0)
-			msleep(100);
-	}
 
 	sched_cpu_online();
 }

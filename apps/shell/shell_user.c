@@ -664,18 +664,27 @@ static void cmd_free_argv(struct shell *sh)
 
 static void cmd_record(struct shell *sh)
 {
+	int i = 0;
 	struct cmd_history *h = NULL;
 
 	h = &sh->history[sh->history_rec_pos];
+
+	for (i = 0; i < CMD_HISTORY_NUM; i++) {
+		if (sh->history[i].cmd_pos && !memcmp(sh->history[i].cmd,
+			sh->cmd, sh->cmd_pos)) {
+			sh->history_show_pos = i;
+			return;
+		}
+	}
 
 	memcpy(h->cmd, sh->cmd, sh->cmd_pos);
 	h->cmd[sh->cmd_pos] = 0;
 	h->cmd_pos = sh->cmd_pos;
 
-	sh->history_show_pos = sh->history_rec_pos;
-
 	if (++sh->history_rec_pos == CMD_HISTORY_NUM)
 		sh->history_rec_pos = 0;
+
+	sh->history_show_pos = sh->history_rec_pos;
 }
 
 static cmd_handler cmd_handler_of(const char *cmd)
@@ -694,37 +703,23 @@ static cmd_handler cmd_handler_of(const char *cmd)
 
 static void key_up(struct shell *sh)
 {
+	int cnt = 0;
 	struct cmd_history *h = NULL;
-
-	h = &sh->history[sh->history_show_pos];
 
 	while (sh->cmd_pos) {
 		write(sh->fd, "\b \b", 3);
 		sh->cmd_pos--;
 	}
 
-	memcpy(sh->cmd, h->cmd, h->cmd_pos);
-	sh->cmd[h->cmd_pos] = 0;
-	sh->cmd_pos = h->cmd_pos;
-	sh->cursor_pos = h->cmd_pos;
-
-	write(sh->fd, sh->cmd, sh->cmd_pos);
-
-	if (sh->history_show_pos == 0)
-		sh->history_show_pos = CMD_HISTORY_NUM;
-
-	sh->history_show_pos--;
-}
-
-static void key_down(struct shell *sh)
-{
-	struct cmd_history *h = NULL;
-
-	h = &sh->history[sh->history_show_pos];
-
-	while (sh->cmd_pos) {
-		write(sh->fd, "\010\040\010", 3);
-		sh->cmd_pos--;
+	while (1) {
+		h = &sh->history[sh->history_show_pos];
+		if (sh->history_show_pos == 0)
+			sh->history_show_pos = CMD_HISTORY_NUM;
+		sh->history_show_pos--;
+		if (h->cmd_pos)
+			break;
+		if (++cnt >= CMD_HISTORY_NUM)
+			return;
 	}
 
 	memcpy(sh->cmd, h->cmd, h->cmd_pos);
@@ -733,9 +728,34 @@ static void key_down(struct shell *sh)
 	sh->cursor_pos = h->cmd_pos;
 
 	write(sh->fd, sh->cmd, sh->cmd_pos);
+}
 
-	if (++sh->history_show_pos == CMD_HISTORY_NUM)
-		sh->history_show_pos = 0;
+static void key_down(struct shell *sh)
+{
+	int cnt = 0;
+	struct cmd_history *h = NULL;
+
+	while (sh->cmd_pos) {
+		write(sh->fd, "\010\040\010", 3);
+		sh->cmd_pos--;
+	}
+
+	while (1) {
+		h = &sh->history[sh->history_show_pos];
+		if (++sh->history_show_pos == CMD_HISTORY_NUM)
+			sh->history_show_pos = 0;
+		if (h->cmd_pos)
+			break;
+		if (++cnt >= CMD_HISTORY_NUM)
+			return;
+	}
+
+	memcpy(sh->cmd, h->cmd, h->cmd_pos);
+	sh->cmd[h->cmd_pos] = 0;
+	sh->cmd_pos = h->cmd_pos;
+	sh->cursor_pos = h->cmd_pos;
+
+	write(sh->fd, sh->cmd, sh->cmd_pos);
 }
 
 static void cmd_runapp(struct shell *sh)

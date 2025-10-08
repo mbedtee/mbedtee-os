@@ -5,7 +5,10 @@
  */
 
 #include <of.h>
+#include <ree.h>
 #include <trace.h>
+#include <sleep.h>
+#include <power.h>
 #include <percpu.h>
 #include <interrupt.h>
 
@@ -14,13 +17,20 @@
 void arch_specific_init(void)
 {
 	/* reserves the SGI for aarch64 RPC callee */
-#if defined(CONFIG_RPC)
-	extern void smc_handler(void *regs);
-	irq_register(NULL, thiscpu->sgi, smc_handler, NULL);
-#endif
+	if (IS_ENABLED(CONFIG_RPC)) {
+		extern void smc_handler(void *regs);
+		irq_register(NULL, thiscpu->sgi, smc_handler, NULL);
+	}
 
-#if defined(CONFIG_REE)
-#include <ree.h>
-	setup_ree();
-#endif
+	if (IS_ENABLED(CONFIG_REE) && is_security_extn_ena()) {
+		setup_ree();
+		/* wait the REE startup */
+		if (percpu_id() != 0)
+			msleep(100);
+	} else {
+		/* only CPU 0 does this, up the other CPUs */
+		if (percpu_id() == 0)
+			for (int i = 1; i < CONFIG_NR_CPUS; i++)
+				cpu_up(i, -1);
+	}
 }

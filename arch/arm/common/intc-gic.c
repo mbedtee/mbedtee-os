@@ -24,6 +24,8 @@
 #define GICD_IGROUP					(0x080)
 #define GICD_ISENABLER				(0x100)
 #define GICD_ICENABLER				(0x180)
+#define GICD_ICPENDR                (0x280)
+#define GICD_ICACTIVER              (0x380)
 #define GICD_IPRIORITY				(0x400)
 #define GICD_ITARGETS				(0x800)
 #define GICD_ICFG					(0xC00)
@@ -37,6 +39,7 @@
 #define GICC_IAR					(0x0C)
 #define GICC_EOIR					(0x10)
 #define GICC_IIDR					(0xFC)
+#define GICC_DIR					(0x1000)
 
 #define GICC_IAR_CPUID_MASK			(CONFIG_NR_CPUS - 1)
 #define GICC_IAR_CPUID_SHIFT		(10)
@@ -78,6 +81,7 @@ static struct gic_desc {
 	uint32_t total;
 	struct spinlock lock;
 	int8_t version;
+	bool security_extn;
 } gic_desc = {0};
 
 static inline void gic_write_dist(uint32_t val, uint32_t offset)
@@ -137,7 +141,7 @@ static void gic_set_enable(unsigned int gic_num)
 	gic_write_dist(val, reg_off);
 }
 
-static void gic_eoi(uint32_t iar)
+static inline void gic_eoir(uint32_t iar)
 {
 	gic_write_cpuif(iar, GICC_EOIR);
 }
@@ -148,7 +152,7 @@ static void gic_configure_group(unsigned int gic_num)
 	uint32_t val = gic_read_dist(reg_off);
 
 	/* configure the group to SECURE */
-	val &= ~(1UL << GIC_BIT_OFFSET(gic_num));
+	val &= ~(1U << GIC_BIT_OFFSET(gic_num));
 	gic_write_dist(val, reg_off);
 }
 
@@ -187,6 +191,7 @@ static void gic_dist_init(void)
 	uint32_t i = 0;
 	uint32_t total = 0;
 	uint32_t version = 0;
+	uint32_t typer = 0;
 
 	/*
 	 * interrupts not forwarded
@@ -196,7 +201,8 @@ static void gic_dist_init(void)
 	/*
 	 * maximum number of interrupts is 32(N+1)
 	 */
-	total = gic_read_dist(GICD_TYPE) & 0x1F;
+	typer = gic_read_dist(GICD_TYPE);
+	total = typer & 0x1F;
 	total = 32 * (total + 1);
 	gic_desc.total = min(total, (uint32_t)GIC_MAX_INT);
 
@@ -206,17 +212,13 @@ static void gic_dist_init(void)
 	version = ((gic_read_dist(GICD_ICPIDR2) >> GICD_VERSION_SHIFT)
 			& GICD_VERSION_MASK);
 
-	IMSG("%d interrupts @ GICDv%d\n", (int)total, (int)version);
+	gic_desc.security_extn = (typer >> 10) & 1;
+
+	IMSG("%d interrupts @ GICDv%d SecurityExtn %d\n",
+		(int)total, (int)version, gic_desc.security_extn);
 
 	if (version != gic_desc.version)
 		WMSG("GIC version mismatch\n");
-
-	/*
-	 * Deault Route SPIs to group1 (non-secure),
-	 * will route to group0 when needed
-	 */
-	for (i = GIC_SPI_START; i < total; i += BITS_PER_INT)
-		gic_write_dist(0xFFFFFFFF, GICD_IGROUP + GIC_REG_OFFSET(i));
 
 	/*
 	 * Disable All SPIs
@@ -229,6 +231,19 @@ static void gic_dist_init(void)
 		gic_write_dist(0xFFFFFFFF, GICD_ICENABLER + GIC_REG_OFFSET(i));
 
 	/*
+	 * GICD_NSACR: No Non-secure access is permitted for Group 0 SPIs
+	 */
+	for (i = GIC_SPI_START; i < total; i += 16)
+		gic_write_dist(0, GICD_NSACR + ((i / 16) * BYTES_PER_INT));
+
+	/*
+	 * Deault Route SPIs to group1 (non-secure),
+	 * will route to group0 when needed
+	 */
+	for (i = GIC_SPI_START; i < total; i += BITS_PER_INT)
+		gic_write_dist(0xFFFFFFFF, GICD_IGROUP + GIC_REG_OFFSET(i));
+
+	/*
 	 * Both group0/group1 interrupts will be forwarded
 	 */
 	gic_write_dist(3, GICD_CTRL);
@@ -238,6 +253,11 @@ static void gic_cpuif_init(void)
 {
 	int i = 0;
 	int version = 0, revision = 0;
+
+	/*
+	 * disable
+	 */
+	gic_write_cpuif(0, GICC_CTLR);
 
 	/*
 	 * validate the version
@@ -253,16 +273,15 @@ static void gic_cpuif_init(void)
 	/*
 	 * handling the bank registers for each cpu interface
 	 *
-	 * Deault Route SGI/PPI to group1 (non-secure),
-	 * will route to group0 when needed
 	 * Disable all SGI/PPI
 	 */
-	gic_write_dist(0xFFFFFFFF, GICD_IGROUP);
 	gic_write_dist(0xFFFFFFFF, GICD_ICENABLER);
+	gic_write_dist(0xFFFFFFFF, GICD_ICPENDR);
+	gic_write_dist(0xFFFFFFFF, GICD_ICACTIVER);
 
 	/*
 	 * GICD_ICFG: Corresponding interrupt is level-sensitive
-	 * GICD_NSACR: No Non-secure access is permitted for Group 0 SGI/PPI
+	 * GICD_NSACR: No Non-secure access is permitted for Group 0 SGI
 	 */
 	for (i = 0; i < GIC_SPI_START; i += 16) {
 		gic_write_dist(0, GICD_ICFG + ((i / 16) * BYTES_PER_INT));
@@ -277,6 +296,12 @@ static void gic_cpuif_init(void)
 	 * lower value for higher priority
 	 */
 	gic_write_cpuif(GICC_SECURE_PRIORITY, GICC_PMR);
+
+	/*
+	 * Deault Route SGI/PPI to group1 (non-secure),
+	 * will route to group0 when needed
+	 */
+	gic_write_dist(0xFFFFFFFF, GICD_IGROUP);
 
 	gic_write_cpuif(0, GICC_BPR);
 
@@ -349,11 +374,13 @@ static void gic_softint_raise(struct irq_desc *d, unsigned int cpu_id)
 {
 	uint32_t nsatt = 0;
 	unsigned long flags = 0;
-	int gic_num = 0;
+	int gic_num = gic_softint2sgi(d->hwirq);
+
+	/* not support security_extn, so should not trigger NS SGIs */
+	if (!gic_desc.security_extn && gic_num <= GIC_SECURE_SGI_START)
+		return;
 
 	spin_lock_irqsave(&gic_desc.lock, flags);
-
-	gic_num = gic_softint2sgi(d->hwirq);
 
 	if (gic_num >= 0) {
 		nsatt = gic_read_dist(GICD_IGROUP) & (1 << gic_num);
@@ -427,7 +454,7 @@ static const struct irq_controller_ops gic_softint_ops = {
 
 static void gic_handler(struct thread_ctx *regs)
 {
-	uint32_t iar = 0, gic_num = 0;
+	uint32_t iar = 0, gic_num = 0, handled = 0;
 
 	/*
 	 * to get the source CPU_ID which triggered a SGI, use:
@@ -440,26 +467,45 @@ static void gic_handler(struct thread_ctx *regs)
 		if (gic_num >= GIC_MAX_INT)
 			break;
 
-		gic_eoi(iar);
+		gic_eoir(iar);
 		irq_generic_invoke(gic_desc.controller, gic_num);
+		handled++;
 	} while (1);
+
+	/* patch for the weird AArch64 + GICv2v1 SoC */
+#if defined(CONFIG_AARCH64)
+	/* maybe NS Interrupt */
+	if (IS_ENABLED(CONFIG_REE) && (!handled || (gic_num == 1022)))
+		smc_call(0, 0, 0, 0);
+	else
+		gic_write_cpuif(0xB, GICC_CTLR);
+#endif
+}
+
+bool gic_has_security_extn(void)
+{
+	return gic_desc.security_extn;
 }
 
 static void __init gic_parse_dts(struct device_node *dn)
 {
-	unsigned long base = 0;
+	unsigned long gicd = 0, gicc = 0;
 	size_t size = 0;
 	struct gic_desc *d = &gic_desc;
 
 	d->version = dn->id.compat[strlen(dn->id.compat) - 1] - '0';
 
-	of_read_property_addr_size(dn, "reg", 0, &base, &size);
-	d->dist_base = iomap(base, size);
-	IMSG("gic-dist@v%d 0x%lx, size: 0x%x\n", d->version, base, (int)size);
+	of_read_property_addr_size(dn, "reg", 0, &gicd, &size);
+	d->dist_base = iomap(gicd, size);
+	IMSG("gic-dist@v%d 0x%lx, size: 0x%x\n", d->version, gicd, (int)size);
 
-	of_read_property_addr_size(dn, "reg", 1, &base, &size);
-	d->cpuif_base = iomap(base, size);
-	IMSG("gic-cpuif@v%d 0x%lx, size: 0x%x\n", d->version, base, (int)size);
+	of_read_property_addr_size(dn, "reg", 1, &gicc, &size);
+	d->cpuif_base = iomap(gicc, size);
+	IMSG("gic-cpuif@v%d 0x%lx, size: 0x%x\n", d->version, gicc, (int)size);
+
+	/* For the weird AArch64 + GICv2v1 SoC */
+	if (IS_ENABLED(CONFIG_AARCH64))
+		smc_call(3, gicd + GICD_SGI, gicc + GICC_CTLR, 0);
 }
 
 static void gic_percpu_init(void)

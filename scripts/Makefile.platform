@@ -46,4 +46,14 @@ else ifeq ($(CONFIG_QEMU_AST2600),y)
 PLATFORM = qemu_ast2600
 else ifeq ($(CONFIG_QEMU_AST2700),y)
 PLATFORM = qemu_ast2700
+else ifeq ($(CONFIG_QEMU_RASPI4B),y)
+PLATFORM = qemu_raspi4b
+else ifeq ($(CONFIG_QEMU_XLNX_VERSAL_VIRT),y)
+PLATFORM = qemu_xlnx_versal_virt
+else ifeq ($(CONFIG_QEMU_XLNX_ZCU102),y)
+PLATFORM = qemu_xlnx_zcu102
+else ifeq ($(CONFIG_QEMU_IMX7D),y)
+PLATFORM = qemu_imx7d
+else ifeq ($(CONFIG_QEMU_IMX8MP),y)
+PLATFORM = qemu_imx8mp
 endif

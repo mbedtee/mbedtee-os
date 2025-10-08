@@ -266,50 +266,6 @@ void file_put(struct file *f)
 	}
 }
 
-void fdesc_register_atclose(struct file_desc *d,
-	struct fdesc_atclose *fdatc)
-{
-	unsigned long flags = 0;
-
-	spin_lock_irqsave(&d->lock, flags);
-	list_add_tail(&fdatc->node, &d->atcloses);
-	spin_unlock_irqrestore(&d->lock, flags);
-}
-
-bool fdesc_unregister_atclose(struct file_desc *d,
-	struct fdesc_atclose *fdatc)
-{
-	bool ret = false;
-	unsigned long flags = 0;
-
-	spin_lock_irqsave(&d->lock, flags);
-	ret = !list_empty(&fdatc->node);
-	if (ret == true)
-		list_del(&fdatc->node);
-	spin_unlock_irqrestore(&d->lock, flags);
-
-	return ret;
-}
-
-static void fdesc_call_atcloses(struct file_desc *d)
-{
-	unsigned long flags = 0;
-	struct fdesc_atclose *fdatc = NULL;
-
-	if (d == NULL)
-		return;
-
-	spin_lock_irqsave(&d->lock, flags);
-	while ((fdatc = list_first_entry_or_null(&d->atcloses,
-				struct fdesc_atclose, node)) != NULL) {
-		list_del(&fdatc->node);
-		spin_unlock_irqrestore(&d->lock, flags);
-		fdatc->atclose(fdatc);
-		spin_lock_irqsave(&d->lock, flags);
-	}
-	spin_unlock_irqrestore(&d->lock, flags);
-}
-
 int fdesc_alloc(struct file_desc **ppd,
 	const char *path, int fflags)
 {
@@ -397,6 +353,56 @@ static struct file_desc *fdesc_find(
 {
 	return rb_entry(rb_find((void *)(intptr_t)fd,
 			fdt->fds, fd_rbfind_cmp), struct file_desc, node);
+}
+
+void fdesc_register_atclose(struct file_desc *d,
+	struct fdesc_atclose *fdatc)
+{
+	unsigned long flags = 0;
+	struct process *proc = d->proc;
+	struct fdtab *fdt = &proc->fdt;
+
+	spin_lock_irqsave(&fdt->atclock, flags);
+	list_add_tail(&fdatc->node, &d->atcloses);
+	spin_unlock_irqrestore(&fdt->atclock, flags);
+}
+
+bool fdesc_unregister_atclose(struct process *proc,
+	struct fdesc_atclose *fdatc)
+{
+	bool ret = false;
+	unsigned long flags = 0;
+	struct fdtab *fdt = &proc->fdt;
+
+	spin_lock_irqsave(&fdt->atclock, flags);
+	ret = !list_empty(&fdatc->node);
+	if (ret == true)
+		list_del(&fdatc->node);
+	spin_unlock_irqrestore(&fdt->atclock, flags);
+
+	return ret;
+}
+
+static void fdesc_call_atcloses(struct file_desc *d)
+{
+	unsigned long flags = 0;
+	struct fdesc_atclose *fdatc = NULL;
+	struct fdtab *fdt = NULL;
+
+	if (d == NULL)
+		return;
+
+	fdt = &d->proc->fdt;
+
+	spin_lock_irqsave(&fdt->atclock, flags);
+	while ((fdatc = list_first_entry_or_null(&d->atcloses,
+				struct fdesc_atclose, node)) != NULL) {
+		list_del(&fdatc->node);
+		spin_unlock(&fdt->atclock);
+		fdatc->atclose(fdatc);
+		spin_lock(&fdt->atclock);
+	}
+	spin_unlock_irqrestore(&fdt->atclock, flags);
 }
 
 struct file_desc *fdesc_get(int fd)
@@ -603,9 +609,12 @@ static void fd_pool_cleanup(struct fdtab *fdt)
  */
 static void fdesc_cleanup(struct process *proc)
 {
+	unsigned long flags = 0;
 	struct file_desc *d = NULL;
 	struct file *f = NULL;
 	struct fdtab *fdt = &proc->fdt;
+
+	spin_lock_irqsave(&fdt->lock, flags);
 
 	while ((d = rb_first_entry_postorder(fdt->fds,
 				struct file_desc, node)) != NULL) {
@@ -614,11 +623,15 @@ static void fdesc_cleanup(struct process *proc)
 			f->fs->mnt.path, f->path,
 			d->proc->c->name, d->proc->id, d->fd,
 			d->refc, atomic_read(&f->refc));
+		spin_unlock(&fdt->lock);
 		fdesc_put(d);
+		spin_lock(&fdt->lock);
 	}
 
 	/* final check */
 	fd_pool_cleanup(fdt);
+
+	spin_unlock_irqrestore(&fdt->lock, flags);
 }
 DECLARE_CLEANUP_LOW(fdesc_cleanup);
 

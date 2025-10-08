@@ -65,7 +65,7 @@ static inline int __init mem_mapping(void)
 	 *
 	 */
 	for_each_matching_addr_size("memory", "mapping", addr, size) {
-		if (!addr || !size)
+		if (!size)
 			continue;
 
 		if (addr <= PA_OFFSET) {
@@ -243,7 +243,7 @@ int __init mem_early_init(void)
 	size_t size = 0, type = 0;
 
 	of_for_each_matching_addr_size("memory", "reg", start, size) {
-		if (!start || !size)
+		if (!size)
 			continue;
 
 		mem_size += size;

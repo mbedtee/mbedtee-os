@@ -24,6 +24,14 @@ config UART_SIFIVE
 	bool "UART SiFive"
 	help
 		Enable SiFive UART.
+config UART_CDNS
+	bool "UART Cadence"
+	help
+		Enable Cadence UART.
+config UART_IMX
+	bool "UART IMX"
+	help
+		Enable IMX UART.
 endchoice
 
 endif

@@ -59,6 +59,11 @@ static struct rpc_work *rpc_work_alloc(unsigned long remote)
 
 	r = phys_to_virt(remote);
 
+	if (!access_kern_ok((void *)r, PAGE_SIZE, PG_RW)) {
+		EMSG("rpc remote badaddr %lx\n", remote);
+		return ERR_PTR(-EFAULT);
+	}
+
 	payload_size = r->size;
 	if (sizeof(struct rpc_work) + payload_size > PAGE_SIZE) {
 		ret = -E2BIG;

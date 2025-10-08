@@ -5,10 +5,10 @@ ifeq ($(CONFIG_AARCH64),y)
 
 arch-arm-aarch64-cflags-y += -Wstack-usage=1024
 
-arch-arm-aarch64-y = cache.o exception.o percpu.o \
-	lockdep.o atomic.o aarch64-start.o aarch64-cache.o \
-	aarch64-secondary-cpu.o aarch64-exception.o \
-	aarch64-monitor.o aarch64-ctx.o arch-specific.o
+arch-arm-aarch64-y = cache.o exception.o percpu.o lockdep.o \
+	atomic.o arch-specific.o aarch64-start.o aarch64-cache.o \
+	aarch64-secondary-cpu.o aarch64-exception.o aarch64-ctx.o \
+	aarch64-monitor.o aarch64-monitor-ctx.o aarch64-monitor-exception.o	
 
 arch-arm-aarch64-$(CONFIG_REE) += ree.o
 

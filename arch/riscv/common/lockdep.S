@@ -55,10 +55,10 @@ __wait_sem_event:
 FUNC_END arch_semaphore_acquire
 
 FUNC_START arch_semaphore_release
-#   int arch_semaphore_release(struct lockval *lv, unsigned char *limit);
+#   int arch_semaphore_release(struct lockval *lv, unsigned int *limit);
 
 1:	lr.w a2, (a0)
-	lbu a3, (a1)
+	lw a3, (a1)
 	bgeu a2, a3, __invalid_release
 	addi a2, a2, 1
 	sc.w.aq a3, a2, (a0)

@@ -68,9 +68,9 @@ __wait_sem_event:
 FUNC_END arch_semaphore_acquire
 
 FUNC_START arch_semaphore_release
-#	int arch_semaphore_release(struct lockval *lv, unsigned char *limit);
+#	int arch_semaphore_release(struct lockval *lv, unsigned int *limit);
 1:	ll		v1, 0(a0)
-	lbu		v0, 0(a1)
+	lw		v0, 0(a1)
 	beq     v0, v1, __invalid_condi
 	addiu	v1, 1
 	sc		v1, 0(a0)
@@ -176,7 +176,7 @@ __wait_sem_event:
 FUNC_END arch_semaphore_acquire
 
 FUNC_START arch_semaphore_release
-#   int arch_semaphore_release(struct lockval *lv, unsigned char *limit);
+#   int arch_semaphore_release(struct lockval *lv, unsigned int *limit);
     li      t0, -4
     li      a2, 1
     li      v1, 0xff
@@ -188,7 +188,7 @@ FUNC_START arch_semaphore_release
     sync
 
 1:  ll      v0, 0(t0)
-    lb      t1, 0(a1)
+    lw      t1, 0(a1)
     sllv    t1, t1, a0 /* e.g. limit << 16 */
     and     a3, v0, v1 /* a3 = lock_val & 0x00ff0000 */
     beq     a3, t1, __invalid_condi

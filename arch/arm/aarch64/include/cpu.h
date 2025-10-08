@@ -85,6 +85,22 @@ static __always_inline void set_current(void *curr)
 	write_system_reg(tpidrro_el0, curr);
 }
 
+static __always_inline bool cpu_has_security_extn(void)
+{
+	unsigned long id_aa64pfr0_el1 = 0;
+
+	id_aa64pfr0_el1 = read_system_reg(id_aa64pfr0_el1);
+
+	return ((id_aa64pfr0_el1 >> 12) & 0xf) ? true : false;
+}
+
+static __always_inline bool is_security_extn_ena(void)
+{
+	bool gic_has_security_extn(void);
+
+	return cpu_has_security_extn() && gic_has_security_extn();
+}
+
 static __always_inline void local_irq_restore(unsigned long flags)
 {
 	write_system_reg(daif, flags);

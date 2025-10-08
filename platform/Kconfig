@@ -151,6 +151,36 @@ config QEMU_AST2700
 	help
 		select the QEMU -M ast2700-evb platform
 
+config QEMU_RASPI4B
+	bool "QEMU raspi4b"
+	depends on AARCH64
+	help
+		select the QEMU -M raspi4b platform
+
+config QEMU_XLNX_VERSAL_VIRT
+	bool "QEMU xlnx-versal-virt"
+	depends on AARCH64
+	help
+		select the QEMU -M xlnx-versal-virt platform
+
+config QEMU_XLNX_ZCU102
+	bool "QEMU xlnx-zcu102"
+	depends on AARCH64
+	help
+		select the QEMU -M xlnx-zcu102 platform
+
+config QEMU_IMX7D
+	bool "QEMU imx7d"
+	depends on AARCH32
+	help
+		select the QEMU -M mcimx7d-sabre platform
+
+config QEMU_IMX8MP
+	bool "QEMU imx8mp"
+	depends on AARCH64
+	help
+		select the QEMU -M imx8mp-evk platform
+
 endchoice
 
 endmenu

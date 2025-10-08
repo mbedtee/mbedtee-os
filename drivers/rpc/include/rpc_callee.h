@@ -9,6 +9,7 @@
 
 #include <ctx.h>
 #include <rpc.h>
+#include <page.h>
 #include <rpc/rpc.h>
 
 /* handler for fast calls */
@@ -26,12 +27,17 @@ static inline long rpc_callee_handler(unsigned long remote)
 	/*
 	 * this remote PAGE must within REE memory
 	 */
-	if (mem_in_secure(remote)) {
+	if (mem_in_secure(remote) || (remote & 3)) {
 		EMSG("rpc remote error %lx\n", remote);
 		return -EFAULT;
 	}
 
 	rpc = phys_to_virt(remote);
+
+	if (!access_kern_ok((void *)rpc, sizeof(*rpc), PG_RW)) {
+		EMSG("rpc remote badaddr %lx\n", remote);
+		return -EFAULT;
+	}
 
 	if (RPC_IS_FASTCALL(rpc->id)) {
 		ret = rpc_fastcall_handler(rpc->id,

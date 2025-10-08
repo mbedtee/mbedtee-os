@@ -13,28 +13,31 @@
 
 struct mutex {
 	struct lockval lock;
+	struct spinlock slock;
 	/* normal or recursive */
 	unsigned char type;
 	/* recursive count */
-	unsigned short rc;
+	int rc;
 	pid_t owner_id;
-	struct list_head node;
 	struct waitqueue waitq;
+	struct list_head node;
 };
 
 #define MUTEX_NORMAL    0
 #define MUTEX_RECURSIVE 1
 
-#define DEFAULT_MUTEX(x) {            \
-	LOCKVAL_INIT(0), MUTEX_NORMAL,    \
-	0, 0, LIST_HEAD_INIT((x).node),   \
-	DEFAULT_WAITQ((x).waitq),         \
+#define DEFAULT_MUTEX(x) {                \
+	LOCKVAL_INIT(0), SPIN_LOCK_INIT(0),   \
+	MUTEX_NORMAL, 0, 0,                   \
+	DEFAULT_WAITQ((x).waitq),             \
+	LIST_HEAD_INIT((x).node),             \
 }
 
-#define RECURSIVE_MUTEX(x) {          \
-	LOCKVAL_INIT(0), MUTEX_RECURSIVE, \
-	0, 0, LIST_HEAD_INIT((x).node),   \
-	DEFAULT_WAITQ((x).waitq),         \
+#define RECURSIVE_MUTEX(x) {              \
+	LOCKVAL_INIT(0), SPIN_LOCK_INIT(0),   \
+	MUTEX_RECURSIVE, 0, 0,                \
+	DEFAULT_WAITQ((x).waitq),             \
+	LIST_HEAD_INIT((x).node),             \
 }
 
 #define DECLARE_MUTEX(name) \
@@ -43,6 +46,7 @@ struct mutex {
 	struct mutex name = RECURSIVE_MUTEX(name)
 
 void mutex_init(struct mutex *m);
+
 void mutex_init_recursive(struct mutex *m);
 
 void mutex_lock(struct mutex *m);

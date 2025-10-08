@@ -1,6 +1,6 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
- * Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+ * Copyright (c) 2025 KapaXL (kapa.xl@outlook.com)
  */
 
 /dts-v1/;
@@ -57,7 +57,7 @@
 			interrupt-parent = <&gic>;
 			clock-frequency = <1846153>;
 			current-speed = <115200>;
-			clock-divisor = <64>;
+			clock-divisor = <16>;
 			reg-shift = <2>;
 			reg-io-width = <4>;
 		};
@@ -80,6 +80,6 @@
 		compatible = "arm,armv7-generic-timer";
 		interrupts = <GIC_PPI(29)>; /* PPI 29 for SecureWorld tick_timer, 30 for REE */
 		interrupt-parent = <&gic>;
-		clock-frequency = <125000000>;
+		clock-frequency = <500000000>;
 	};
 };

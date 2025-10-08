@@ -109,12 +109,15 @@ void __wakeup_node(struct waitqueue_node *n);
 
 #define waitqueue_node_del(n)										\
 	do {															\
-		if (!list_empty(&(n)->node) || !list_empty(&(n)->tnode))  {	\
-			unsigned long __flags = 0;								\
-			spin_lock_irqsave(&(n)->wq->lock, __flags);				\
+		unsigned long __flags = 0;									\
+		struct waitqueue *__wq = (n)->wq;							\
+		if (__wq)  {												\
+			spin_lock_irqsave(&__wq->lock, __flags);				\
+			(n)->wq = NULL;											\
+			(n)->wake = NULL;										\
 			list_del(&(n)->node);									\
 			list_del(&(n)->tnode);									\
-			spin_unlock_irqrestore(&(n)->wq->lock, __flags);		\
+			spin_unlock_irqrestore(&__wq->lock, __flags);			\
 		}															\
 	} while (0)
 

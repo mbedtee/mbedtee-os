@@ -67,7 +67,7 @@
 			interrupt-parent = <&i8259>;
 			clock-frequency = <1843200>;
 			current-speed = <115200>;
-			clock-divisor = <64>;
+			clock-divisor = <16>;
 			reg-shift = <0>;
 			reg-io-width = <1>;
 		};

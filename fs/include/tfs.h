@@ -10,10 +10,10 @@
 #include <fs.h>
 
 #define TFS_ATTR_RO			0x01
-#define TFS_ATTR_VOL			0x08
-#define TFS_ATTR_DIR			0x10
-#define TFS_ATTR_ARC			0x20
-#define TFS_ATTR_MASK			0x3F
+#define TFS_ATTR_VOL		0x08
+#define TFS_ATTR_DIR		0x10
+#define TFS_ATTR_ARC		0x20
+#define TFS_ATTR_MASK		0x3F
 
 #define tfs_lock(fs) mutex_lock(&((fs)->lock))
 #define tfs_unlock(fs) mutex_unlock(&((fs)->lock))

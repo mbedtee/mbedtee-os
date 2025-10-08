@@ -1,0 +1,86 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2025 KapaXL (kapa.xl@outlook.com)
+ */
+
+/dts-v1/;
+
+#include "memory.dtsi"
+
+#include <generated/autoconf.h>
+
+#define GIC_SPI(x) ((x) + 32)
+#define GIC_PPI(x) ((x))
+
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	cpu {
+		compatible = "arm,cpu";
+		/* mpid of each CPU */
+		cpus = <0x0 0x1 0x2 0x3>;
+	};
+
+	platform {
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/*
+		 * pinctrls cells information
+		 * 0: reg offset,
+		 * 1: first bit position,
+		 * 2: number of bits,
+		 * 3: value
+		 */
+		pinctrl@0 {
+			/* unnecessary for QEMU */
+			compatible = "module,pinctrl";
+			reg = <0 0>;
+			pinctrls = <0 0 0 0>;
+		};
+
+		cpu-power@1 {
+			compatible = "module,cpu-power";
+			/* unnecessary for QEMU */
+			reg = <0 0>;
+		};
+	};
+
+	/* interrupt-controller: CPU side */
+	gic: interrupt-controller@ff841000 {
+		compatible = "arm,gic-v2";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+
+		reg = <0 0xff841000 0 0x1000>, /* GICD */
+			<0 0xff842000 0 0x2000>; /* GICC */
+	};
+
+	uart {
+		compatible = "module,uart";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		serial16550@fe215040 { /* UART1, a mini-uart */
+			compatible = "ns16550a";
+			reg = <0xfe215040 0x400>;
+			interrupts = <GIC_SPI(93)>;
+			interrupt-parent = <&gic>;
+			clock-frequency = <250000000>;
+			current-speed = <115200>;
+			clock-divisor = <8>;
+			reg-shift = <2>;
+			reg-io-width = <1>;
+		};
+	};
+
+	timer {
+		compatible = "arm,armv8-timer";
+		interrupts = <GIC_PPI(29)>; /* PPI 29 for SecureWorld tick_timer, 30 for REE */
+		interrupt-parent = <&gic>;
+		clock-frequency = <125000000>;
+	};
+};

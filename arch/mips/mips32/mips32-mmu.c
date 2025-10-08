@@ -143,7 +143,7 @@ int map(struct pt_struct *pt, unsigned long pa, void *_va,
 		return 0;
 	}
 
-	if ((!va) || (!pa))
+	if (!va)
 		return -EINVAL;
 
 	if ((va & (~PAGE_MASK)) || (pa & (~PAGE_MASK))) {

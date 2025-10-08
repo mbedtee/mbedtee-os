@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2019 KapaXL (kapa.xl@outlook.com)
+# Copyright (c) 2025 KapaXL (kapa.xl@outlook.com)
 
 platform-qemu_ast2600-cflags-y +=
 

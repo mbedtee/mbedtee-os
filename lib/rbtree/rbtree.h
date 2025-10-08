@@ -220,4 +220,8 @@ struct rb_node *rb_next_postorder(const struct rb_node *n);
 	for ((pos) = rb_first_entry_postorder(root, typeof(*(pos)), member); \
 	     (pos); (pos) = rb_next_entry_postorder(pos, member))
 
+#define rb_for_each_entry_safe_postorder(pos, n, root, member) \
+	for ((pos) = rb_first_entry_postorder(root, typeof(*(pos)), member), \
+		(n) = (pos) ? rb_next_entry_postorder(pos, member) : NULL; (pos); (pos) = (n), \
+		(n) = (n) ? rb_next_entry_postorder(n, member) : NULL)
 #endif
