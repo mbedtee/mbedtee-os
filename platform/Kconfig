@@ -5,6 +5,11 @@ menu "Platform Configure"
 
 choice
 	prompt "Platform Selection"
+	default QEMU_VIRT_AARCH64 if AARCH64
+	default QEMU_VIRT_ARM if AARCH32
+	default QEMU_MALTA_MIPS32R2 if MIPS32
+	default QEMU_VIRT_RISCV32 if RISCV32
+	default QEMU_VIRT_RISCV64 if RISCV64
 
 config VEXPRESS_CA5
 	bool "FVP CA5x4"
@@ -145,6 +150,44 @@ config QEMU_SIFIVE_U_RISCV64
 	help
 		select the QEMU sifive_u RISCV64 platform
 
+config QEMU_ANDES_AE350_RISCV32
+	bool "QEMU Andes AE350 RISCV32"
+	depends on RISCV32
+	help
+		select the Andes AE350 RISCV32 platform
+		by "qemu-system-riscv32 -M andes_ae350 -cpu andes-a25"
+		supported CPUs: andes-a25, andes-a27, andes-a45,
+		andes-a46mp, andes-a46mpv
+
+config QEMU_ANDES_AE350_RISCV32_IMSIC
+	bool "QEMU Andes AE350 RISCV32 with APLIC-IMSIC"
+	depends on RISCV32
+	help
+		select the Andes AE350 RISCV32 with APLIC-IMSIC platform
+		by "qemu-system-riscv32 -M andes_ae350,aia=aplic-imsic"
+		supported CPUs: andes-a25, andes-a27, andes-a45,
+		andes-a46mp, andes-a46mpv
+
+config QEMU_ANDES_AE350_RISCV64
+	bool "QEMU Andes AE350 RISCV64"
+	depends on RISCV64
+	help
+		select the Andes AE350 RISCV64 platform
+		by "qemu-system-riscv64 -M andes_ae350 -cpu andes-ax45"
+		supported CPUs: andes-ax25, andes-ax27, andes-ax45,
+		andes-ax45mpv, andes-ax46mp, andes-ax46mpv,
+		andes-ax65, andes-ax66
+
+config QEMU_ANDES_AE350_RISCV64_IMSIC
+	bool "QEMU Andes AE350 RISCV64 with APLIC-IMSIC"
+	depends on RISCV64
+	help
+		select the Andes AE350 RISCV64 with APLIC-IMSIC platform
+		by "qemu-system-riscv64 -M andes_ae350,aia=aplic-imsic"
+		supported CPUs: andes-ax25, andes-ax27, andes-ax45,
+		andes-ax45mpv, andes-ax46mp, andes-ax46mpv,
+		andes-ax65, andes-ax66
+
 config SALIX_CA7
 	bool "SALIX_CA7x4"
 	depends on AARCH32
@@ -198,6 +241,13 @@ config QEMU_IMX8MP
 	depends on AARCH64
 	help
 		select the QEMU -M imx8mp-evk platform
+
+config QEMU_VIRT_RISCV64_THEAD_C906
+	bool "QEMU virt T-Head C906 RISCV64"
+	depends on RISCV64
+	help
+		select the QEMU virt platform with T-Head C906 CPU
+		by "qemu-system-riscv64 -M virt -cpu thead-c906"
 
 config QEMU_XIANGSHAN_KMH
 	bool "QEMU XiangShan-KMH RISCV64"

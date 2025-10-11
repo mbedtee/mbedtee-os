@@ -45,15 +45,15 @@ static void platform_pinctrl(void)
 		return;
 
 	base = of_iomap(node, 0);
-	if (base == NULL) {
+	if (!base) {
 		IMSG("no pinctrls\n");
 		return;
 	}
 
 	for (i = 0; i < ret/(int)sizeof(struct pinctrl_cell); i++) {
 		val = ioread32(base + cells[i].reg_off);
-		val &= ~(((1 << cells[i].bit_len) - 1) << cells[i].bit_off);
-		val |= (cells[i].val & ((1 << cells[i].bit_len) - 1))
+		val &= ~(((1U << cells[i].bit_len) - 1) << cells[i].bit_off);
+		val |= (cells[i].val & ((1U << cells[i].bit_len) - 1))
 				<< cells[i].bit_off;
 		iowrite32(val, base + cells[i].reg_off);
 	}

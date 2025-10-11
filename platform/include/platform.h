@@ -7,6 +7,12 @@
 #ifndef _PLATFORM_H
 #define _PLATFORM_H
 
-void platform_init(void);
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

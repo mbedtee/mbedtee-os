@@ -23,7 +23,7 @@
 
 #include <power.h>
 
-#define INVALID_PM_CPU(x) (!VALID_CPUID(x) || !(x))
+#define INVALID_PM_CPU(x) (!VALID_CPUID(x) || (x) == 0)
 
 struct cpu_affinity cpus_online[1] = {0};
 struct cpu_affinity cpus_error[1] = {0};
@@ -44,8 +44,8 @@ static void poll_cpu(unsigned int cpu)
 
 		/*
 		 * -- sync the time --
-		 * make sure the time is update to date
-		 * and visible to the peer #cpu
+		 * make sure the time is up to date
+		 * and visible to the peer CPU
 		 */
 		smp_mb();
 
@@ -58,17 +58,17 @@ static void poll_cpu(unsigned int cpu)
 		}
 
 		usleep(50);
-	} while (--intime);
+	} while (--intime != 0);
 
 	if (error)
 		EMSG("CPU%d: PowerOn Error\n", cpu);
-	else if (intime)
+	else if (intime != 0)
 		IMSG("CPU%d: Powered on\n", cpu);
 	else
 		EMSG("CPU%d: PowerOn Timeout\n", cpu);
 }
 
-static void __cpu_up(void *data)
+static long __cpu_up(void *data)
 {
 	int cpu = (intptr_t)data;
 	int error = false;
@@ -82,6 +82,8 @@ static void __cpu_up(void *data)
 		EMSG("CPU%d: PowerOn Error\n", cpu);
 	else
 		poll_cpu(cpu);
+
+	return error;
 }
 
 int cpu_up(unsigned int cpu, unsigned long pa)
@@ -95,7 +97,7 @@ int cpu_up(unsigned int cpu, unsigned long pa)
 	else
 		IMSG("Powering on CPU%d\n", cpu);
 
-	if (INVALID_PM_CPU(cpu) || (!pa))
+	if (INVALID_PM_CPU(cpu) || pa == 0)
 		return -EINVAL;
 
 	spin_lock_irqsave(&onlock, flags);
@@ -142,7 +144,7 @@ void cpu_down(unsigned int cpu)
 
 	spin_lock_irqsave(&onlock, flags);
 
-	while (cpu_online(cpu) && (--intime))
+	while (cpu_online(cpu) && --intime != 0)
 		udelay(50);
 
 	if (pm_ops.cpu_down)

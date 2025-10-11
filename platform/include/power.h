@@ -7,6 +7,10 @@
 #ifndef _CPU_POWER_H
 #define _CPU_POWER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <percpu.h>
 #include <affinity.h>
 
@@ -86,5 +90,9 @@ static inline void cpu_clear_error(unsigned int cpu)
 	if (VALID_CPUID(cpu))
 		cpu_affinity_clear(cpus_error, cpu);
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
