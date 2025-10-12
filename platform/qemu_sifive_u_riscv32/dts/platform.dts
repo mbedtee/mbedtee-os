@@ -1,6 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
 /*
- * SPDX-License-Identifier: Apache-2.0
- * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
+ * Copyright (c) 2022 Xing Loong <xing.xl.loong@gmail.com>
  */
 
 /dts-v1/;
@@ -13,6 +13,7 @@
 		compatible = "riscv,cpu";
 		/* hartid of each CPU */
 		cpus = <0 1 2 3 4>;
+		cache-line-size = <64>;
 	};
 
 	platform {
@@ -88,7 +89,7 @@
 		};
 	};
 
-	/* for S-Mode */
+	/* for S-Mode when sstc present */
 	timer {
 		compatible = "riscv,timer";
 		interrupts = <5>;
