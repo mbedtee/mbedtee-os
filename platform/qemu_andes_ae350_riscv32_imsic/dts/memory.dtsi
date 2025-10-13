@@ -1,0 +1,36 @@
+// SPDX-License-Identifier: Apache-2.0
+/*
+ * Copyright (c) 2025 Xing Loong <xing.xl.loong@gmail.com>
+ */
+
+/{
+	#address-cells = <1>;
+	#size-cells = <1>;
+
+	memory@0 {
+		compatible = "memory";
+		device_type = "memory";
+
+		/*
+		 * SoC installed memory mapping, this is a guideline for OS
+		 * to setup the early mmu-memory-section-mapping
+		 *
+		 * Andes AE350 RISCV32 platform with 2G Bytes memory installed:
+		 * DRAM starts at 0x0
+		 *
+		 * mapping size is limited to 960MB for RV32 with USER
+		 * (1GB kernel VA - 64MB KERN_VMA = 960MB max)
+		 */
+		mapping = <0x0 0x3C000000>;
+
+		/* dedicated memory region for current OS */
+		reg = <0x0 0x5800000>;
+
+		/* TAs loaded from REE will be placed in this area */
+		ta-ramfs = <0x5A00000 0x200000>;
+
+		rpc-t2r-ring = <0x5F10000 0x20000>;
+		rpc-t2r-shm = <0x5F30000 0x40000>;
+		rpc-r2t-ring = <0x5F70000 0x20000>;
+	};
+};

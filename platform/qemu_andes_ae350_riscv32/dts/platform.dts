@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: Apache-2.0
+/*
+ * Copyright (c) 2025 Xing Loong <xing.xl.loong@gmail.com>
+ */
+
+/dts-v1/;
+
+#include <generated/autoconf.h>
+#include "memory.dtsi"
+
+/ {
+	cpu {
+		compatible = "riscv,cpu";
+		/* hartid of each CPU */
+		cpus = <0 1 2 3>;
+		cache-line-size = <32>;
+	};
+
+	platform {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		pinctrls@0 {
+			reg = <0 0>;
+
+			/*
+			 * cells information
+			 * 0: reg offset,
+			 * 1: first bit position,
+			 * 2: number of bits,
+			 * 3: value
+			 */
+			/* unnecessary for QEMU */
+			pinctrls = <0 0 0 0>, <0 0 0 0>;
+		};
+
+		cpu-power@1 {
+			compatible = "module,cpu-power";
+			/* unnecessary for QEMU */
+			reg = <0 0>;
+		};
+	};
+
+	/* interrupt-controller: CPU side - Andes PLICSW */
+	intc: interrupt-controller@e6400000 {
+		compatible = "andestech,plicsw";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+
+		reg = <0xe6400000 0x400000>;
+	};
+
+	/* interrupt-controller: SoC side - external platform interrupt */
+	plic: plic@e4000000 {
+		compatible = "riscv,plic";
+
+		interrupt-controller;
+
+		interrupt-parent = <&intc>;
+
+		#interrupt-cells = <1>;
+
+		/* connects to CPU local 11 (M-Mode), 9 (S-Mode) */
+		interrupts = <11 9>;
+
+		max-irqs = <128>;
+
+		reg = <0xe4000000 0x400000>;
+	};
+
+	uart {
+		compatible = "module,uart";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		serial16550@f0200020 {
+			compatible = "ns16550a";
+			reg = <0xf0200020 0x20>;
+#if !defined(CONFIG_REE) /* Give the UART INT to REE */
+			interrupts = <8>;
+			interrupt-parent = <&plic>;
+#endif
+			clock-frequency = <3686400>;
+			current-speed = <38400>;
+			clock-divisor = <16>;
+			reg-shift = <2>;
+			reg-io-width = <4>;
+		};
+	};
+
+	/* when S-Mode sstc supported */
+	timer {
+		compatible = "riscv,timer";
+		interrupts = <5>;
+		interrupt-parent = <&intc>;
+		clock-frequency = <60000000>;
+	};
+
+	/* Andes PLMT timer for M-Mode ECALL forwarding */
+	timer@e6000000 {
+		compatible = "andes,plmt-timer";
+		interrupts = <7>;
+		interrupt-parent = <&intc>;
+		clock-frequency = <60000000>;
+		reg = <0xe6000000 0x100000>;
+	};
+};

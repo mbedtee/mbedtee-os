@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: Apache-2.0
+/*
+ * Copyright (c) 2025 Xing Loong <xing.xl.loong@gmail.com>
+ * Andes AE350 RISCV64 - Secondary CPUs PowerUp/PowerDown
+ */
+
+#include <io.h>
+#include <of.h>
+#include <mem.h>
+#include <mmu.h>
+#include <cpu.h>
+#include <kmap.h>
+#include <trace.h>
+#include <delay.h>
+#include <timer.h>
+#include <driver.h>
+#include <cacheops.h>
+
+#include <power.h>
+
+#if CONFIG_NR_CPUS > 1
+
+#define CPU_HARTID(x) (((unsigned int)(x) << 16) | hartid_of(x))
+
+static int ae350_riscv_cpu_up(unsigned int cpu)
+{
+	unsigned int intime = 10000;
+
+	cpu_power_id = CPU_HARTID(cpu);
+
+	do {
+		/*
+		 * #cpu_power_id may be updated by a peer CPU,
+		 * make sure it is up to date for the current CPU
+		 */
+		smp_mb();
+
+		if (cpu_power_id != CPU_HARTID(cpu))
+			break;
+
+		udelay(5);
+	} while (--intime != 0);
+
+	if (cpu_power_id == CPU_HARTID(cpu) || intime == 0)
+		return -1;
+
+	return 0;
+}
+
+/*
+ * runs on the processor to be powered off
+ */
+static void ae350_riscv_cpu_die(void)
+{
+	/*
+	 * No Power Control of Processor on/off
+	 * Just simulate the procedure
+	 */
+
+	flush_cache_louis();
+
+	/* disable SMP */
+}
+
+static const struct cpu_pm_ops ae350_riscv_pm_ops = {
+	.cpu_up = ae350_riscv_cpu_up,
+	.cpu_die = ae350_riscv_cpu_die
+};
+
+static int __init cpu_power_probe(struct device *dev)
+{
+	int ret = -1;
+	struct device_node *dn = NULL;
+
+	cpu_pm_register(&ae350_riscv_pm_ops);
+
+	dn = container_of(dev, struct device_node, dev);
+
+	IMSG("init %s\n", dn->id.compat);
+
+	ret = of_parse_io_resource(dn, 0, NULL, NULL);
+	if (ret != 0) {
+		WMSG("cpu-power dts\n");
+		return ret;
+	}
+
+	return 0;
+}
+
+static const struct of_device_id cpu_power_desc[] = {
+	{.name = "cpu-power", .compat = "module,cpu-power"},
+	{},
+};
+
+static const struct device_driver of_cpu_power = {
+	.name = "cpu-power-ctrl",
+	.probe = cpu_power_probe,
+	.of_match_table = cpu_power_desc,
+};
+
+module_arch(of_cpu_power);
+
+#endif
