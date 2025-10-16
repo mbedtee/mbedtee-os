@@ -38,8 +38,8 @@ static int ca65_cpu_up(unsigned int cpu)
 		asm volatile("sev" : : : "memory", "cc");
 
 		/*
-		 * #cpu_power_id is possibly updating by peer,
-		 * make sure it's update to date for current CPU
+		 * #cpu_power_id may be updated by a peer CPU,
+		 * make sure it is up to date for the current CPU
 		 */
 		smp_mb();
 
@@ -47,9 +47,9 @@ static int ca65_cpu_up(unsigned int cpu)
 			break;
 
 		udelay(5);
-	} while (--intime);
+	} while (--intime != 0);
 
-	if (cpu_power_id == CPU_MPID(cpu) || !intime)
+	if (cpu_power_id == CPU_MPID(cpu) || intime == 0)
 		return -1;
 
 	return 0;
@@ -85,7 +85,7 @@ static int __init cpu_power_probe(struct device *dev)
 	IMSG("init %s\n", dn->id.compat);
 
 	base_power = of_iomap(dn, 0);
-	if (base_power == NULL) {
+	if (!base_power) {
 		WMSG("cpu-power dts\n");
 		return -EINVAL;
 	}
