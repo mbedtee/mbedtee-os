@@ -61,7 +61,7 @@ jobs:
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
+      uses: github/codeql-action/init@v4
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
@@ -83,17 +83,15 @@ jobs:
       run: |
         sudo apt install mtools dosfstools device-tree-compiler
         cd ..
-        rm aarch64-mbedtee-elf-14.2.0 -rf
-        rm mbedtee-common -rf
-        wget https://dlink.host/1drv/aHR0cHM6Ly8xZHJ2Lm1zL3UvYy9hZGU1YzFiOWU3MzhkYTRkL0VldzN4RU5XcFNGRGhiU2c4eVozN1JBQi05TXFCUkdLaEtkZ01KS3BRVWhsVHc_ZT1kaTc5UkY -O aarch64-mbedtee-elf-14.2.0.tar.gz
-        tar xvf aarch64-mbedtee-elf-14.2.0.tar.gz
-        git clone https://github.com/mbedtee/mbedtee-common
+        rm aarch64-mbedtee-elf-15.2.0 -rf
+        wget https://github.com/mbedtee/mbedtee-toolchain/releases/download/v15.2.0/aarch64-mbedtee-elf-15.2.0.tar.bz2 -O aarch64-mbedtee-elf-15.2.0.tar.bz2
+        tar xf aarch64-mbedtee-elf-15.2.0.tar.bz2
         cd mbedtee-os
         make qemu_virt_aarch64_defconfig
-        make CROSS_COMPILE=$(pwd)/../aarch64-mbedtee-elf-14.2.0/bin/aarch64-mbedtee-elf- DTC=dtc MCOPY=mcopy MKFS_VFAT=mkfs.vfat MBEDTEE_INC=$(pwd)/../mbedtee-common
-        exit 0
+        touch platform/qemu_virt_aarch64/mbedtee-root.dummy
+        make CROSS_COMPILE=$(pwd)/../aarch64-mbedtee-elf-15.2.0/bin/aarch64-mbedtee-elf- DTC=dtc MCOPY=mcopy MKFS_VFAT=mkfs.vfat
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
+      uses: github/codeql-action/analyze@v4
       with:
         category: "/language:${{matrix.language}}"
