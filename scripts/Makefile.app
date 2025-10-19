@@ -13,11 +13,11 @@ ta_libs     = $(libgcc) -L$(BINARY_DIR) -lc
 
 include $(shell find $(TA_SRC) -iname "uobjects.mk")
 
-ta-dir = $(shell find $(TA_SRC) -mindepth 1 -maxdepth 1 -type d)
+ta-dir := $(shell find $(TA_SRC) -mindepth 1 -maxdepth 1 -type d)
 
-ta-obj = $(foreach ta,$(obj-y),$(TA_BUILD)/$(ta))
+ta-obj := $(foreach ta,$(obj-y),$(TA_BUILD)/$(ta))
 
-ta-config = $(foreach ta,$(obj-y),$(TA_SRC)/$(ta:.elf=)/$(ta:.elf=.config))
+ta-config := $(foreach ta,$(obj-y),$(TA_SRC)/$(ta:.elf=)/$(ta:.elf=.config))
 
 ta-dep = $(shell set -e;                                       \
     name=`echo $(1) | awk -F '/' '{print $$NF}'`;              \
@@ -35,11 +35,11 @@ ta-dep = $(shell set -e;                                       \
     echo "$$name-cflags += -I$(1) -I$(1)/include\n" >> $$dep;  \
     echo "$$name-asflags += -I$(1) -I$(1)/include\n" >> $$dep; \
     echo "$$dir/%.o: $(1)/%.c" >> $$dep;   \
-    echo "	\$$(Q)mkdir -p \`dirname "\$$@"\`" >> $$dep;  \
+    echo "	\$$(Q)mkdir -p \$$(dir \$$@)" >> $$dep;  \
     echo "	\$$(if \$$(Q), @echo \" (CC) 	   \$$(subst $(TA_BUILD)/,,\$$@)\")" >> $$dep; \
     echo "	\$$(Q)\$$(cc) \$$(ta_cflags) \$$($$name-cflags) -c \$$< -o \$$@\n" >> $$dep; \
     echo "$$dir/%.o: $(1)/%.S" >> $$dep;   \
-    echo "	\$$(Q)mkdir -p \`dirname "\$$@"\`" >> $$dep;  \
+    echo "	\$$(Q)mkdir -p \$$(dir \$$@)" >> $$dep;  \
     echo "	\$$(if \$$(Q), @echo \" (AS) 	   \$$(subst $(TA_BUILD)/,,\$$@)\")" >> $$dep; \
     echo "	\$$(Q)\$$(cc) \$$(ta_asflags) \$$($$name-asflags) -c \$$< -o \$$@" >> $$dep; \
 	echo $$dep                       )

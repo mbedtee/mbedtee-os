@@ -31,7 +31,7 @@ all: $(libc-objs-y)
 	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-rpmatch.o
 	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-lock.o
 	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-getreent.o
-	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-memcmp*.o
+	$(Q)rm -f $(LIBC_BUILD)/newlib/lib*_a-stack_protector.o
 	$(Q)$(ar) -r $(LIBC_BUILD)/libuser.a $(libc-objs-y) 2>/dev/null
 	$(Q)$(ar) -r $(LIBC_BUILD)/libc.a $(LIBC_BUILD)/newlib/*.o 2>/dev/null
 
@@ -53,11 +53,11 @@ clean:
 	$(Q)rm -f $(BINARY_DIR)/libc.so
 
 $(LIBC_BUILD)/%.o: $(TOP_DIR)/%.S
-	$(Q)mkdir -p `dirname $@`
+	$(Q)mkdir -p $(dir $@)
 	$(if $(Q), @echo " (AS) 	   $(subst $(LIBC_BUILD)/,,$@)")
-	$(Q)$(cc) $(libc_asflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(shell dirname $<)))-cflags-y) -c $< -o $@
+	$(Q)$(cc) $(libc_asflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(patsubst %/,%,$(dir $<))))-cflags-y) -c $< -o $@
 
 $(LIBC_BUILD)/%.o: $(TOP_DIR)/%.c
-	$(Q)mkdir -p `dirname $@`
+	$(Q)mkdir -p $(dir $@)
 	$(if $(Q), @echo " (CC) 	   $(subst $(LIBC_BUILD)/,,$@)")
-	$(Q)$(cc) $(libc_cflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(shell dirname $<)))-cflags-y) -c $< -o $@
+	$(Q)$(cc) $(libc_cflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(patsubst %/,%,$(dir $<))))-cflags-y) -c $< -o $@

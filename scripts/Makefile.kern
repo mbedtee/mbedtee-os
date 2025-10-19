@@ -8,8 +8,15 @@
 include $(SCRIPTS_DIR)/Makefile.include
 
 kern_cflags  = $(cflags) -D__KERNEL__ $(kern-inc-y)
+kern_cflags += $(if $(filter y,$(CONFIG_RISCV)),$(foreach n,$(shell seq 0 31),-ffixed-f$(n)))
+kern_cflags += $(if $(filter y,$(CONFIG_AARCH64)),-mgeneral-regs-only)
+kern_cflags := $(if $(filter y,$(CONFIG_AARCH32)),$(subst -mfloat-abi=softfp,-mfloat-abi=soft,$(kern_cflags)),$(kern_cflags))
+kern_cflags += $(if $(filter y,$(CONFIG_MIPS32)),-msoft-float)
+
 kern_asflags = $(asflags) -D__KERNEL__ $(kern-inc-y)
-kern_ldflags = -EL -nostdlib --no-warn-rwx-segments
+kern_asflags += $(if $(filter y,$(CONFIG_MIPS32)),-msoft-float)
+kern_ldflags = -EL -nostdlib --no-warn-rwx-segments --fatal-warnings
+kern_libgcc := $(shell $(cc) $(kern_cflags) -print-libgcc-file-name)
 
 objs-y = $(foreach dir,$(obj-dirs),$(foreach obj,\
 	$($(subst /,-,$(subst $(TOP_DIR)/,,$(dir)))-y),\
@@ -20,9 +27,6 @@ objs-y = $(foreach dir,$(obj-dirs),$(foreach obj,\
 targets-y = $(OUTPUT_DIR)/$(PRODUCT).elf
 targets-y += $(OUTPUT_DIR)/$(PRODUCT).bin
 
-kern_newlibdir = $(OUTPUT_DIR)/libckern
-kern_newlib = $(kern_newlibdir)/libckern.a
-
 asm-offset = $(INC_DIR)/generated/asm-offsets.h
 
 kldscript_src = $(PLATFORM_DIR)/linker.ld.S
@@ -30,23 +34,17 @@ kldscript = $(OUTPUT_DIR)/linker.ld
 ksymbols = $(OUTPUT_DIR)/symbols
 ksymtrace = $(SCRIPTS_DIR)/ksymtrace
 
+# Kernel objects excluding ramfs.o - compile in parallel with user objs
+kern_objs = $(filter-out $(OUTPUT_DIR)/core/ramfs.o,$(objs-y))
+
+.PHONY: objs
+objs: $(kern_objs)
+
 .PHONY: all
 all: $(targets-y)
 
-.PHONY: $(kern_newlib)
-$(kern_newlib): $(libc)
-	$(Q)rm -rf $@ $(kern_newlibdir)
-ifeq ($(CONFIG_KERN_NEWLIB),y)
-	$(Q)mkdir -p $(kern_newlibdir)
-	$(Q)cp $(libc) $(kern_newlibdir)
-	$(Q)cd $(kern_newlibdir) && $(ar) -x libc.a
-	$(Q)rm -f $(kern_newlibdir)/lib*_a-*alloc*.o
-	$(Q)rm -f $(kern_newlibdir)/lib*_a-*free*.o
-	$(Q)$(ar) -r $@ $(kern_newlibdir)/*.o 2>/dev/null
-endif
-
 define link_elf
-	$(Q)mkdir -p `dirname $@`
+	$(Q)mkdir -p $(dir $@)
 	$(if $(Q), @echo " (LD) 	   $(notdir $@)")
 	$(Q)touch $(ksymbols).c
 	$(Q)$(cc) $(kern_cflags) -c $(ksymbols).c -o $(ksymbols).o
@@ -56,10 +54,9 @@ define link_elf
 	$(if $(CONFIG_BACKTRACE:n=),$(Q)$(ksymtrace) -m $@.map -o $(ksymbols).c)
 endef
 
-$(OUTPUT_DIR)/$(PRODUCT).o: $(objs-y) $(kern_newlib)
+$(OUTPUT_DIR)/$(PRODUCT).o: $(objs-y)
 	$(Q)rm -f $(ksymbols).o
-	$(Q)$(ld) $(kern_ldflags) -r -o $@ $(objs-y) \
-		$(if $(CONFIG_KERN_NEWLIB:n=),$(kern_newlib)) $(libgcc)
+	$(Q)$(ld) $(kern_ldflags) -r -o $@ $(objs-y) $(kern_libgcc)
 
 $(OUTPUT_DIR)/$(PRODUCT).elf.pre1: $(OUTPUT_DIR)/$(PRODUCT).o
 	$(link_elf)
@@ -102,11 +99,15 @@ $(asm-offset): $(OUTPUT_DIR)/asm-offsets.s
 	$(Q)if [ -r $@ ] && cmp -s $@ $@.tmp; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
 
 $(OUTPUT_DIR)/%.o: $(TOP_DIR)/%.S
-	$(Q)mkdir -p `dirname $@`
+	$(Q)mkdir -p $(dir $@)
 	$(if $(Q), @echo " (AS) 	   $(subst $(OUTPUT_DIR)/,,$@)")
-	$(Q)$(cc) $(kern_asflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(shell dirname $<)))-cflags-y) -c $< -o $@
+	$(Q)$(cc) $(kern_asflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(patsubst %/,%,$(dir $<))))-cflags-y) -c $< -o $@
+
+ifeq ($(CONFIG_RAMFS),y)
+$(OUTPUT_DIR)/core/ramfs.o: $(ramfs_file)
+endif
 
 $(OUTPUT_DIR)/%.o: $(TOP_DIR)/%.c
-	$(Q)mkdir -p `dirname $@`
+	$(Q)mkdir -p $(dir $@)
 	$(if $(Q), @echo " (CC) 	   $(subst $(OUTPUT_DIR)/,,$@)")
-	$(Q)$(cc) $(kern_cflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(shell dirname $<)))-cflags-y) -c $< -o $@
+	$(Q)$(cc) $(kern_cflags) $($(subst /,-,$(subst $(TOP_DIR)/,,$(patsubst %/,%,$(dir $<))))-cflags-y) -c $< -o $@

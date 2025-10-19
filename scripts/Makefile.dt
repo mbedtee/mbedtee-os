@@ -33,9 +33,9 @@ $(DTS_BUILD)/%.dtb: $(DTS_BUILD)/%.o
 	$(Q)$(DTC) -I dts -O dtb -o $@ $<
 
 $(DTS_BUILD)/%.o: $(DTS_DIR)/%.dts
-	$(Q)mkdir -p `dirname $@`
+	$(Q)mkdir -p $(dir $@)
 	$(if $(Q), @echo " (DTC) 	   $(subst $(DTS_BUILD)/,,$@)")
-	$(Q)$(cpp) -MD -MP -MF $(@:.o=.d) -I`dirname $<` \
+	$(Q)$(cpp) -MD -MP -MF $(@:.o=.d) -I$(patsubst %/,%,$(dir $<)) \
 		-I$(TOP_DIR)/include -I$(TOP_DIR)/platform/include \
 		-x assembler-with-cpp $< -o $@
 	$(Q)sed -i '1c $@: \\' $(@:.o=.d)

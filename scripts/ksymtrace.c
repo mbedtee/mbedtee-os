@@ -54,7 +54,8 @@ int main(int argc, char *argv[])
 	unsigned int *offset_array = NULL;
 	unsigned long addr = 0, multiple = 1;
 	unsigned long offset = 0, namel = 0;
-	char name[512] = {0}, lbuf[1024] = {0}, type = 0;
+	char name[512], lbuf[1024];
+	char type = 0;
 
 	if ((argc == 2) && (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help"))) {
 		print_usage();
@@ -89,14 +90,14 @@ int main(int argc, char *argv[])
 
 	/* symbols name array */
 	name_array = calloc(SYMBOL_NUM_MAX, SYMBOL_NAME_LEN);
-	if (name_array == NULL) {
+	if (!name_array) {
 		fprintf(stderr, "out of memory\n");
 		return -ENOMEM;
 	}
 
 	/* symbol run-address in the .map file */
 	addr_array = calloc(SYMBOL_NUM_MAX, sizeof(unsigned long));
-	if (addr_array == NULL) {
+	if (!addr_array) {
 		fprintf(stderr, "out of memory\n");
 		ret = -ENOMEM;
 		goto out;
@@ -104,19 +105,19 @@ int main(int argc, char *argv[])
 
 	/* symbol name offset within the 'name_array' */
 	offset_array = calloc(SYMBOL_NUM_MAX, sizeof(unsigned int));
-	if (offset_array == NULL) {
+	if (!offset_array) {
 		fprintf(stderr, "out of memory\n");
 		ret = -ENOMEM;
 		goto out;
 	}
 
 	in = fopen(mappath, "r");
-	if (in == NULL) {
+	if (!in) {
 		fprintf(stderr, "error open map file %s\n", mappath);
 		goto out;
 	}
 	out = fopen(outpath, "w+");
-	if (out == NULL) {
+	if (!out) {
 		fprintf(stderr, "error open output file %s\n", outpath);
 		goto out;
 	}
@@ -139,8 +140,8 @@ int main(int argc, char *argv[])
 				sizeof(unsigned int) * multiple);
 			name_array = realloc(name_array, SYMBOL_NUM_MAX *
 				SYMBOL_NAME_LEN * multiple);
-			if (addr_array == NULL || offset_array == NULL ||
-				name_array == NULL) {
+			if (!addr_array || !offset_array ||
+				!name_array) {
 				fprintf(stderr, "out of memory\n");
 				ret = -ENOMEM;
 				goto out;
@@ -199,7 +200,8 @@ int main(int argc, char *argv[])
 
 out:
 	gettimeofday(&te, NULL);
-	/* fprintf(stdout, "Elapsed time: %ld us\n",
+	/*
+	 * fprintf(stdout, "Elapsed time: %ld us\n",
 	 *		(1000000 * (te.tv_sec - ts.tv_sec) +
 	 *		te.tv_usec - ts.tv_usec));
 	 */

@@ -12,6 +12,7 @@ else
 	Q := @
 endif
 
+-include $(TOP_DIR)/include/config/auto.conf
 -include $(CONFIG_FILE)
 
 cc = $(CROSS_COMPILE)gcc
@@ -42,37 +43,42 @@ PLATFORM_DIR = $(TOP_DIR)/platform/$(PLATFORM)
 
 LIBC_BUILD = $(OUTPUT_DIR)/libc
 
-obj-mks = $(shell find $(TOP_DIR) -iname "objects.mk")
-obj-dirs = $(foreach mk,$(obj-mks),$(shell dirname $(mk)))
+obj-mks := $(shell find $(TOP_DIR) -iname "objects.mk")
+obj-dirs := $(foreach mk,$(obj-mks),$(patsubst %/,%,$(dir $(mk))))
 
 include $(obj-mks)
 
-TARGET_CCFLAGS += -I$(MBEDTEE_INC) -I$(INC_DIR)
-TARGET_ASMFLAGS += -I$(MBEDTEE_INC) -I$(INC_DIR)
+ifeq ($(CONFIG_MIPS32),y)
+TARGET_CCFLAGS  += $(if $(filter y,$(CONFIG_FPU)),-mhard-float,-msoft-float)
+TARGET_ASMFLAGS += $(if $(filter y,$(CONFIG_FPU)),-mhard-float,-msoft-float)
+endif
+
+TARGET_CCFLAGS += -I$(INC_DIR)
+TARGET_ASMFLAGS += -I$(INC_DIR)
 
 ramfs_file=$(OUTPUT_DIR)/ramfs.img
-libgcc=$(shell $(cc) $(TARGET_CCFLAGS) -print-libgcc-file-name)
-libc=$(shell $(cc) $(TARGET_CCFLAGS) -print-file-name=libc.a)
+libgcc:=$(shell $(cc) $(TARGET_CCFLAGS) -print-libgcc-file-name)
+libc:=$(shell $(cc) $(TARGET_CCFLAGS) -print-file-name=libc.a)
 
-incsub_of = $(shell if [ "$(2)" != " " ]; then echo -I$(1); fi; \
-	if [ "$(2)" != " " ] && [ -d "$(1)/include" ]; then echo -I$(1)/include; fi)
+# Pure Make: if $(2) is non-empty, add -I$(1); if $(1)/include/ exists, add that too
+incsub_of = $(if $(strip $(2)),-I$(1) $(if $(wildcard $(1)/include/),-I$(1)/include))
 
-ifeq ($(CONFIG_FATFS),y)
-fatcopy = $(MCOPY) -mQ -i $(1) -os $(2) ::$(3);
-endif
-user-inc-y = $(foreach dir,$(obj-dirs),$(call incsub_of,$(dir),\
+fatcopy = $(if $(filter y,$(CONFIG_FATFS)),$(MCOPY) -mQ -i $(1) -os $(2) ::$(3);)
+
+user-inc-y := $(foreach dir,$(obj-dirs),$(call incsub_of,$(dir),\
 	$($(subst /,-,$(subst $(TOP_DIR)/,,$(dir)))-uobjs-y)))
 
-kern-inc-y = $(foreach dir,$(obj-dirs),$(call incsub_of,$(dir),\
+kern-inc-y := $(foreach dir,$(obj-dirs),$(call incsub_of,$(dir),\
 	$($(subst /,-,$(subst $(TOP_DIR)/,,$(dir)))-y))) $(user-inc-y)
 
 cflags = -g -Wall -Werror -Wno-nonnull-compare -Os -std=gnu99 -fno-common \
-		 -funwind-tables -Wstack-usage=2788 -MD -MP $(TARGET_CCFLAGS)
+		 -funwind-tables -Wstack-usage=2048 -MD -MP $(TARGET_CCFLAGS)
 
 asflags = -g -Wall -Werror -Os -std=gnu99 -D__ASSEMBLY__ -fno-common \
 		-funwind-tables -MD -MP $(TARGET_ASMFLAGS)
 
-ifeq ($(CONFIG_STACK_PROTECTOR),y)
-cflags += -fstack-protector-strong -Wstack-protector
-asflags += -fstack-protector-strong -Wstack-protector
-endif
+cflags  += $(if $(filter -mfpu=%,$(TARGET_CCFLAGS)),$(if $(filter %-d16,$(TARGET_CCFLAGS)),,-DVFP_D32))
+asflags += $(if $(filter -mfpu=%,$(TARGET_CCFLAGS)),$(if $(filter %-d16,$(TARGET_CCFLAGS)),,-DVFP_D32))
+
+cflags  += $(if $(filter y,$(CONFIG_STACK_PROTECTOR)),-fstack-protector-strong -Wstack-protector)
+asflags += $(if $(filter y,$(CONFIG_STACK_PROTECTOR)),-fstack-protector-strong -Wstack-protector)
