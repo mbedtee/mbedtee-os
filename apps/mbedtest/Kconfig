@@ -4,6 +4,18 @@
 config MBEDTEST
 	bool "Test TA"
 	depends on USER
+	select POLL
+	select SPAWN
+	select WAITPID
 	default n
 	help
 		Say Y here to enable Test TA.
+
+config MBEDTEST_CRYPTO
+	bool "mbedcrypto test suite in Test TA"
+	depends on MBEDTEST
+	select USER_MBEDCRYPTO
+	default n
+	help
+		Say Y here to include the mbedcrypto test suite
+		(--crypto option) in the Test TA.
