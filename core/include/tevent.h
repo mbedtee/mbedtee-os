@@ -9,6 +9,7 @@
 
 #include <time.h>
 #include <rbtree.h>
+#include <kmalloc.h>
 #include <spinlock.h>
 
 struct tevent {
@@ -45,6 +46,13 @@ void tevent_init(struct tevent *event, tevent_handler handler, void *data);
 void tevent_start(struct tevent *event, struct timespec *time);
 
 /*
+ * add the tevent to the target CPU's timer list
+ * this tevent may not be triggered / handled immediately,
+ * because current cpu possibly can't set other CPU's timer hardware.
+ */
+void tevent_start_on(struct tevent *t, struct timespec *time, int cpu);
+
+/*
  * Renew a tevent entity
  */
 void tevent_renew(struct tevent *event, struct timespec *time);
@@ -54,6 +62,31 @@ void tevent_renew(struct tevent *event, struct timespec *time);
  * otherwise return false (e.g. already stopped).
  */
 int tevent_stop(struct tevent *event);
+
+static inline struct tevent *tevent_alloc(
+	tevent_handler handler, void *data)
+{
+	struct tevent *t = kmalloc(sizeof(*t));
+
+	if (t)
+		tevent_init(t, handler, data);
+
+	return t;
+}
+
+static inline void tevent_free(struct tevent *t)
+{
+	unsigned long flags = 0;
+
+	if (atomic_read_x(&t->lock.lock.val))
+		EMSG("tevent is still locked\n");
+
+	/* final confirm */
+	spin_lock_irqsave(&t->lock, flags);
+	spin_unlock_irqrestore(&t->lock, flags);
+
+	kfree(t);
+}
 
 /*
  * For CPU Hot-Plug

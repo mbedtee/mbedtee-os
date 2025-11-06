@@ -10,7 +10,6 @@
 #include <list.h>
 #include <timer.h>
 #include <kthread.h>
-#include <interrupt.h>
 #include <trace.h>
 #include <delay.h>
 #include <barrier.h>

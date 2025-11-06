@@ -115,6 +115,24 @@ config QEMU_VIRT_RISCV64
 	help
 		select the QEMU Virt RISCV64 platform
 
+config QEMU_VIRT_RISCV32_IMSIC
+	bool "QEMU Virt RISCV32 with APLIC-IMSIC"
+	depends on RISCV32
+	help
+		select the QEMU Virt RISCV32 with APLIC-IMSIC platform
+
+config QEMU_VIRT_RISCV64_IMSIC
+	bool "QEMU Virt RISCV64 with APLIC-IMSIC"
+	depends on RISCV64
+	help
+		select the QEMU Virt RISCV64 with APLIC-IMSIC platform
+
+config QEMU_VIRT_RISCV64_APLIC
+	bool "QEMU Virt RISCV64 with APLIC"
+	depends on RISCV64
+	help
+		select the QEMU Virt RISCV64 with APLIC platform
+
 config QEMU_SIFIVE_U_RISCV32
 	bool "QEMU SiFive_U RISCV32"
 	depends on RISCV32
@@ -180,6 +198,12 @@ config QEMU_IMX8MP
 	depends on AARCH64
 	help
 		select the QEMU -M imx8mp-evk platform
+
+config QEMU_XIANGSHAN_KMH
+	bool "QEMU XiangShan-KMH RISCV64"
+	depends on RISCV64
+	help
+		select the QEMU xiangshan-kunminghu platform
 
 endchoice
 

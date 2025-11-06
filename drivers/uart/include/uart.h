@@ -9,6 +9,7 @@
 
 #include <stddef.h>
 #include <interrupt.h>
+#include <workqueue.h>
 
 #include <generated/autoconf.h>
 
@@ -17,7 +18,6 @@
 struct uart_port {
 	int idx;
 	unsigned int irq;
-	unsigned int hwirq;
 	unsigned int clk;
 	unsigned int divisor;
 	unsigned int baudrate;
@@ -28,6 +28,7 @@ struct uart_port {
 	void *membase;
 	unsigned long iobase;
 	size_t iosize;
+	struct tevent tevent;
 	struct waitqueue wait_queue;
 	struct device_node *dn;
 	const struct uart_ops *ops;
@@ -38,6 +39,7 @@ struct uart_port {
 struct uart_ops {
 	void (*tx)(struct uart_port *p, const char *str, size_t cnt);
 	ssize_t (*rx)(struct uart_port *p, char *str, size_t cnt);
+	ssize_t (*poll_rx)(struct uart_port *p);
 	void (*suspend)(struct uart_port *p);
 	void (*resume)(struct uart_port *p);
 	void (*attach)(struct uart_port *p);

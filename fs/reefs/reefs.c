@@ -450,6 +450,9 @@ static int reefs_opendir(struct reefs *fs, struct file *f, mode_t mode)
 		goto out;
 	}
 
+	/* should get mtime from ree ? */
+	reefs_update_time(NULL, &fdesc->hdr.mtime, NULL);
+
 	fdesc->reefd = fd;
 	fdesc->type = DT_DIR;
 	f->flags |= O_DIRECTORY;
@@ -1003,12 +1006,14 @@ static struct file_system reefs_fs = {
 static void __reefs_init(struct work *w)
 {
 	struct delayed_work *dw = NULL;
-
 	dw = container_of(w, struct delayed_work, w);
 
-	fs_mount(&reefs_fs);
-
-	kfree(dw);
+	if (rpc_test_callee()) {
+		fs_mount(&reefs_fs);
+		kfree(dw);
+	} else {
+		schedule_delayed_work(dw, 200000);
+	}
 }
 
 static void __init reefs_init(void)
@@ -1021,7 +1026,7 @@ static void __init reefs_init(void)
 	struct delayed_work *dw = kmalloc(sizeof(*dw));
 
 	INIT_DELAYED_WORK(dw, __reefs_init);
-	schedule_delayed_work(dw, 200000);
+	schedule_delayed_work(dw, 500000);
 }
 
 MODULE_INIT_LATE(reefs_init);

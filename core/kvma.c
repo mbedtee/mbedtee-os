@@ -47,6 +47,14 @@ void kvma_free(void *va)
 	vma_free(__kvmas, va);
 }
 
+/*
+ * return the num of bytes held by 'va' (aligned power of 2)
+ */
+size_t kvma_sizeof(void *va)
+{
+	return vma_sizeof(__kvmas, va);
+}
+
 void kvma_info(struct debugfs_file *d)
 {
 	debugfs_printf(d, "\nkvma info: size %lx, va: 0x%lx\n",

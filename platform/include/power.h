@@ -37,6 +37,11 @@ static inline int cpu_up(unsigned int cpu, unsigned long pa) {	return -1; }
 #endif
 
 /*
+ * specify the hartid/mpid to be powered on
+ */
+extern unsigned long cpu_power_id;
+
+/*
  * successfully powered on a cpu
  * runs on the current processor which is powered on
  */

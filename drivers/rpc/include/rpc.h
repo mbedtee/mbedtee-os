@@ -32,6 +32,16 @@ int rpc_call(unsigned int id, void *data, size_t size);
 int rpc_call_sync(unsigned int id, void *data, size_t size);
 
 /*
+ * return if the callee ready or not
+ */
+int rpc_test_callee(void);
+
+/*
+ * return the callee's hartid or mpid
+ */
+int rpc_calleeid(void);
+
+/*
  * complete the execution of rpc_call_sync()
  *
  * @tid - thread id which is doing rpc_call_sync()

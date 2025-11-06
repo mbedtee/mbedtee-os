@@ -8,6 +8,7 @@
 #define _OF_H
 
 #include <list.h>
+#include <kmap.h>
 #include <stdint.h>
 #include <device.h>
 
@@ -31,8 +32,6 @@ struct of_compat_init {
 	const char *compat;
 	int (*init)(struct device_node *dn);
 };
-
-struct device_node *of_irq_find_parent(struct device_node *dn);
 
 /*
  * get device node of the specified name
@@ -59,21 +58,57 @@ struct device_node *of_find_matching_node(
  */
 struct device_node *of_find_node_by_phandle(unsigned int phandle);
 
+/*
+ * return count of u32 read on success
+ * #mincnt - minium allowed count of the #propname
+ * #maxcnt - maxium allowed count of the #propname
+ * return -EOVERFLOW if the property elements cnt less than mincnt
+ * return -EOVERFLOW if the property elements cnt big than maxcnt
+ */
+int of_property_read_variable_u32_array(struct device_node *dn,
+	const char *propname, unsigned int *out, size_t mincnt, size_t maxcnt);
 
 /*
- * get single signed 32-bit data.
+ * return count of u32 read on success
+ * #cnt - try to read at most #cnt of u32 from #propname
  */
-int of_property_read_s32(struct device_node *dn,
-	const char *propname, int *out_value);
+int __of_property_read_u32_array(struct device_node *dn,
+	const char *propname, unsigned int *out, size_t cnt);
+
 /*
- * get array of signed 32-bit data.
+ * return 0 on success
  */
-int of_property_read_s32_array(struct device_node *dn,
-	const char *propname, int *out_values, int cnt);
-int of_property_read_u32(struct device_node *dn,
-	const char *propname, unsigned int *out_value);
-int of_property_read_u32_array(struct device_node *dn,
-	const char *propname, unsigned int *out_values, int cnt);
+static inline int of_property_read_u32_array(struct device_node *dn,
+	const char *propname, unsigned int *out, size_t cnt)
+{
+	int ret = -ENODATA;
+
+	if (dn == NULL)
+		return ret;
+
+	ret = of_property_read_variable_u32_array(dn, propname, out, cnt, 0);
+
+	return ret >= 0 ? 0 : ret;
+}
+
+static inline int of_property_read_u32(struct device_node *dn,
+	const char *propname, unsigned int *out)
+{
+	return of_property_read_u32_array(dn, propname, out, 1);
+}
+
+static inline int of_property_read_s32_array(struct device_node *dn,
+	const char *propname, int *out, int cnt)
+{
+	return of_property_read_u32_array(dn, propname, (unsigned int *)out, cnt);
+}
+
+static inline int of_property_read_s32(struct device_node *dn,
+	const char *propname, int *out)
+{
+	return of_property_read_u32(dn, propname, (unsigned int *)out);
+}
+
 /*
  * get size of specified property (unit is specified by `elem_size`)
  */
@@ -89,6 +124,18 @@ int of_n_addr_cells(struct device_node *dn);
  * get nr_cells of '#size-cells'
  */
 int of_n_size_cells(struct device_node *dn);
+
+/*
+ * get nr_cells of '#interrupt-cells'
+ */
+int of_n_interrupt_cells(struct device_node *dn);
+
+int of_irq_parse_one(struct device_node *dn, int idx,
+	unsigned int *hwriq, unsigned int *type);
+
+int of_irq_parse_max(struct device_node *dn, unsigned int *max);
+
+struct device_node *of_irq_find_parent(struct device_node *dn);
 
 /*
  * Find a property for a given `name` @  `dn`
@@ -116,6 +163,25 @@ static inline bool of_property_read_bool(
  */
 int of_read_property_addr_size(struct device_node *dn, const char *name,
 	int idx, unsigned long *addr, size_t *size);
+
+static inline int of_parse_io_resource(struct device_node *dn,
+	int idx, unsigned long *addr, size_t *size)
+{
+	return of_read_property_addr_size(dn, "reg", idx, addr, size);
+}
+
+static inline void *of_iomap(struct device_node *dn, int idx)
+{
+	int ret = -1;
+	size_t size = 0;
+	unsigned long addr = 0;
+
+	ret = of_read_property_addr_size(dn, "reg", idx, &addr, &size);
+	if (ret == 0)
+		return iomap(addr, size);
+
+	return NULL;
+}
 
 int of_name_equal(struct device_node *dn, const char *name);
 int of_compatible_equal(struct device_node *dn, const char *compat);

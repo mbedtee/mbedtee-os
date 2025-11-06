@@ -24,8 +24,6 @@
 
 #define STACK_SIZE			UL(4096)
 
-#define VALID_CPUID(x)		((unsigned int)(x) < CONFIG_NR_CPUS)
-
 #define KSEG0				UL(0x80000000)
 #define KSEG1				UL(0xA0000000)
 #define KSEG2				UL(0xC0000000)

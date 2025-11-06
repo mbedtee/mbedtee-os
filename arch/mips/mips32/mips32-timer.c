@@ -13,7 +13,7 @@
 
 static struct arch_timer mips32_timer = {0};
 
-static struct mips32_cp0_cnt{
+static struct mips32_cp0_cnt {
 	/* last cycle stamp - nanoseconds precision */
 	uint64_t cycles_stamp;
 	/* total time since PoR - nanoseconds precision */
@@ -75,18 +75,13 @@ static inline uint32_t mips32_timer_ipti(void)
 
 static void mips32_timer_enable(struct arch_timer *t)
 {
-	uint32_t ipti = mips32_timer_ipti();
-
-	if (ipti != t->hwirq)
-		return;
-
 	/*
 	 * Register the tick timer INT
 	 */
-	t->irq = irq_register(NULL, t->hwirq, mips32_timer_isr, t);
+	t->irq = irq_register(t->dn, mips32_timer_isr, t);
 
-	IMSG("TimerFRQ: %ld.%02ldMhz hwirq: %d\n", t->frq / MICROSECS_PER_SEC,
-		(t->frq % MICROSECS_PER_SEC) * 100 / MICROSECS_PER_SEC, t->hwirq);
+	IMSG("TimerFRQ: %ld.%02ldMhz irq: %d\n", t->frq / MICROSECS_PER_SEC,
+		(t->frq % MICROSECS_PER_SEC) * 100 / MICROSECS_PER_SEC, t->irq);
 }
 
 static void mips32_timer_disable(struct arch_timer *t)
@@ -109,7 +104,8 @@ static int __init mips32_timer_init(struct device_node *dn)
 
 	memcpy(dst, t, sizeof(struct arch_timer));
 
-	dev_set_drvdata(&dn->dev, dst); /* update it */
+	/* update it */
+	dev_set_drvdata(&dn->dev, dst);
 
 	/* acts as system's ticktimer */
 	set_ticktimer(dst);

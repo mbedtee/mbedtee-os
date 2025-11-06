@@ -190,8 +190,10 @@ static __nosprot void __oops(struct thread *t, struct thread_ctx *regs)
 
 	proc = t->proc;
 
-	EMSG("oops@%s asid %d usp(0x%x@%p) ksp(0x%x@%p)\n",
-		t->name, proc->pt->asid,
+	EMSG("oops@%s asid %d sig %d\n",
+		t->name, proc->pt->asid, sighandling(t));
+
+	EMSG("usp(0x%x@%p) ksp(0x%x@%p)\n",
 		t->ustack_size, t->ustack_uva,
 		t->kstack_size, t);
 

@@ -1,0 +1,128 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2025 KapaXL (kapa.xl@outlook.com)
+ */
+
+/dts-v1/;
+
+#include "memory.dtsi"
+#include "interrupt.dtsi"
+#include <generated/autoconf.h>
+
+/ {
+	cpu {
+		compatible = "riscv,cpu";
+		/* hartid of each CPU */
+		cpus = <0 1>;
+	};
+
+	platform {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		pinctrls@0 {
+			reg = <0 0>;
+
+			/*
+			 * cells information
+			 * 0: reg offset,
+			 * 1: first bit position,
+			 * 2: number of bits,
+			 * 3: value
+			 */
+			/* unnecessary for QEMU */
+			pinctrls = <0 0 0 0>, <0 0 0 0>;
+		};
+
+		cpu-power@1 {
+			compatible = "module,cpu-power";
+			/* unnecessary for QEMU */
+			reg = <0 0>;
+		};
+	};
+
+	/* interrupt-controller: CPU side - local private interrupt */
+	intc: interrupt-controller@2000000 {
+		compatible = "riscv,aclint";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+		#address-cells = <1>;
+
+		reg = <0x2000000 0x4000>; /* for mswi */
+	};
+
+	/* interrupt-controller: SoC side - message signaled interrupt */
+	imsic: imsic@28000000 {
+		compatible = "riscv,imsic";
+
+		interrupt-controller;
+
+		interrupt-parent = <&intc>;
+
+		imsic,guest-index-bits = <0>;
+		imsic,hart-index-bits = <2>;
+
+		#interrupt-cells = <1>;
+
+		/* connects to CPU clint 11 (M-Mode), 9 (S-Mode) */
+		interrupts = <11 9>;
+
+		max-irqs = <255>;
+
+		reg = <0x24000000 0x4000>, /* for M-Mode */
+			<0x28000000 0x4000>; /* for S-Mode */
+	};
+
+	/* interrupt-controller: SoC side - wired external interrupt */
+	aplic: aplic@d000000 {
+		compatible = "riscv,aplic";
+
+		interrupt-controller;
+
+		interrupt-parent = <&imsic>;
+
+		#interrupt-cells = <2>;
+
+		max-irqs = <96>;
+
+		reg = <0xc000000 0x4000>, /* for M-Mode */
+			<0xd000000 0x4000>; /* for S-Mode */
+	};
+
+	uart {
+		compatible = "module,uart";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		serial16550@10000800 {
+			compatible = "ns16550a";
+			reg = <0x10000800 0x0C>;
+			interrupts = <12 IRQ_TYPE_LEVEL_HIGH>;
+			interrupt-parent = <&aplic>;
+			clock-frequency = <3686400>;
+			current-speed = <230400>;
+			clock-divisor = <16>;
+			reg-shift = <0>;
+			reg-io-width = <1>;
+		};
+	};
+
+	/* when S-Mode */
+	timer {
+		compatible = "riscv,timer";
+		interrupts = <5>;
+		interrupt-parent = <&intc>;
+		clock-frequency = <10000000>;
+	};
+
+	/* when M-Mode */
+	timer@2004000 {
+		compatible = "riscv,clint-timer";
+		interrupts = <7>;
+		interrupt-parent = <&intc>;
+		clock-frequency = <10000000>;
+		reg = <0x2004000 0x8000>;
+	};
+};

@@ -35,8 +35,6 @@
 #define SPSR_DAIF_MASK		(SPSR_DEBUG_MASK | SPSR_ASYNC_MASK | \
 							SPSR_IRQ_MASK | SPSR_FIQ_MASK)
 
-#define VALID_CPUID(x)		((unsigned int)(x) < CONFIG_NR_CPUS)
-
 #define MPIDR_AFFINITY_MASK		UL(0xFF)
 #define MPIDR_AFFINITY_0(mpidr)	(mpidr & MPIDR_AFFINITY_MASK)
 #define MPIDR_AFFINITY_1(mpidr)	((mpidr >> 8) & MPIDR_AFFINITY_MASK)

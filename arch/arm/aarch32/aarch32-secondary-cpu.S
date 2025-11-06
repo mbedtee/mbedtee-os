@@ -17,14 +17,14 @@ FUNC_START secondary_cpu_wait
 	mrc p15, 0, r0, c0, c0, 5 /* mpidr */
 	ldr r3, =MPIDR_BITMASK
 	and r0, r0, r3
-	adr_l r1, cpu_mpid
+	adr_l r1, cpu_power_id
 1:	wfe
 	dsb ishst
 	ldr r2, [r1]
 	and r4, r2, r3
 	cmp	r4, r0
 	bne 1b
-	/* cpu_mpid[31:24] contains the logic cpu-id
+	/* cpu_power_id[31:24] contains the logic cpu-id
 	 transfer cpu-id to r0 */
 	mov	r0, r2, lsr #24
 	ldr r2, =0
@@ -32,6 +32,25 @@ FUNC_START secondary_cpu_wait
 	dsb ish
 	bx lr
 FUNC_END secondary_cpu_wait
+
+/*
+ * this jumper only be used for the SoC which can't flexibly
+ * assign the secondary CPUs' run entry to the '__memstart'
+ *
+ * copy this jumper (8-bytes) to the SoC's fix secondary-entry
+ * and set '__memstart' to the '.word' of this jumper
+ * before release the secondary-cpu
+ *
+ * 3-level pipe-line, pc = current-pc + 8
+ */
+.global secondary_trampoline
+secondary_trampoline:
+	ldr pc, [pc, #-4]
+	.word -1
+#else
+1:	wfi
+	b 1b
+#endif
 
 /*
  * Wait for restart sev
@@ -114,21 +133,8 @@ FUNC_START secondary_cpu_restart
 #endif
 FUNC_END secondary_cpu_restart
 
-/*
- * this jumper only be used for the SoC which can't flexibly
- * assign the secondary CPUs' run entry to the '__memstart'
- *
- * copy this jumper (8-bytes) to the SoC's fix secondary-entry
- * and set '__memstart' to the '.word' of this jumper
- * before release the secondary-cpu
- *
- * 3-level pipe-line, pc = current-pc + 8
- */
-.global secondary_trampoline
-secondary_trampoline:
-	ldr pc, [pc, #-4]
-	.word -1
-#else
-1:	wfi
-	b 1b
-#endif
+.data
+.balign BYTES_PER_LONG, 0
+.global cpu_power_id
+cpu_power_id:
+	.fill 1, BYTES_PER_LONG, 0

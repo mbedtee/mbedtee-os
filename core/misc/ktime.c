@@ -48,7 +48,7 @@ int clock_gettime(clockid_t clockid,
 
 void set_systime(time_t sec, long nsec)
 {
-	struct timespec mono;
+	struct timespec mono = {0};
 	struct timespec tv = {sec, nsec};
 
 	read_time(&mono);
@@ -58,7 +58,7 @@ void set_systime(time_t sec, long nsec)
 
 void get_systime(time_t *sec, long *nsec)
 {
-	struct timespec tv;
+	struct timespec tv = {0};
 
 	read_time(&tv);
 
@@ -171,7 +171,7 @@ int abstime2usecs(const struct timespec *abstime,	uint64_t *usecs)
 	if (diff.tv_sec < 0)
 		return -ETIMEDOUT;
 
-	*usecs = diff.tv_sec * 1000000UL + diff.tv_nsec/1000UL;
+	*usecs = diff.tv_sec * 1000000UL + diff.tv_nsec / 1000UL;
 
 	if (*usecs == 0)
 		return -ETIMEDOUT;

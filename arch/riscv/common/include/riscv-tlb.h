@@ -7,7 +7,6 @@
 #ifndef _TLB_RISCV_H
 #define _TLB_RISCV_H
 
-#include <cacheops.h>
 #include <generated/autoconf.h>
 
 #ifndef __ASSEMBLY__

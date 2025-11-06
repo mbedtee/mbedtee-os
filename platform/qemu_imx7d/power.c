@@ -15,7 +15,6 @@
 #include <timer.h>
 #include <driver.h>
 #include <cacheops.h>
-#include <interrupt.h>
 
 #include <power.h>
 
@@ -24,8 +23,6 @@
 #define SRC_A7RCR0		1	/* reset core */
 #define SRC_A7RCR1		2	/* enable core */
 #define SRC_GPR3		31	/* store the entry point */
-
-unsigned int cpu_mpid;
 
 static struct imx7src {unsigned int r[40];} *imx7src = NULL;
 
@@ -37,23 +34,23 @@ static int arm_cpu_up(unsigned int cpu)
 
 	imx7src->r[SRC_A7RCR1] |= BIT(cpu);
 
-	cpu_mpid = CPU_MPID(cpu);
+	cpu_power_id = CPU_MPID(cpu);
 
 	do {
 		asm volatile("sev" : : : "memory", "cc");
 
 		/*
-		 * #cpu_mpid is possibly updating by peer,
+		 * #cpu_power_id is possibly updating by peer,
 		 * make sure it's update to date for current CPU
 		 */
 		smp_mb();
 
-		if (cpu_mpid != CPU_MPID(cpu))
+		if (cpu_power_id != CPU_MPID(cpu))
 			break;
 		udelay(5);
 	} while (--intime);
 
-	if (cpu_mpid == CPU_MPID(cpu) || !intime)
+	if (cpu_power_id == CPU_MPID(cpu) || !intime)
 		return -1;
 
 	return 0;
@@ -86,9 +83,6 @@ static const struct cpu_pm_ops arm_pm_ops = {
 
 static int __init cpu_power_probe(struct device *dev)
 {
-	int ret = -1;
-	unsigned long addr = 0;
-	size_t bsize = 0;
 	struct device_node *dn = NULL;
 
 	cpu_pm_register(&arm_pm_ops);
@@ -97,14 +91,11 @@ static int __init cpu_power_probe(struct device *dev)
 
 	IMSG("init %s\n", dn->id.compat);
 
-	ret = of_read_property_addr_size(dn, "reg", 0,
-			&addr, &bsize);
-	if (ret != 0) {
+	imx7src = of_iomap(dn, 0);
+	if (imx7src == NULL) {
 		WMSG("cpu-power dts\n");
-		return ret;
+		return -EINVAL;
 	}
-
-	imx7src = iomap(addr, bsize);
 
 	/* store the entry point */
 	imx7src->r[SRC_GPR3] = PA_OFFSET;

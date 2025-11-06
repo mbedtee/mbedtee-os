@@ -20,8 +20,10 @@ static const struct file_operations epoll_fops;
 
 struct epoll_fnode {
 	struct tfs_node node;
+	/* ready list for xfer */
 	struct list_head rdlist;
 	struct waitqueue wq;
+	/* rbtree root */
 	struct rb_node *fds;
 	int refc;
 	struct spinlock lock;
@@ -45,8 +47,12 @@ struct epoll_item {
 	/* cleanup callback called @ fdesc close */
 	struct fdesc_atclose fdatc;
 
+	/* corresponding file */
+	struct file *file;
+
 	struct epoll_event event;
 
+	/* corresponding file's FD */
 	int fd;
 
 	struct spinlock lock;
@@ -104,6 +110,7 @@ static inline void epoll_rbadd(
 static int epoll_item_poll(struct epoll_item *ei,
 	struct poll_table *pt)
 {
+/*
 	int mask = DEFAULT_EPOLLMASK;
 	struct file *f = NULL;
 	struct file_desc *fdesc = NULL;
@@ -120,6 +127,16 @@ static int epoll_item_poll(struct epoll_item *ei,
 	mask &= ei->event.events | EPOLLERR | EPOLLHUP;
 
 	return mask;
+*/
+	int mask = DEFAULT_EPOLLMASK;
+	struct file *f = ei->file;
+
+	if (f->fops->poll)
+		mask = f->fops->poll(f, pt);
+
+	mask &= ei->event.events | EPOLLERR | EPOLLHUP;
+
+	return mask;
 }
 
 static void epoll_wake(struct waitqueue_node *n)
@@ -130,7 +147,9 @@ static void epoll_wake(struct waitqueue_node *n)
 
 	n->wq->condi--;
 
+	assert(epfn->refc > 0);
 	assert(!rb_empty(&ei->node));
+	assert(ei->fd > 0);
 
 	spin_lock_irqsave(&epfn->lock, flags);
 
@@ -230,6 +249,8 @@ static void __epoll_del(struct epoll_fnode *epfn,
 
 	rb_del(&ei->node, &epfn->fds);
 
+	file_put(ei->file);
+
 	--epfn->refc;
 
 	ei->epfn = NULL;
@@ -242,7 +263,9 @@ static void __epoll_del(struct epoll_fnode *epfn,
 static int epoll_del(struct epoll_fnode *epfn,
 	struct epoll_item *ei)
 {
-	assert(ei->epfn == epfn);
+	assert(epfn->refc > 0);
+	assert(!rb_empty(&ei->node));
+	assert(ei->fd > 0);
 
 	if (fdesc_unregister_atclose(ei->proc, &ei->fdatc))
 		__epoll_del(epfn, ei);
@@ -259,6 +282,8 @@ static void epoll_fdatc(struct fdesc_atclose *p)
 	tfs_lock_node(&epfn->node);
 
 	assert(epfn->refc > 0);
+	assert(!rb_empty(&ei->node));
+	assert(ei->fd > 0);
 
 	__epoll_del(epfn, ei);
 
@@ -283,11 +308,15 @@ static int epoll_add(struct epoll_fnode *epfn,
 	if (evt == NULL)
 		return -EINVAL;
 
+//	if (!file_can_poll(d->file))
+//		return -EPERM;
+
 	ei = kmalloc(sizeof(*ei));
 	if (ei == NULL)
 		return -ENOMEM;
 
 	ei->fd = d->fd;
+	ei->file = d->file;
 	ei->epfn = epfn;
 	ei->event = *evt;
 	ei->proc = current->proc;
@@ -299,6 +328,7 @@ static int epoll_add(struct epoll_fnode *epfn,
 	INIT_LIST_HEAD(&ei->fdatc.node);
 	ei->fdatc.atclose = epoll_fdatc;
 
+	file_get(ei->file);
 	epoll_rbadd(epfn, ei);
 
 	epq.ei = ei;
@@ -340,7 +370,7 @@ int epoll_create(int size)
 	int ret = -1;
 	char path[64];
 
-	if (size < 0)
+	if (size <= 0)
 		return -EINVAL;
 
 	do {
@@ -416,14 +446,20 @@ outf:
 static int epoll_xfer_events(struct epoll_fnode *epfn,
 	struct epoll_event *events, int maxevents)
 {
-	uint32_t revents = 0, nrevents = 0;
+	int revents = 0, nrevents = 0;
 	struct poll_table pt = {NULL};
 	unsigned long flags = 0;
 	struct epoll_item *ei = NULL, *_ei = NULL;
+	LIST_HEAD(rdlist);
+
+	assert(epfn->refc > 0);
 
 	spin_lock_irqsave(&epfn->lock, flags);
 
-	list_for_each_entry_safe(ei, _ei, &epfn->rdlist, rdnode) {
+	/* use the temporary ready list */
+	list_splice_init(&epfn->rdlist, &rdlist);
+
+	list_for_each_entry_safe(ei, _ei, &rdlist, rdnode) {
 		if (nrevents >= maxevents)
 			break;
 
@@ -435,7 +471,7 @@ static int epoll_xfer_events(struct epoll_fnode *epfn,
 
 		if (put_user(revents, &events[nrevents].events) ||
 			put_user(ei->event.data, &events[nrevents].data)) {
-			list_add(&ei->rdnode, &epfn->rdlist);
+			list_add(&ei->rdnode, &rdlist);
 			if (!nrevents)
 				nrevents = -EFAULT;
 			break;
@@ -448,6 +484,8 @@ static int epoll_xfer_events(struct epoll_fnode *epfn,
 
 		nrevents++;
 	}
+
+	list_splice(&rdlist, &epfn->rdlist);
 
 	spin_unlock_irqrestore(&epfn->lock, flags);
 
@@ -706,7 +744,7 @@ static int epoll_fstat(struct file *f, struct stat *st)
 
 	st->st_size = epfn->refc;
 	st->st_blksize = 1;
-	st->st_blocks = !list_empty(&epfn->rdlist);
+	st->st_blocks = epfn->refc;
 
 	if (n->attr & TFS_ATTR_DIR)
 		st->st_mode = S_IFDIR;

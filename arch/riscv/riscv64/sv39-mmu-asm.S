@@ -12,7 +12,7 @@
 FUNC_START _mmu_init
 	/* only CPU-0 setups the early pgtbl at the first time,
 	secondary-cores or secondary-times calls __mmu_secondary_init */
-	bnez a0, __mmu_secondary_init
+	bnez a7, __mmu_secondary_init
 
 	la t1, __memstart
 	LDR t2, 0(t1)

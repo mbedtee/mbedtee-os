@@ -7,6 +7,7 @@
 #ifndef _REEFS_RPC_H
 #define _REEFS_RPC_H
 
+#include <rpc.h>
 #include <rpc/reefs.h>
 
 int reefs_rpc_open(const char *path, int wrflag);

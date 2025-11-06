@@ -64,19 +64,36 @@ static ssize_t imx_gets(struct uart_port *p, char *buf, size_t count)
 	return pos;
 }
 
-static void imx_irq_handler(struct uart_port *p)
+static ssize_t imx_poll_rx(struct uart_port *p)
 {
-	uint32_t rx = 0;
+	uint32_t rx = 0, rdbytes = 0;
+	unsigned long flags = 0;
+
+	spin_lock_irqsave(&p->lock, flags);
 
 	while ((rx = ioread32(p->membase + IMX_RX)) & IMX_RX_CHARRDY) {
 		if (!unlikely(rx & IMX_RX_ERR)) {
 			p->buf[p->wr++] = rx & 0xff;
 			if (p->wr == sizeof(p->buf))
 				p->wr = 0;
+
+			rdbytes++;
 		}
 	}
 
-	wakeup(&p->wait_queue);
+	spin_unlock_irqrestore(&p->lock, flags);
+
+	return rdbytes;
+}
+
+static void imx_irq_handler(struct uart_port *p)
+{
+	uint32_t rdbytes = 0;
+
+	rdbytes = imx_poll_rx(p);
+
+	if (rdbytes)
+		wakeup(&p->wait_queue);
 }
 
 static void imx_disable(struct uart_port *p)
@@ -91,6 +108,8 @@ static void imx_disable(struct uart_port *p)
 	iowrite32(0, p->membase + IMX_UFCR);
 
 	irq_unregister(p->irq);
+
+	imx_irq_handler(p);
 }
 
 static void imx_setup(struct uart_port *p)
@@ -139,8 +158,7 @@ static void imx_attach(struct uart_port *p)
 {
 	imx_setup(p);
 
-	p->irq = irq_of_register(p->dn, p->hwirq,
-		(void *)imx_irq_handler, p);
+	p->irq = irq_register(p->dn, (void *)imx_irq_handler, p);
 
 	/*
 	 * Enable RX and RX interrupt
@@ -168,6 +186,7 @@ static void imx_resume(struct uart_port *p)
 static const struct uart_ops imx_port_ops = {
 	.tx = imx_puts,
 	.rx = imx_gets,
+	.poll_rx = imx_poll_rx,
 	.suspend = imx_suspend,
 	.resume = imx_resume,
 	.attach = imx_attach,

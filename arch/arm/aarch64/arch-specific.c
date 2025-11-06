@@ -16,10 +16,12 @@
 
 void arch_specific_init(void)
 {
+	int cpu = 0;
+
 	/* reserves the SGI for aarch64 RPC callee */
 	if (IS_ENABLED(CONFIG_RPC)) {
 		extern void smc_handler(void *regs);
-		irq_register(NULL, thiscpu->sgi, smc_handler, NULL);
+		irq_register_simple(NULL, thiscpu->sgi, smc_handler, NULL);
 	}
 
 	if (IS_ENABLED(CONFIG_REE) && is_security_extn_ena()) {
@@ -29,8 +31,9 @@ void arch_specific_init(void)
 			msleep(100);
 	} else {
 		/* only CPU 0 does this, up the other CPUs */
-		if (percpu_id() == 0)
-			for (int i = 1; i < CONFIG_NR_CPUS; i++)
-				cpu_up(i, -1);
+		if (percpu_id() == 0) {
+			for_each_possible_cpu(cpu)
+				cpu_up(cpu, -1);
+		}
 	}
 }

@@ -68,6 +68,8 @@ struct process_config {
 	int nr_additionalprops;
 };
 
+void process_handle_fs(const char *mnt);
+
 /* Get the config by the UUID */
 struct process_config *process_config_of(const TEE_UUID *uuid);
 

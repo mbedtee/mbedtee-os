@@ -25,7 +25,6 @@ struct arch_timer {
 	void (*disable)(struct arch_timer *t);
 
 	void *base;
-	size_t size;
 
 	struct device_node *dn;
 
@@ -35,7 +34,6 @@ struct arch_timer {
 	unsigned int frq;
 
 	unsigned int irq;
-	unsigned int hwirq;
 
 	unsigned int cycles_per_msecs;
 	unsigned int cycles_per_usecs;

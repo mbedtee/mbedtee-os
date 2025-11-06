@@ -99,10 +99,10 @@ static void armv7_timer_enable(struct arch_timer *t)
 	/*
 	 * Register the timer INT
 	 */
-	t->irq = irq_of_register(t->dn, t->hwirq, armv7_timer_isr, t);
+	t->irq = irq_register(t->dn, armv7_timer_isr, t);
 
-	IMSG("TimerFRQ: %ld.%02ldMhz hwirq: %d\n", t->frq / MICROSECS_PER_SEC,
-		(t->frq % MICROSECS_PER_SEC) * 100 / MICROSECS_PER_SEC, t->hwirq);
+	IMSG("TimerFRQ: %ld.%02ldMhz irq: %d\n", t->frq / MICROSECS_PER_SEC,
+		(t->frq % MICROSECS_PER_SEC) * 100 / MICROSECS_PER_SEC, t->irq);
 }
 
 static void armv7_timer_disable(struct arch_timer *t)

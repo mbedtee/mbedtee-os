@@ -95,10 +95,27 @@ static __always_inline void list_move_tail
 	list_add_tail(n, h);
 }
 
-static inline void list_rotate_left(struct list_head *h)
+static inline void list_splice(struct list_head *ori,
+	struct list_head *h)
 {
-	if (!list_empty(h))
-		list_move_tail(h->next, h);
+	if (!list_empty(ori)) {
+		struct list_head *next = ori->next;
+		struct list_head *prev = ori->prev;
+		struct list_head *hnext = h->next;
+
+		next->prev = h;
+		h->next = next;
+
+		prev->next = hnext;
+		hnext->prev = prev;
+	}
+}
+
+static inline void list_splice_init(struct list_head *ori,
+	struct list_head *h)
+{
+	list_splice(ori, h);
+	INIT_LIST_HEAD(ori);
 }
 
 static inline void list_bulk_move_tail(struct list_head *h,

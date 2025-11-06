@@ -64,9 +64,30 @@ static ssize_t cdns_gets(struct uart_port *p, char *buf, size_t count)
 	return pos;
 }
 
+static ssize_t cdns_poll_rx(struct uart_port *p)
+{
+	uint32_t rdbytes = 0, c = 0;
+	unsigned long flags = 0;
+
+	spin_lock_irqsave(&p->lock, flags);
+
+	/* check RX FIFO */
+	while (!(ioread32(p->membase + CDNS_SR) & CDNS_SR_RXEMPTY)) {
+		c = ioread32(p->membase + CDNS_FIFO);
+		p->buf[p->wr++] = c & 0xff;
+		if (p->wr == sizeof(p->buf))
+			p->wr = 0;
+		rdbytes++;
+	}
+
+	spin_unlock_irqrestore(&p->lock, flags);
+
+	return rdbytes;
+}
+
 static void cdns_irq_handler(struct uart_port *p)
 {
-	uint32_t stat = 0, c = 0;
+	uint32_t stat = 0, rdbytes = 0;
 
 	stat = ioread32(p->membase + CDNS_ISR);
 	iowrite32(stat, p->membase + CDNS_ISR);
@@ -75,28 +96,27 @@ static void cdns_irq_handler(struct uart_port *p)
 			CDNS_IER_OVERRUN | CDNS_IER_RXTRIG)) == 0)
 		return;
 
-	do {
-		/* check RX FIFO */
-		if (!(ioread32(p->membase + CDNS_SR) & CDNS_SR_RXEMPTY)) {
-			c = ioread32(p->membase + CDNS_FIFO);
-			p->buf[p->wr++] = c & 0xff;
-			if (p->wr == sizeof(p->buf))
-				p->wr = 0;
-		} else {
-			break;
-		}
-	} while (1);
+	rdbytes = cdns_poll_rx(p);
 
-	wakeup(&p->wait_queue);
+	if (rdbytes)
+		wakeup(&p->wait_queue);
 }
 
 static void cdns_disable(struct uart_port *p)
 {
 	/*
-	 * Disable all
+	 * Disable interrupt, all
 	 */
+	iowrite32(0, p->membase + CDNS_IER);
 	iowrite32(0, p->membase + CDNS_CR);
+
 	irq_unregister(p->irq);
+
+	cdns_irq_handler(p);
+
+	cdns_poll_rx(p);
+
+	wakeup(&p->wait_queue);
 }
 
 static void cdns_setup(struct uart_port *p)
@@ -149,8 +169,7 @@ static void cdns_attach(struct uart_port *p)
 {
 	cdns_setup(p);
 
-	p->irq = irq_of_register(p->dn, p->hwirq,
-		(void *)cdns_irq_handler, p);
+	p->irq = irq_register(p->dn, (void *)cdns_irq_handler, p);
 
 	/*
 	 * Enable RX and RX interrupt
@@ -180,6 +199,7 @@ static void cdns_resume(struct uart_port *p)
 static const struct uart_ops cdns_port_ops = {
 	.tx = cdns_puts,
 	.rx = cdns_gets,
+	.poll_rx = cdns_poll_rx,
 	.suspend = cdns_suspend,
 	.resume = cdns_resume,
 	.attach = cdns_attach,

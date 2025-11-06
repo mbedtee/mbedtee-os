@@ -12,7 +12,7 @@
 	cpu {
 		compatible = "riscv,cpu";
 		/* hartid of each CPU */
-		cpus = <0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15>;
+		cpus = <0 1 2 3>;
 	};
 
 	platform {
@@ -59,13 +59,15 @@
 
 		interrupt-controller;
 
+		interrupt-parent = <&intc>;
+
 		#interrupt-cells = <1>;
 		#address-cells = <1>;
 
-		interrupts = <9 11>; /* connects to CPU 9 (S-Mode), 11 (M-Mode) */
-		interrupt-parent = <&intc>;
+		/* connects to CPU clint 11 (M-Mode), 9 (S-Mode) */
+		interrupts = <11 9>;
 
-		max-irqs = <95>; /* unprecise number */
+		max-irqs = <96>; /* unprecise number */
 
 		reg = <0xc000000 0x600000>;
 	};

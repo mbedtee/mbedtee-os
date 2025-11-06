@@ -24,6 +24,23 @@ struct tlb_info {
 	unsigned long asid;
 };
 
+static void __ipi_flush_tlb(void *data, size_t size)
+{
+	struct tlb_info *t = data;
+
+	if (size == 0)
+		local_flush_tlb_all();
+	else if (t->va)
+		local_flush_tlb_pte(t->va, t->asid);
+	else if (t->asid)
+		local_flush_tlb_asid(t->asid);
+}
+
+static void __ipi_flush_icache(void *data, size_t size)
+{
+	local_flush_icache_all();
+}
+
 void flush_tlb_pte(unsigned long va, unsigned long asid)
 {
 	struct tlb_info info;
@@ -40,7 +57,7 @@ void flush_tlb_pte(unsigned long va, unsigned long asid)
 	currcpu = percpu_id();
 	for_each_online_cpu(cpu) {
 		if (currcpu != cpu)
-			ipi_call(IPI_TLB, cpu, &info, sizeof(info));
+			ipi_call(__ipi_flush_tlb, cpu, &info, sizeof(info));
 	}
 
 	local_irq_restore(flags);
@@ -62,7 +79,7 @@ void flush_tlb_asid(unsigned long asid)
 	currcpu = percpu_id();
 	for_each_online_cpu(cpu) {
 		if (currcpu != cpu)
-			ipi_call(IPI_TLB, cpu, &info, sizeof(info));
+			ipi_call(__ipi_flush_tlb, cpu, &info, sizeof(info));
 	}
 
 	local_irq_restore(flags);
@@ -80,7 +97,7 @@ void flush_tlb_all(void)
 	currcpu = percpu_id();
 	for_each_online_cpu(cpu) {
 		if (currcpu != cpu)
-			ipi_call(IPI_TLB, cpu, NULL, 0);
+			ipi_call(__ipi_flush_tlb, cpu, NULL, 0);
 	}
 
 	local_irq_restore(flags);
@@ -98,35 +115,10 @@ void flush_icache_all(void)
 	currcpu = percpu_id();
 	for_each_online_cpu(cpu) {
 		if (currcpu != cpu)
-			ipi_call(IPI_ICACHE, cpu, NULL, 0);
+			ipi_call(__ipi_flush_icache, cpu, NULL, 0);
 	}
 
 	local_irq_restore(flags);
 }
-
-static void __ipi_flush_tlb(void *data, size_t size)
-{
-	struct tlb_info *t = data;
-
-	if (size == 0)
-		local_flush_tlb_all();
-	else if (t->va)
-		local_flush_tlb_pte(t->va, t->asid);
-	else if (t->asid)
-		local_flush_tlb_asid(t->asid);
-}
-
-static void __ipi_flush_icache(void *data, size_t size)
-{
-	local_flush_icache_all();
-}
-
-static void __init ipi_functions_init(void)
-{
-	/* uses ipi to sync the TLB/ICACHE with other processors */
-	ipi_register(IPI_TLB, __ipi_flush_tlb);
-	ipi_register(IPI_ICACHE, __ipi_flush_icache);
-}
-MODULE_INIT_ARCH(ipi_functions_init);
 
 #endif

@@ -24,7 +24,7 @@ objdump = $(CROSS_COMPILE)objdump
 objcopy = $(CROSS_COMPILE)objcopy
 
 include $(SCRIPTS_DIR)/Makefile.arch
-include $(SCRIPTS_DIR)/Makefile.platform
+include $(TOP_DIR)/platform/Makefile.platform
 
 MAKEFLAGS += --no-print-directory
 

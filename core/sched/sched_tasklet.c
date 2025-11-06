@@ -78,7 +78,7 @@ void tasklet_schedule(struct tasklet *t)
 		if (sp->curr != taskletd) {
 			wakeup(&taskletd->thread->wait_q);
 			if (ctx == NULL)
-				ipi_call_sched(sp->pc->id);
+				sched_ipi_trigger(sp->pc->id);
 		}
 
 		if ((sp->curr != taskletd) && ctx)

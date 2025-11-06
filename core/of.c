@@ -42,8 +42,7 @@ static struct device_node *of_alloc_node(
 
 	dn->offset = offset;
 	dn->id.name = fdt_get_name(__dtb, offset, NULL);
-	dn->id.compat = fdt_getprop(__dtb, offset,
-					"compatible", NULL);
+	dn->id.compat = fdt_getprop(__dtb, offset, "compatible", NULL);
 	dn->parent = parent;
 
 	dn->phandle = fdt_get_phandle(__dtb, offset);
@@ -124,7 +123,7 @@ int of_fdt_early_init(void)
 }
 
 static int of_property_read_u32_array_by_offset(int offset,
-	const char *propname, unsigned int *out_values, int sz)
+	const char *propname, unsigned int *out, int sz)
 {
 	int len, proplen = 0;
 	const unsigned int *val = NULL;
@@ -137,8 +136,8 @@ static int of_property_read_u32_array_by_offset(int offset,
 	len = (proplen > (sz * sizeof(unsigned int))) ?
 		(sz * sizeof(unsigned int)) : proplen;
 
-	while (len && out_values) {
-		*out_values++ = fdt32_to_cpu(*val++);
+	while (len && out) {
+		*out++ = fdt32_to_cpu(*val++);
 		len -= sizeof(unsigned int);
 	}
 
@@ -268,10 +267,39 @@ struct device_node *of_find_matching_node(
 	return NULL;
 }
 
-int of_property_read_u32_array(struct device_node *dn,
-	const char *propname, unsigned int *out_values, int cnt)
+int __of_property_read_u32_array(struct device_node *dn,
+	const char *propname, unsigned int *out, size_t cnt)
 {
-	int len, proplen = 0;
+	size_t propcnt = 0;
+	int proplen = 0, ret = 0;
+	const unsigned int *val = NULL;
+
+	if (cnt == 0)
+		return 0;
+
+	val = fdt_getprop(__dtb, dn ? dn->offset : -1, propname, &proplen);
+
+	if ((!proplen) || (!val))
+		return -ENODATA;
+
+	propcnt = proplen / sizeof(unsigned int);
+
+	cnt = min(propcnt, cnt);
+
+	ret = cnt;
+	while (cnt) {
+		*out++ = fdt32_to_cpu(*val++);
+		cnt--;
+	}
+
+	/* count of u32 */
+	return ret;
+}
+
+int of_property_read_variable_u32_array(struct device_node *dn,
+	const char *propname, unsigned int *out, size_t mincnt, size_t maxcnt)
+{
+	int proplen = 0, cnt = 0, ret = 0;
 	const unsigned int *val = NULL;
 
 	val = fdt_getprop(__dtb, dn ? dn->offset : -1, propname, &proplen);
@@ -279,35 +307,25 @@ int of_property_read_u32_array(struct device_node *dn,
 	if ((!proplen) || (!val))
 		return -ENODATA;
 
-	len = cnt * sizeof(unsigned int);
+	cnt = proplen / sizeof(unsigned int);
 
-	if (proplen < len)
+	if (cnt < mincnt)
+		return -EOVERFLOW;
+	if (maxcnt && (cnt > maxcnt))
 		return -EOVERFLOW;
 
-	while (len && out_values) {
-		*out_values++ = fdt32_to_cpu(*val++);
-		len -= sizeof(unsigned int);
+	/* if maxcnt is zero, just read mincnt */
+	if (maxcnt == 0)
+		cnt = mincnt;
+
+	ret = cnt;
+	while (cnt) {
+		*out++ = fdt32_to_cpu(*val++);
+		cnt--;
 	}
 
-	return 0;
-}
-
-int of_property_read_u32(struct device_node *dn,
-	const char *propname, unsigned int *out_value)
-{
-	return of_property_read_u32_array(dn, propname, out_value, 1);
-}
-
-int of_property_read_s32_array(struct device_node *dn,
-	const char *propname, int *out_values, int cnt)
-{
-	return of_property_read_u32_array(dn, propname, (unsigned int *)out_values, cnt);
-}
-
-int of_property_read_s32(struct device_node *dn,
-	const char *propname, int *out_value)
-{
-	return of_property_read_u32(dn, propname, (unsigned int *)out_value);
+	/* count of u32 */
+	return ret;
 }
 
 int of_property_count_elems_of_size(const struct device_node *dn,
@@ -385,7 +403,7 @@ int of_read_property_addr_size(struct device_node *dn, const char *name,
 	if (range == NULL)
 		return -ENODATA;
 
-	if (plen/sizeof(int) <= (size_t)(naddr + nsize) * idx)
+	if (plen / sizeof(int) <= (size_t)(naddr + nsize) * idx)
 		return -ENODATA;
 
 	if (addr)
@@ -405,3 +423,51 @@ struct device_node *of_irq_find_parent(struct device_node *dn)
 
 	return NULL;
 }
+
+int of_n_interrupt_cells(struct device_node *dn)
+{
+	unsigned int nsize = 1;
+
+	do {
+		dn = of_irq_find_parent(dn);
+
+		if (!of_property_read_u32(dn, "#interrupt-cells", &nsize))
+			break;
+	} while (dn);
+
+	return nsize;
+}
+
+int of_irq_parse_max(struct device_node *dn, unsigned int *max)
+{
+	return of_property_read_u32(dn, "max-irqs", max);
+}
+
+int of_irq_parse_one(struct device_node *dn, int idx,
+	unsigned int *hwriq, unsigned int *type)
+{
+	int nsize = 0, plen = 0;
+	const unsigned int *range = NULL;
+
+	if (dn == NULL)
+		return -ENODATA;
+
+	nsize = of_n_interrupt_cells(dn);
+
+	range = of_get_property(dn, "interrupts", &plen);
+	if (range == NULL)
+		return -ENODATA;
+
+	if (plen / sizeof(int) <= (size_t)nsize * idx)
+		return -ENODATA;
+
+	range += nsize * idx;
+
+	*hwriq = fdt32_to_cpu(*range++);
+
+	if (type && (nsize == 2))
+		*type = fdt32_to_cpu(*range);
+
+	return 0;
+}
+

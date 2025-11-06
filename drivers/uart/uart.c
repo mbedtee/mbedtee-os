@@ -214,6 +214,38 @@ static void uart_remove(struct device *dev)
 	p->ops->detach(p);
 }
 
+/*
+ * Uses the polling function to read
+ * the uart chars instead of interrupt
+ */
+static void uart_poll_timer_event(struct tevent *t)
+{
+	ssize_t rdbytes = 0;
+	struct uart_port *p = t->data;
+	struct timespec ts = {0, 30000000};
+
+	rdbytes = p->ops->poll_rx(p);
+
+	tevent_start(&p->tevent, &ts);
+
+	if (rdbytes)
+		wakeup(&p->wait_queue);
+}
+
+/*
+ * setup a periodic timer as a compensation mechanism to
+ * the uart interrupt (in case of interrupt not work)
+ */
+static void uart_setup_poll_timer(struct uart_port *p)
+{
+	struct timespec ts = {0, 30000000};
+
+	if (p->ops->poll_rx) {
+		tevent_init(&p->tevent, uart_poll_timer_event, p);
+		tevent_start(&p->tevent, &ts);
+	}
+}
+
 static int __init uart_probe(struct device *dev)
 {
 	struct uart_port *p = of_uart_port(dev);
@@ -226,6 +258,7 @@ static int __init uart_probe(struct device *dev)
 	dev->fops = &uart_fops;
 	dev->sops = &uart_str;
 
+	uart_setup_poll_timer(p);
 	dev_set_drvdata(dev, p);
 	return 0;
 }
@@ -238,7 +271,7 @@ static int __init uart_parse_dts(struct uart_port *p,
 
 	p->dn = dn;
 
-	ret = of_read_property_addr_size(dn, "reg", 0, &p->iobase, &p->iosize);
+	ret = of_parse_io_resource(dn, 0, &p->iobase, &p->iosize);
 	if (ret)
 		return ret;
 
@@ -247,12 +280,6 @@ static int __init uart_parse_dts(struct uart_port *p,
 
 	ret = of_property_read_u32(dn, "reg-shift", &tmp);
 	p->regshift = ret ? 0 : tmp;
-
-	p->membase = iomap(p->iobase, p->iosize);
-
-	ret = of_property_read_u32(dn, "interrupts", &p->hwirq);
-	if (ret)
-		p->hwirq = -1;
 
 	ret = of_property_read_u32(dn, "clock-frequency", &p->clk);
 	if (ret)
@@ -265,6 +292,8 @@ static int __init uart_parse_dts(struct uart_port *p,
 	ret = of_property_read_u32(dn, "clock-divisor", &p->divisor);
 	if (ret)
 		return ret;
+
+	p->membase = iomap(p->iobase, p->iosize);
 
 	return 0;
 }

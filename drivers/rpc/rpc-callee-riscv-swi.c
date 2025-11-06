@@ -87,16 +87,16 @@ static inline int rpc_pick_next(
 	return 0;
 }
 
-static void rpc_callee_isr(void *unused)
+static int rpc_callee_isr(void *data)
 {
-	int ret = -1;
+	int ret = -1, cnt = 0;
 	unsigned long retry = 0;
-	struct rpc_ringbuf *ring = r2t_ring;
 	unsigned long flags = 0;
 	unsigned long remote = 0;
+	struct rpc_ringbuf *ring = data;
 
 	if (!ring || (r2t_ring_rd == ring->wr))
-		return;
+		return 0;
 
 	spin_lock_irqsave(&callee_lock, flags);
 
@@ -111,33 +111,35 @@ static void rpc_callee_isr(void *unused)
 		}
 
 		rpc_callee_handler(remote);
+
+		cnt++;
 	}
 
 	spin_unlock_irqrestore(&callee_lock, flags);
+
+	return cnt;
 }
 
 static __init int rpc_callee_init(struct device *dev)
 {
+	int ret = -1;
+	unsigned long addr = 0;
+	size_t size = 0;
 	struct device_node *dn = NULL;
-	int ret = -1, naddr = 0, nsize = 0, plen = 0;
-	const unsigned int *range = NULL;
 
 	dn = container_of(dev, struct device_node, dev);
-	naddr = of_n_addr_cells(dn);
-	nsize = of_n_size_cells(dn);
 
-	range = of_get_property(dn, "rpc-r2t-ring", &plen);
-	if (range == NULL || (plen/sizeof(int) != naddr + nsize)) {
+	ret = of_read_property_addr_size(dn, "rpc-r2t-ring", 0, &addr, &size);
+	if (ret != 0) {
 		EMSG("error rpc-r2t-ring dts\n");
 		return ret;
 	}
 
-	r2t_ring = phys_to_virt(of_read_ulong(range, naddr));
-	r2t_ring_sz = of_read_ulong(range + naddr, nsize);
-	r2t_ring_sz -= sizeof(struct rpc_ringbuf);
+	r2t_ring = phys_to_virt(addr);
+	r2t_ring_sz = size - sizeof(struct rpc_ringbuf);
 	r2t_ring->rd = r2t_ring->wr = r2t_ring_rd;
 
-	register_softint(SOFTINT_RPC_CALLEE, rpc_callee_isr, NULL);
+	softint_register(SOFTINT_RPC_CALLEE, rpc_callee_isr, r2t_ring);
 
 	IMSG("r2t-ring=%p size=%ld\n", r2t_ring, (long)r2t_ring_sz);
 

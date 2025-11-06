@@ -61,6 +61,36 @@ void rpc_shm_free(void *addr)
 }
 
 /*
+ * return if the callee ready or not
+ */
+int rpc_test_callee(void)
+{
+	int ready = 0;
+
+	if (t2r_ring) {
+		smp_mb();
+		ready = t2r_ring->callee_ready;
+	}
+
+	return ready;
+}
+
+/*
+ * return the callee's hartid or mpid
+ */
+int rpc_calleeid(void)
+{
+	int id = 0;
+
+	if (t2r_ring) {
+		smp_mb();
+		id = t2r_ring->callee_id;
+	}
+
+	return id;
+}
+
+/*
  * check if the remain ring-buff is
  * enough or not for current call
  */
@@ -122,7 +152,10 @@ int rpc_call(unsigned int id, void *data, size_t size)
 	struct rpc_cmd cmd = {0};
 
 	if (!t2r_ring)
-		return -ENOMSG;
+		return -ENXIO;
+
+	if (!rpc_test_callee())
+		return -EAGAIN;
 
 	if (id >= RPC_REENR)
 		return -EINVAL;
@@ -134,7 +167,7 @@ int rpc_call(unsigned int id, void *data, size_t size)
 	spin_lock_irqsave(&rpc_lock, flags);
 	if (!rpc_ring_enough(sizeof(struct rpc_cmd) + size)) {
 		EMSG("rpc ring not enough\n");
-		raise_softint(SOFTINT_RPC_CALLER, percpu_id());
+		softint_raise(SOFTINT_RPC_CALLER, percpu_id());
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -147,7 +180,7 @@ int rpc_call(unsigned int id, void *data, size_t size)
 	rpc_ring_write((void *)&cmd, sizeof(cmd));
 	rpc_ring_write(data, size);
 
-	raise_softint(SOFTINT_RPC_CALLER, percpu_id());
+	softint_raise(SOFTINT_RPC_CALLER, percpu_id());
 
 	ret = 0;
 
@@ -166,6 +199,9 @@ int rpc_call_sync(unsigned int id, void *data, size_t size)
 
 	if (!t2r_ring)
 		return -ENXIO;
+
+	if (!rpc_test_callee())
+		return -EAGAIN;
 
 	if (id >= RPC_REENR)
 		return -EINVAL;
@@ -203,13 +239,13 @@ int rpc_call_sync(unsigned int id, void *data, size_t size)
 
 	rpc_ring_write((void *)&cmd, sizeof(cmd));
 
-	raise_softint(SOFTINT_RPC_CALLER, percpu_id());
+	softint_raise(SOFTINT_RPC_CALLER, percpu_id());
 
 	ret = 0;
 
 out:
 	if (ret == -ENOMEM)
-		raise_softint(SOFTINT_RPC_CALLER, percpu_id());
+		softint_raise(SOFTINT_RPC_CALLER, percpu_id());
 
 	spin_unlock_irqrestore(&rpc_lock, flags);
 
@@ -256,24 +292,20 @@ static __init int rpc_shm_init(struct device *dev)
 	int ret = -EPERM;
 	void *start = NULL;
 	void *manager = NULL;
-	int naddr = 0, nsize = 0, plen = 0;
 	struct device_node *dn = NULL;
-	const unsigned int *range = NULL;
+	unsigned long addr = 0;
 	size_t node_size = 128;
 	size_t shm_size = 0;
 
 	dn = container_of(dev, struct device_node, dev);
-	naddr = of_n_addr_cells(dn);
-	nsize = of_n_size_cells(dn);
 
-	range = of_get_property(dn, "rpc-t2r-shm", &plen);
-	if (range == NULL || (plen/sizeof(int) != naddr + nsize)) {
+	ret = of_read_property_addr_size(dn, "rpc-t2r-shm", 0, &addr, &shm_size);
+	if (ret != 0) {
 		EMSG("error rpc-t2r-shm dts\n");
 		return ret;
 	}
 
-	start = phys_to_virt(of_read_ulong(range, naddr));
-	shm_size = of_read_ulong(range + naddr, nsize);
+	start = phys_to_virt(addr);
 
 	manager = kmalloc(buddy_mgs(shm_size, node_size));
 	if (manager == NULL) {
@@ -295,30 +327,29 @@ out:
 
 static __init int rpc_init(struct device *dev)
 {
+	int ret = -1;
+	unsigned long addr = 0;
+	size_t size = 0;
 	struct device_node *dn = NULL;
-	int ret = -1, naddr = 0, nsize = 0, plen = 0;
-	const unsigned int *range = NULL;
 
 	ret = rpc_shm_init(dev);
 	if (ret != 0)
 		return ret;
 
 	dn = container_of(dev, struct device_node, dev);
-	naddr = of_n_addr_cells(dn);
-	nsize = of_n_size_cells(dn);
 
-	range = of_get_property(dn, "rpc-t2r-ring", &plen);
-	if (range == NULL || (plen/sizeof(int) != naddr + nsize)) {
+	ret = of_read_property_addr_size(dn, "rpc-t2r-ring", 0, &addr, &size);
+	if (ret != 0) {
 		EMSG("error rpc-t2r-ring dts\n");
 		return ret;
 	}
 
-	t2r_ring = phys_to_virt(of_read_ulong(range, naddr));
-	t2r_ring_sz = of_read_ulong(range + naddr, nsize);
-	t2r_ring_sz -= sizeof(struct rpc_ringbuf);
+	t2r_ring = phys_to_virt(addr);
+	t2r_ring_sz = size - sizeof(struct rpc_ringbuf);
 	t2r_ring->rd = t2r_ring->wr = 0;
+	t2r_ring->callee_ready = t2r_ring->callee_id = 0;
 
-	register_softint(SOFTINT_RPC_CALLER, NULL, NULL);
+	softint_register(SOFTINT_RPC_CALLER, NULL, NULL);
 
 	IMSG("rpc-t2r-ring=%p size=%ld\n", t2r_ring, (long)t2r_ring_sz);
 

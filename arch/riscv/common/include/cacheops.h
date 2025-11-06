@@ -8,6 +8,8 @@
 #ifndef _CACHEOPS_H
 #define _CACHEOPS_H
 
+#include <riscv-tlb.h>
+
 /*
  * flush all levels dcache by set/way
  */
@@ -18,10 +20,5 @@ void flush_cache_all(void);
  * dcache by set/way
  */
 void flush_cache_louis(void);
-
-/*
- * Invalid whole instruction cache
- */
-void flush_icache_all(void);
 
 #endif

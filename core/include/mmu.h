@@ -53,19 +53,6 @@ int map(struct pt_struct *pt, unsigned long pa, void *va,
  */
 void unmap(struct pt_struct *pt, void *va, unsigned long size);
 
-/*
- * access ok() checks if the user
- * address range is accessible or not
- * according to the expected access flags
- */
-int access_user_ok(const void *addr, size_t size, int prot);
-
-/*
- * access ok() checks if the kernel
- * address range is accessible or not
- * according to the expected access flags
- */
-int access_kern_ok(const void *addr, size_t size, int prot);
 
 /*
  * Convert the userspace address to physical address
@@ -106,6 +93,20 @@ int __init map_early(unsigned long pa,	size_t size, unsigned long flags);
 void __init mmu_init(void);
 
 void __init mmu_init_kpt(struct pt_struct *pt);
+
+/*
+ * access ok() checks if the user
+ * address range is accessible or not
+ * according to the expected access flags
+ */
+int access_user_ok(const void *addr, size_t size, int prot);
+
+/*
+ * access ok() checks if the kernel
+ * address range is accessible or not
+ * according to the expected access flags
+ */
+int access_kern_ok(const void *addr, size_t size, int prot);
 
 #endif
 #endif

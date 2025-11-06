@@ -131,6 +131,8 @@ static inline void fspath_directory_name(
 		directory[0] = 0;
 }
 
+void fs_create(const char *name);
+
 int alloc_path(const char *src, struct file_path *p);
 
 void free_path(struct file_path *p);

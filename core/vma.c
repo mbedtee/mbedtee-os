@@ -425,6 +425,34 @@ void vma_free(struct vma *vm, void *va)
 	assert(freed);
 }
 
+/*
+ * return the num of bytes held by 'addr' (aligned power of 2)
+ */
+size_t vma_sizeof(struct vma *vm, void *va)
+{
+	int i = 0;
+	size_t size = 0;
+	struct vma_pool *pool = NULL;
+	unsigned long flags = 0;
+
+	if (!vm || !va)
+		return 0;
+
+	spin_lock_irqsave(&vm->lock, flags);
+
+	for (; i < ARRAY_SIZE(vm->rbroot); i++) {
+		pool = vma_rbfind(vm, va, i);
+		if (pool) {
+			size = buddy_sizeof(&pool->buddy, va);
+			break;
+		}
+	}
+
+	spin_unlock_irqrestore(&vm->lock, flags);
+
+	return size;
+}
+
 void vma_info(struct debugfs_file *d, struct vma *vm)
 {
 	int i = 0;

@@ -112,7 +112,7 @@ void timer_down(void)
 }
 
 /*
- * init/enable the ticktimer or other timers
+ * percpu init/enable the ticktimer or other timers
  */
 void timer_init(void)
 {
@@ -151,15 +151,8 @@ static int __init timer_parse_dts(struct device_node *dn,
 	struct arch_timer *t)
 {
 	int ret = -1;
-	unsigned long base = 0;
 
 	t->dn = dn;
-
-	ret = of_property_read_u32(dn, "interrupts", &t->hwirq);
-	if (ret) {
-		EMSG("interrupts not found @ %s\n", dn->id.name);
-		return ret;
-	}
 
 	ret = of_property_read_u32(dn, "clock-frequency", &t->frq);
 	if (ret) {
@@ -167,9 +160,7 @@ static int __init timer_parse_dts(struct device_node *dn,
 		return ret;
 	}
 
-	ret = of_read_property_addr_size(dn, "reg", 0, &base, &t->size);
-	if (ret == 0)
-		t->base = iomap(base, t->size);
+	t->base = of_iomap(dn, 0);
 
 	/* the FRQ shall always fast than 1Mega-Hz */
 	if (t->frq < MICROSECS_PER_SEC) {

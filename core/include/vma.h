@@ -53,11 +53,15 @@ void vma_destroy(struct vma *vm);
  */
 void *vma_alloc(struct vma *vm, size_t size);
 
-
 /*
  * free contiguous virtual space
  */
 void vma_free(struct vma *vm, void *va);
+
+/*
+ * return the num of bytes held by 'va' (aligned power of 2)
+ */
+size_t vma_sizeof(struct vma *vm, void *va);
 
 void vma_info(struct debugfs_file *d, struct vma *vm);
 

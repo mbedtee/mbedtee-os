@@ -25,18 +25,12 @@ static void platform_pinctrl(void)
 
 	struct device_node *node = NULL;
 	void *base = NULL;
-	unsigned long addr = 0;
-	size_t size;
 
 	node = of_find_compatible_node(NULL, "module,pinctrl");
 	if (!node) {
 		IMSG("no pinctrls\n");
 		return;
 	}
-
-	ret = of_read_property_addr_size(node, "reg", 0, &addr, &size);
-	if (ret)
-		return;
 
 	ret = of_property_count_elems_of_size(node, "pinctrls", 1);
 	if (ret < 0)
@@ -50,8 +44,8 @@ static void platform_pinctrl(void)
 	if (of_property_read_s32_array(node, "pinctrls", (int *)cells, ret) < 0)
 		return;
 
-	base = iomap(addr, size);
-	if (!base) {
+	base = of_iomap(node, 0);
+	if (base == NULL) {
 		IMSG("no pinctrls\n");
 		return;
 	}
@@ -63,7 +57,8 @@ static void platform_pinctrl(void)
 				<< cells[i].bit_off;
 		iowrite32(val, base + cells[i].reg_off);
 	}
-	iounmap(base, size);
+
+	iounmap(base);
 }
 
 static int platform_resume(void *data)
