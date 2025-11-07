@@ -83,11 +83,11 @@ static void __init intc_soc_init(struct device_node *dn)
 		return;
 
 	intc->enable_regs = of_iomap(dn, 0);
-	if (intc->enable_regs)
+	if (!intc->enable_regs)
 		return;
 
 	intc->stat_regs = of_iomap(dn, 1);
-	if (intc->stat_regs)
+	if (!intc->stat_regs)
 		return;
 
 	ret = of_irq_parse_max(dn, &intc->max);
