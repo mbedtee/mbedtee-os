@@ -48,7 +48,6 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
 		reg = <0x2000000 0x4000>; /* for mswi */
 	};

@@ -47,7 +47,6 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
 		reg = <0x2000000 0x4000>, /* for mswi */
 			<0x2F00000 0x4000>; /* for sswi */
@@ -62,7 +61,6 @@
 		interrupt-parent = <&intc>;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
 		/* connects to CPU clint 11 (M-Mode), 9 (S-Mode) */
 		interrupts = <11 9>;

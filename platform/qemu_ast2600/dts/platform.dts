@@ -70,7 +70,6 @@
 		interrupt-controller;
 
 		#interrupt-cells = <1>;
-		#address-cells = <1>;
 
 		reg = <0x40461000 0x1000>, /* GICD */
 			<0x40462000 0x1000>; /* GICC */
