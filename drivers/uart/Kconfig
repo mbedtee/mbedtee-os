@@ -3,15 +3,19 @@
 
 config UART
 	bool "UART module"
-	default y
 	help
 		Say Y here to enable the UART module.
 
 if UART
 
+config UART_POLL
+	bool "UART Poll RX"
+	help
+		Enable UART periodic polling on RX.
+
 choice
 	prompt "UART Selection"
-	default UART_PL011 if ARM
+
 config UART_16550
 	bool "UART 16550A"
 	help
@@ -32,6 +36,7 @@ config UART_IMX
 	bool "UART IMX"
 	help
 		Enable IMX UART.
+
 endchoice
 
 endif

@@ -17,8 +17,4 @@ arch-arm-aarch32-$(CONFIG_REE) += ree.o
 
 arch-arm-aarch32-$(CONFIG_MMU) += aarch32-mmu.o aarch32-mmu-asm.o
 
-arch-arm-aarch32-$(CONFIG_ARMV7_GENERIC_TIMER) += armv7-generic-timer.o
-arch-arm-aarch32-$(CONFIG_ARMV7_GLOBAL_TIMER) += armv7-global-timer.o
-arch-arm-aarch32-$(CONFIG_ARMV7_PRIVATE_TIMER) += armv7-private-timer.o
-
 endif

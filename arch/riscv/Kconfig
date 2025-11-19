@@ -6,7 +6,6 @@ menu "RISCV Architecture"
 
 choice
 	prompt "RISCV Selection"
-	default RISCV32
 config RISCV32
 	bool "RISCV32"
 config RISCV64

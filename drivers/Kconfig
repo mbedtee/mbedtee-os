@@ -10,6 +10,7 @@ if DRIVER_BASE
 source "drivers/rng/Kconfig"
 source "drivers/intc/Kconfig"
 source "drivers/uart/Kconfig"
+source "drivers/timer/Kconfig"
 source "drivers/rpc/Kconfig"
 
 source "drivers/globalplatform/Kconfig"

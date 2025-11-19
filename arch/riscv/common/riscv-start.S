@@ -137,17 +137,12 @@ check_set_s_mode_delege:
 	csrw sip, zero
 	csrw sstatus, zero
 
-	li t1, -1
-	xori t2, t1, 1 << 9
-	csrw medeleg, t2
-	csrw mideleg, t1
-	csrw mcounteren, t1
-
-	csrs mie, 1 << 3 /* enable M-IPI (mswi) */
+	/* except the ecall from s-mode */
+	csr_write mtvec, medeleg, -1 & (~(1 << 9))
+	csr_write mtvec, mideleg, -1
+	csr_write mtvec, mcounteren, -1
 
 	set_pmp
-
-	csrw satp, zero
 
 	set_menvcfg
 

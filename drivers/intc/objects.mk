@@ -10,3 +10,4 @@ drivers-intc-$(CONFIG_RISCV_IMSIC) += intc-imsic.o
 drivers-intc-$(CONFIG_SALIX_MIPS_INTC) += intc-salix-mips.o
 drivers-intc-$(CONFIG_SALIX_ARM_INTC) += intc-salix-arm.o
 drivers-intc-$(CONFIG_ASPEED_AST2700_INTC) += intc-aspeed-ast2700.o
+drivers-intc-$(CONFIG_XLNX_INTC) += intc-xlnx.o

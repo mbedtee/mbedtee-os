@@ -4,15 +4,14 @@
 if RISCV64
 
 config MMU_SV39
-	bool
+	bool "sv39 mmu"
 	depends on MMU
-	default y
 	help
 		Enables the SV39 MMU.
 
 config CFLAGS
 	string "RISCV64_CFLAGS"
-	default "-mabi=lp64d -march=rv64imafd_zicsr_zifencei -mstrict-align -mcmodel=medany -mno-riscv-attribute" if RISCV64
+	default "-mabi=lp64d -march=rv64imafdc_zicsr_zifencei_zicbom -mstrict-align -mcmodel=medany -mno-riscv-attribute"
 	help
 		Define the default compile FLAGS.
 
@@ -23,7 +22,7 @@ config PIC_CFLAGS
 		Define the default compile PIC FLAGS.
 
 config VA_BITS
-	int
+	int "VA Bits"
 	default 39
 
 endif

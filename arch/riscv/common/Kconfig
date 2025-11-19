@@ -16,21 +16,6 @@ config MMU
 	help
 		Say Y here to enable the paged virtual memory management.
 
-config RISCV_TIMER
-	bool
-	depends on RISCV_S_MODE
-	default y
-	help
-		Enables the per-hart RISCV timer
-
-config CLINT_TIMER
-	bool
-	depends on !RISCV_S_MODE
-	default y
-	help
-		Enables the CLINT timer. CLINT timer
-		usually used on	M-Mode RISCV systems.
-
 config REE
 	bool "REE present"
 	default n

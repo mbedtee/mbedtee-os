@@ -5,13 +5,11 @@ menu "General Setup"
 
 config NR_CPUS
 	int "CPU Cores Num"
-	default 4
 	help
 		Configure the number of the CPU cores.
 
 config PRINTK
 	bool "Enable printk"
-	default y
 	help
 		Say Y here to enable the kernel print.
 
@@ -45,7 +43,6 @@ config STACK_PROTECTOR
 
 config BACKTRACE
 	bool "Enable kernel unwind backtrace"
-	default y
 	help
 		Say Y here to enable the kernel unwind backtrace.
 
@@ -73,8 +70,10 @@ config OS_ADDR
 	default 0x80100000 if AARCH32 && !USER
 	default 0xC0000000 if RISCV32 && USER
 	default 0x80000000 if RISCV32 && !USER
-	default 0xFFFFFFC000000000 if AARCH64
-	default 0xFFFFFFE000000000 if RISCV64
+	default 0x80000000 if AARCH64 && !USER
+	default 0x80000000 if RISCV64 && !USER
+	default 0xFFFFFFE000000000 if RISCV64 && USER
+	default 0xFFFFFFC000000000 if AARCH64 && USER
 	help
 		Configure the OS destination link address.
 

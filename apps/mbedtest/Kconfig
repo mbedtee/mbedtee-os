@@ -4,6 +4,6 @@
 config MBEDTEST
 	bool "Test TA"
 	depends on USER
-	default y
+	default n
 	help
 		Say Y here to enable Test TA.

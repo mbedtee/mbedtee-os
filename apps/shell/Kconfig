@@ -3,14 +3,12 @@
 
 config SIMPLE_SHELL
 	bool "Simple Shell"
-	default y
 	help
 		Say Y here to enable the simple shell
 
 if SIMPLE_SHELL
 choice
 	prompt "Shell Selection"
-	default USER_SHELL
 
 config USER_SHELL
 	bool "Shell commands @ user-space"

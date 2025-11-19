@@ -52,7 +52,8 @@ static void __init kern_info(void)
 
 	IMSG("Product: %s\n", PRODUCT_NAME);
 	IMSG("Version: %s\n", PRODUCT_VERSION);
-	IMSG("Compiler : %s-gcc\n", TOOLCHAIN_TARGET);
+	IMSG("Platform: %s\n", PLATFORM_NAME);
+	IMSG("Compiler: %s-gcc\n", TOOLCHAIN_TARGET);
 	IMSG("Compiler version: %d.%d.%d\n",
 		__GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__);
 	IMSG("Newlib version: %s\n", _NEWLIB_VERSION);

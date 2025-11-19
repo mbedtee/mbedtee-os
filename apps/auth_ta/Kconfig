@@ -4,7 +4,6 @@
 config AUTH_TA
 	bool "Authorizer TA"
 	depends on USER
-	default y
 	help
 		Say Y here to enable Authorizer TA.
 		Authorizer to decrypt/verify other dynamic TAs

@@ -5,7 +5,6 @@ if ARM
 
 choice
 	prompt "ARM GIC Selection"
-	default ARM_GICV2
 	help
 		choose the GIC version
 		By default this option is essential.
@@ -39,7 +38,6 @@ endif
 
 config REE
 	bool "REE support"
-	default y
 	help
 		Say Y here to support to trigger the REE(e.g. linux) bootup
 		or to resume the REE context in NS mode; CPU only runs

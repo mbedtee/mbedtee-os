@@ -4,9 +4,9 @@
 core-cflags-y += -Wstack-usage=1024
 
 core-y += main.o ida.o interrupt.o mem.o page.o  \
-	timer.o tevent.o ipi.o str.o kproc.o kmalloc.o \
+	of.o tevent.o ipi.o str.o kproc.o kmalloc.o \
 	kthread.o mutex.o semaphore.o assert.o workqueue.o \
-	wait.o bitops.o buddy.o of.o sleep.o delay.o
+	wait.o bitops.o buddy.o sleep.o delay.o
 
 core-$(CONFIG_STACK_PROTECTOR) += stackprotector.o
 

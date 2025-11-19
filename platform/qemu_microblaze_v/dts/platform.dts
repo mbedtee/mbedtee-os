@@ -1,0 +1,95 @@
+/*
+ * SPDX-License-Identifier: Apache-2.0
+ * Copyright (c) 2025 KapaXL (kapa.xl@outlook.com)
+ */
+
+/dts-v1/;
+
+#include "memory.dtsi"
+#include <generated/autoconf.h>
+
+/ {
+	cpu {
+		compatible = "riscv,cpu";
+		/* hartid of each CPU */
+		cpus = <0>;
+	};
+
+	platform {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		pinctrls@0 {
+			reg = <0 0>;
+
+			/*
+			 * cells information
+			 * 0: reg offset,
+			 * 1: first bit position,
+			 * 2: number of bits,
+			 * 3: value
+			 */
+			/* unnecessary for QEMU */
+			pinctrls = <0 0 0 0>, <0 0 0 0>;
+		};
+
+		cpu-power@1 {
+			compatible = "module,cpu-power";
+			/* unnecessary for QEMU */
+			reg = <0 0>;
+		};
+	};
+
+	/* interrupt-controller: CPU side - local private interrupt */
+	intc: interrupt-controller {
+		compatible = "riscv,aclint";
+
+		interrupt-controller;
+
+		#interrupt-cells = <1>;
+	};
+
+	/* interrupt-controller: SoC side - external platform interrupt */
+	xlnx_intc: xlnx-intc@41200000 {
+		compatible = "xlnx,xps-intc";
+
+		interrupt-controller;
+
+		interrupt-parent = <&intc>;
+
+		#interrupt-cells = <1>;
+
+		/* connects to CPU clint 11 (M-Mode), 9 (S-Mode) */
+		interrupts = <11 9>;
+
+		max-irqs = <32>;
+
+		reg = <0x41200000 0x20>;
+	};
+
+	uart {
+		compatible = "module,uart";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		serial16550@44a11000 {
+			compatible = "ns16550a";
+			reg = <0x44a11000 0x30>;
+			interrupts = <4>;
+			interrupt-parent = <&xlnx_intc>;
+			clock-frequency = <3686400>;
+			current-speed = <230400>;
+			clock-divisor = <16>;
+			reg-shift = <2>;
+			reg-io-width = <1>;
+		};
+	};
+
+	timer@41c00000 {
+		compatible = "xlnx,xps-timer";
+		interrupts = <0>;
+		interrupt-parent = <&xlnx_intc>;
+		clock-frequency = <100000000>;
+		reg = <0x41c00000 0x20>;
+	};
+};
