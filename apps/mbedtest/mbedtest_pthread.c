@@ -968,7 +968,6 @@ void cpu_time_test(void)
 	struct timespec t2 = {0}, p2 = {0};
 	int ret = -1;
 	size_t spin_i;
-	volatile unsigned long spin = 0;
 
 	TEST_START("cpu_time");
 
@@ -988,7 +987,7 @@ void cpu_time_test(void)
 	 * must be >= first; thread <= process invariant holds again.
 	 */
 	for (spin_i = 0; spin_i < 2000000; spin_i++)
-		spin += test_rand();
+		test_rand();
 
 	ret = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t2);
 	CHECK(ret == 0, errno, "thread cputime 2nd");

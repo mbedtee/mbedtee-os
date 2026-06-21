@@ -516,13 +516,13 @@ static void gic_handler(struct irq_controller *ic,
 	} while (1);
 
 	/* patch for the weird AArch64 + GICv2 or GICv1 SoC */
-#if defined(CONFIG_AARCH64)
-	/* maybe NS Interrupt */
-	if (IS_ENABLED(CONFIG_REE) && (!handled || (gic_num == 1022)))
-		smc_call(0, 0, 0, 0);
-	else
-		gic_write_cpuif(0xB, GICC_CTLR);
-#endif
+	if (IS_ENABLED(CONFIG_AARCH64)) {
+		/* maybe NS Interrupt */
+		if (IS_ENABLED(CONFIG_REE) && (!handled || (gic_num == 1022)))
+			smc_call(0, 0, 0, 0);
+		else
+			gic_write_cpuif(0xB, GICC_CTLR);
+	}
 }
 
 bool gic_has_security_extn(void)
