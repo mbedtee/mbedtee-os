@@ -52,6 +52,17 @@ config RAMFS
 		Say Y here to enable support for RAMFS.
 		By default this option is essential.
 
+config RAMFS_SIZE
+	int "RAMFS image size (KB)"
+	depends on RAMFS
+	default 2048 if MIPS
+	default 1536
+	range 64 131072
+	help
+		Size of the embedded RAMFS image in kilobytes.
+		When CONFIG_USER is disabled, 64 KB is recommended
+		(the minimum allowed size is 64 KB).
+
 config TMPFS
 	bool "Support the tmpfs"
 	help

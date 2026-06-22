@@ -7,13 +7,7 @@ SKELETON_DIR = $(BINARY_DIR)/skeleton
 
 .PHONY: all
 all:
-ifeq ($(CONFIG_USER),y)
-	$(Q)dd if=/dev/zero of=$(ramfs_file) bs=1K count=1536 2> /dev/null
-	$(Q)$(MKFS_VFAT) -F 12 -S 512 -s 1 $(ramfs_file)
-else
-	$(Q)dd if=/dev/zero of=$(ramfs_file) bs=64K count=1 2> /dev/null
-	$(Q)$(MKFS_VFAT) -F 12 -S 512 -s 1 $(ramfs_file)
-endif
+	$(Q)rm -f $(ramfs_file) && $(MKFS_VFAT) -s 1 -C $(ramfs_file) $(CONFIG_RAMFS_SIZE)
 	$(Q)$(call fatcopy, $(ramfs_file),$(SKELETON_DIR)/*,/)
 	$(Q)$(call fatcopy, $(ramfs_file),$(PLATFORM_DIR)/mbedtee-root.*,/apps/)
 
