@@ -149,9 +149,9 @@ static __init void rpc_callee_init(void)
 	if (!dn)
 		return;
 
-	ret = of_read_property_addr_size(dn, "rpc-r2t-ring", 0, &addr, &size);
+	ret = of_read_property_addr_size(dn, "r2t-ring", 0, &addr, &size);
 	if (ret != 0) {
-		EMSG("error rpc-r2t-ring dts\n");
+		EMSG("error r2t-ring dts\n");
 		return;
 	}
 
@@ -169,7 +169,7 @@ static __init void rpc_callee_init(void)
 	tevent_start(&r2t_poll_evt, &(struct timespec){0, 5000000});
 #endif
 
-	IMSG("rpc-r2t-ring=%p size=%ld\n", r2t_ring, (long)r2t_ring_sz);
+	IMSG("r2t-ring=%p size=%ld\n", r2t_ring, (long)r2t_ring_sz);
 }
 
 MODULE_INIT_CORE(rpc_callee_init);

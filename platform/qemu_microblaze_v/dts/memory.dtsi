@@ -31,8 +31,8 @@
 		/* TAs loaded from REE will be placed in this area */
 		ta-ramfs = <0x85A00000 0x200000>;
 
-		rpc-t2r-ring = <0x85F10000 0x20000>;
-		rpc-t2r-shm = <0x85F30000 0x40000>;
-		rpc-r2t-ring = <0x85F70000 0x20000>;
+		t2r-ring = <0x85F10000 0x20000>;
+		t2r-shm = <0x85F30000 0x40000>;
+		r2t-ring = <0x85F70000 0x20000>;
 	};
 };

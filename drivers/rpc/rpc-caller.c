@@ -37,7 +37,7 @@ static struct rpc_ringbuf *t2r_ring;
 static struct buddy_pool t2r_shm = {0};
 
 #if defined(CONFIG_ARM)
-static unsigned int rpc_t2r_spi;
+static unsigned int t2r_spi;
 extern void gic_pend_spi(unsigned int spi);
 #endif
 
@@ -63,8 +63,8 @@ static inline void rpc_notify_callee(void)
 #endif
 
 #if defined(CONFIG_ARM)
-	if (rpc_t2r_spi)
-		gic_pend_spi(rpc_t2r_spi);
+	if (t2r_spi)
+		gic_pend_spi(t2r_spi);
 #endif
 }
 
@@ -340,9 +340,9 @@ static __init int rpc_shm_init(struct device_node *dn)
 	size_t node_size = 128;
 	size_t shm_size = 0;
 
-	ret = of_read_property_addr_size(dn, "rpc-t2r-shm", 0, &addr, &shm_size);
+	ret = of_read_property_addr_size(dn, "t2r-shm", 0, &addr, &shm_size);
 	if (ret != 0) {
-		EMSG("error rpc-t2r-shm dts\n");
+		EMSG("error t2r-shm dts\n");
 		return ret;
 	}
 
@@ -358,7 +358,7 @@ static __init int rpc_shm_init(struct device_node *dn)
 	if (ret != 0)
 		goto out;
 
-	IMSG("rpc-t2r-shm=%p size=%ld\n", t2r_shm.start, (long)shm_size);
+	IMSG("t2r-shm=%p size=%ld\n", t2r_shm.start, (long)shm_size);
 
 out:
 	if (ret != 0)
@@ -381,9 +381,9 @@ static __init void rpc_init(void)
 	if (ret != 0)
 		return;
 
-	ret = of_read_property_addr_size(dn, "rpc-t2r-ring", 0, &addr, &size);
+	ret = of_read_property_addr_size(dn, "t2r-ring", 0, &addr, &size);
 	if (ret != 0) {
-		EMSG("error rpc-t2r-ring dts\n");
+		EMSG("error t2r-ring dts\n");
 		return;
 	}
 
@@ -395,12 +395,12 @@ static __init void rpc_init(void)
 	t2r_ring->callee_imsic_id = 0;
 
 #if defined(CONFIG_ARM)
-	ret = of_property_read_u32(dn, "rpc-t2r-spi", &rpc_t2r_spi);
+	ret = of_property_read_u32(dn, "t2r-spi", &t2r_spi);
 	if (ret == 0)
-		IMSG("rpc-t2r-spi=%d\n", rpc_t2r_spi);
+		IMSG("t2r-spi=%d\n", t2r_spi);
 #endif
 
-	IMSG("rpc-t2r-ring=%p size=%ld\n", t2r_ring, (long)t2r_ring_sz);
+	IMSG("t2r-ring=%p size=%ld\n", t2r_ring, (long)t2r_ring_sz);
 }
 
 MODULE_INIT_CORE(rpc_init);
