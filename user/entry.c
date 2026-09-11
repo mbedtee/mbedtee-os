@@ -430,6 +430,9 @@ static void __process_tz_init(void)
 	char *p = tzstr + 3;
 	int h = 0, m = 0;
 
+	if (getenv("TZ") != NULL)
+		return;
+
 	if (syscall3(SYSCALL_CLOCKGETTIME, CLOCK_REALTIME, &ts, &tz) != 0)
 		return;
 
@@ -459,19 +462,29 @@ static void __process_tz_init(void)
 	tzset();
 }
 
+static void __process_info_init(void)
+{
+	static int fetched;
+
+	if (__atomic_exchange_n(&fetched, 1, __ATOMIC_ACQ_REL))
+		return;
+
+	syscall1(SYSCALL_GET_PROC_INFO, &__proc_info);
+}
+
 static void __nosprot __pthread_process_init(void)
 {
 	struct __pthread *t = __pthread_self;
 
 	__process_stack_guard();
 	__process_stdfd_init();
+	__process_info_init();
 
 	__pthread_init(t);
 	__pthread_reent_init(reent_of(t));
 
 	__process_tz_init();
 
-	syscall1(SYSCALL_GET_PROC_INFO, &__proc_info);
 	__process_unwind_init();
 }
 

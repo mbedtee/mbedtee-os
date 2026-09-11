@@ -114,20 +114,22 @@ void *__gnu_Unwind_Find_exidx(void *pc, int *nrec)
 
 void __process_unwind_init(void)
 {
-
 #if !defined(__arm__)
 	int i = 0;
 	struct unwind_info *unw = &__proc_info.unwind;
-	int nrtabs = unw->nrtabs;
+	unsigned int nrtabs = unw->nrtabs;
+	/*
+	 * One-shot: libgcc's __register_frame() allocates state that is never
+	 * released, so the tables must only ever be registered once.
+	 */
+	static int __unwind_inited;
 
-	if (nrtabs <= 0)
+	/* Register the tables exactly once per process. */
+	if (__atomic_exchange_n(&__unwind_inited, 1, __ATOMIC_ACQ_REL))
 		return;
 
 	if (nrtabs > MAX_UNWIND_TABLES)
 		nrtabs = MAX_UNWIND_TABLES;
-
-	/* Mark as initialized (negative) before registration */
-	unw->nrtabs = -nrtabs;
 
 	for (i = 0; i < nrtabs; i++) {
 		void *tab = unw->tabs[i];
