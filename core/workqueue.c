@@ -944,8 +944,10 @@ static bool __schedule_work_on_noalloc(int cpu,
 		if (!wk)
 			wk = pick_busy_worker(WORKER_UNBIND_CPU, wq);
 
-		if ((cpu != WORKER_UNBIND_CPU) && (wk->cpu != cpu))
-			WMSG("%s -> cpu %d isn't on demand of %d\n", wq->name, wk->cpu, cpu);
+		if ((cpu != WORKER_UNBIND_CPU) &&
+			(wk->cpu != cpu) && cpu_online(cpu))
+			WMSG("%s -> cpu %d isn't on demand of %d\n",
+				wq->name, wk->cpu, cpu);
 
 		insert_work(wk, w);
 		wakeup_worker(wk);
@@ -991,8 +993,10 @@ static void __enqueue_delayed_work_noalloc(struct workqueue *wq,
 		if (!wk)
 			wk = pick_busy_worker(WORKER_UNBIND_CPU, wq);
 
-		if ((cpu != WORKER_UNBIND_CPU) && (wk->cpu != cpu))
-			WMSG("%s -> cpu %d isn't on demand of %d\n", wq->name, wk->cpu, cpu);
+		if ((cpu != WORKER_UNBIND_CPU) &&
+			(wk->cpu != cpu) && cpu_online(cpu))
+			WMSG("%s -> cpu %d isn't on demand of %d\n",
+				wq->name, wk->cpu, cpu);
 
 		insert_work(wk, &dw->w);
 		wakeup_worker(wk);
