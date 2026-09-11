@@ -177,7 +177,10 @@ int shell_kill(pid_t pid, int sig)
 
 int shell_tkill(pid_t tid, int sig)
 {
-	return pthread_kill(tid, sig);
+	/* pthread_kill() returns a positive errno; keep the -errno convention */
+	int ret = pthread_kill(tid, sig);
+
+	return ret > 0 ? -ret : ret;
 }
 
 int shell_spawn(pid_t *pid, const posix_spawn_file_actions_t *file_actions,

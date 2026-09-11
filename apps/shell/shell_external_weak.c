@@ -22,7 +22,7 @@ __weak_symbol int shell_ext_spawnapp_argv(struct shell *, char *const [], pid_t 
 	return -ENOTSUP;
 }
 
-__weak_symbol int shell_ext_spawn_pipeline_stage(pid_t *pid_out, int, int,
+__weak_symbol int shell_ext_spawn_pipeline_stage(pid_t *pid_out, int, int, int,
 	char *const [])
 {
 	if (pid_out)

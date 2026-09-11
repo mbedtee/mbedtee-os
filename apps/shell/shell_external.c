@@ -312,7 +312,7 @@ fail:
 }
 
 int shell_ext_spawn_pipeline_stage(pid_t *pid_out, int in_fd, int out_fd,
-	char *const argv[])
+	int err_fd, char *const argv[])
 {
 	int ret = 0;
 	pid_t pid = -1;
@@ -323,7 +323,7 @@ int shell_ext_spawn_pipeline_stage(pid_t *pid_out, int in_fd, int out_fd,
 	if (ret != 0)
 		return -ret;
 
-	ret = shell_stdio_plan_prepare(NULL, in_fd, in_fd, out_fd, out_fd, false, &plan);
+	ret = shell_stdio_plan_prepare(NULL, in_fd, in_fd, out_fd, err_fd, false, &plan);
 	if (ret < 0)
 		goto fail;
 

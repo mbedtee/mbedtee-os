@@ -43,6 +43,7 @@ extern "C" {
 #define shell_stdfd(x)    ((unsigned int)(x) <= STDERR_FILENO)
 
 #define SHELL_CTRL_C      0x03
+#define SHELL_CTRL_D      0x04
 #define SHELL_CTRL_BACKSL 0x1C
 #define SHELL_CTRL_US     0x1F
 
@@ -130,12 +131,11 @@ struct shell {
 	/* current working directory */
 	char cwd[SHELL_PATH_MAX];
 
-	/* Foreground builtin execution mode (0: cmd queue, 1: new thread for each cmd) */
-	bool fg_builtin_new_thread;
-
 	/* argv, if argv num less than default, use the default array */
 	int argc;
 	char *argv[CMD_DFTARGV_NUM];
+	/* bit i set when argv[i] started inside quotes (not a redirect operator) */
+	unsigned int argv_quoted;
 
 	struct ring_print ringprint;
 
@@ -143,6 +143,8 @@ struct shell {
 
 	/* request stop flag, set by Ctrl+C to interrupt blocking reads */
 	volatile int stop_request;
+	/* EOF request, set by Ctrl+D on an empty line; shell_entry() exits */
+	volatile int eof_request;
 	struct shell_history *history;
 };
 
@@ -156,10 +158,14 @@ struct key_code {
 
 typedef void (*cmd_handler)(struct shell *);
 
+/* Builtin may read from stdin, so it needs the tty handed over while running */
+#define CMD_READS_STDIN		0x1
+
 struct shell_cmd {
 	const char *cmd;
 	const char *help;
 	cmd_handler func;
+	unsigned int flags;
 };
 
 typedef long (*shell_thread_entry_t)(void *);
@@ -236,7 +242,7 @@ pid_t shell_waitpid_raw(pid_t pid, int *status, int options);
 int shell_ext_runapp_argv(struct shell *sh, char *const argv[]);
 int shell_ext_spawnapp_argv(struct shell *sh, char *const argv[], pid_t *pid_out);
 int shell_ext_spawn_pipeline_stage(pid_t *pid_out, int in_fd, int out_fd,
-	char *const argv[]);
+	int err_fd, char *const argv[]);
 
 void shell_time2date(time_t time, struct tm *tm);
 int shell_get_monotonic(struct timespec *tp);

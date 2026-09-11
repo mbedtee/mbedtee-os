@@ -9,6 +9,43 @@
 #define MAX_PIPE_STAGES 8
 #define MAX_SEMICOLON_COMMANDS 16
 #define SHELL_REALPATH_MAX_COMPONENTS 64
+#define SHELL_REDIR_MAX 8
+/* Reap finished background children every N dequeued jobs so that
+ * sustained input cannot postpone reaping indefinitely. */
+#define SHELL_JOBMGR_REAP_EVERY 8
+
+/*
+ * I/O redirection: <, >, >>, 2>, 2>>, 2>&1 (plus glued forms like >file).
+ *
+ * Ops are recorded in argv order and applied in order at execution time, so
+ * "cmd > f 2>&1" sends stderr to f while "cmd 2>&1 > f" keeps stderr on the
+ * old stdout. Op filenames point into the owning shell's cmdline.
+ */
+enum shell_redir_type {
+	REDIR_IN,		/* < file */
+	REDIR_OUT,		/* > file */
+	REDIR_APPEND,		/* >> file */
+	REDIR_ERR,		/* 2> file */
+	REDIR_ERR_APP,		/* 2>> file */
+	REDIR_ERR_DUP,		/* 2>&1 */
+};
+
+struct shell_redir_op {
+	int type;
+	const char *filename;	/* NULL for REDIR_ERR_DUP */
+};
+
+struct shell_redir {
+	struct shell_redir_op ops[SHELL_REDIR_MAX];
+	int nops;
+	/* fds opened/dup'ed by apply(); closed by shell_redir_close() */
+	int fds[SHELL_REDIR_MAX];
+	int nfds;
+};
+
+static int shell_redir_parse(struct shell *sh, struct shell_redir *r);
+static int shell_redir_apply(struct shell *sh, struct shell_redir *r);
+static void shell_redir_close(struct shell_redir *r);
 
 /*
  * Background job bookkeeping.
@@ -82,7 +119,12 @@ struct shell_pipe_stage {
 	pid_t pid;
 	cmd_handler func;
 	int in_fd, out_fd;
+	/* stderr target for builtin stages; -1 means inherit sh->io.stderr_fd */
+	int err_fd;
 	int out_is_pipe, in_is_pipe;
+	/* per-stage redirections; override the pipe endpoints when present */
+	struct shell_redir redir;
+	int has_redir;
 	int ret;
 	volatile int done;
 };
@@ -541,6 +583,9 @@ static __printf(2, 3) void shmsg_err(struct shell *sh, const char *fmt, ...)
 	int len = 0, avail = 0;
 	static const char prefix[] = "sherr -> ";
 	int off = sizeof(prefix) - 1;
+
+	/* Keep ordering with buffered stdout, e.g. when 2>&1 shares the file. */
+	shmsg_flush(sh);
 
 	memcpy(buf, prefix, off);
 	avail = sizeof(buf) - off;
@@ -1415,6 +1460,13 @@ static void cmd_cp(struct shell *sh)
 		}
 	}
 
+	/* Same file: creat(O_TRUNC) below would destroy the source. */
+	if (strcmp(src, dst) == 0) {
+		shmsg_err(sh, "cp: '%s' and '%s' are the same file\n",
+			sh->argv[1], sh->argv[2]);
+		return;
+	}
+
 	srcfd = shell_open(src, O_RDONLY);
 	if (srcfd < 0) {
 		shmsg_err(sh, "cp: cannot open '%s': %d\n", sh->argv[1], srcfd);
@@ -1451,6 +1503,16 @@ out:
 		shell_close(dstfd);
 }
 
+/*
+ * Ctrl+D on the interactive tty acts as EOF for commands reading stdin
+ * (cat/grep/tee). Pipes and regular files deliver real EOF via read()==0,
+ * so binary 0x04 bytes from them are passed through untouched.
+ */
+static inline bool is_stdin_eof_byte(struct shell *sh, int fd, unsigned char ch)
+{
+	return ch == SHELL_CTRL_D && fd >= 0 && fd == sh->tty_fd;
+}
+
 /* Display file contents: cat <file> [file2...] */
 static void cmd_cat(struct shell *sh)
 {
@@ -1473,8 +1535,21 @@ static void cmd_cat(struct shell *sh)
 
 	if (in_fd >= 0) {
 		shmsg_flush(sh);
-		while (!sh->stop_request && (rdbytes = shell_read(in_fd, buf, bufsz)) > 0)
-			shell_write(sh->io.stdout_fd, buf, rdbytes);
+		while (!sh->stop_request && (rdbytes = shell_read(in_fd, buf, bufsz)) > 0) {
+			int n = rdbytes, k = 0;
+
+			/* Interactive stdin: Ctrl+D terminates input. */
+			for (k = 0; k < rdbytes; k++) {
+				if (is_stdin_eof_byte(sh, in_fd, (unsigned char)buf[k])) {
+					n = k;
+					break;
+				}
+			}
+
+			shell_write(sh->io.stdout_fd, buf, n);
+			if (n < rdbytes)
+				break;
+		}
 		goto out;
 	}
 
@@ -1733,7 +1808,7 @@ static bool grep_fd(struct shell *sh, int fd, const char *pattern,
 	char line[256], buf[256];
 	int linenum = 1, linepos = 0, bufpos;
 	ssize_t rdbytes;
-	bool found = false;
+	bool found = false, eof = false;
 	const char *match;
 	struct pollfd pfd;
 	int ret = 0;
@@ -1751,7 +1826,14 @@ static bool grep_fd(struct shell *sh, int fd, const char *pattern,
 		rdbytes = shell_read(fd, buf, sizeof(buf));
 		if (rdbytes <= 0)
 			break;
+
+		eof = false;
 		for (bufpos = 0; bufpos < rdbytes; bufpos++) {
+			/* Interactive stdin: Ctrl+D terminates input. */
+			if (is_stdin_eof_byte(sh, fd, (unsigned char)buf[bufpos])) {
+				eof = true;
+				break;
+			}
 			if (buf[bufpos] == '\n' || linepos >= (int)sizeof(line) - 1) {
 				line[linepos] = '\0';
 				match = ignore_case ? strcasestr_simple(line, pattern)
@@ -1771,6 +1853,9 @@ static bool grep_fd(struct shell *sh, int fd, const char *pattern,
 				line[linepos++] = buf[bufpos];
 			}
 		}
+
+		if (eof)
+			break;
 	}
 
 	if (linepos > 0) {
@@ -2107,6 +2192,7 @@ static void cmd_tee(struct shell *sh)
 	shmsg_flush(sh);
 	while (!sh->stop_request) {
 		struct pollfd pfd = {sh->io.stdin_fd, POLLIN, 0};
+		int n = 0, k = 0;
 		int ret = poll(&pfd, 1, 200);
 		if (ret <= 0)
 			continue;
@@ -2115,8 +2201,22 @@ static void cmd_tee(struct shell *sh)
 		if (rdbytes <= 0)
 			break;
 
-		shell_write(fd, buf, rdbytes);
-		shell_write(sh->io.stdout_fd, buf, rdbytes);
+		/* Interactive stdin: Ctrl+D terminates input. */
+		n = rdbytes;
+		for (k = 0; k < rdbytes; k++) {
+			if (is_stdin_eof_byte(sh, sh->io.stdin_fd,
+					(unsigned char)buf[k])) {
+				n = k;
+				break;
+			}
+		}
+
+		if (n > 0) {
+			shell_write(fd, buf, n);
+			shell_write(sh->io.stdout_fd, buf, n);
+		}
+		if (n < rdbytes)
+			break;
 	}
 	shmsg_flush(sh);
 
@@ -2340,6 +2440,9 @@ static void cmd_stty(struct shell *sh)
 		if (width >= 20 && width <= 500) {
 			sh->term_width = width;
 			shmsg(sh, "terminal width set to %d\n", width);
+		} else {
+			shmsg_err(sh, "stty: cols out of range (20-500): %s\n",
+				sh->argv[2]);
 		}
 	} else {
 		shmsg(sh, "usage: stty [cols N] | stty detect\n");
@@ -2379,16 +2482,17 @@ static const struct shell_cmd cmd_handlers[] = {
 	{"mkdir", "make a dir\n", cmd_mkdir},
 	{"mkfile", "make a file\n", cmd_mkfile},
 	{"mount", "Show the FS nodes\n", cmd_mount},
-	{"cat", "Display file contents\n", cmd_cat},
+	{"cat", "Display file contents\n", cmd_cat, CMD_READS_STDIN},
 	{"cp", "Copy file\n", cmd_cp},
 	{"mv", "Move/rename file\n", cmd_mv},
 	{"rm", "Remove files in file system\n", cmd_rm},
 	{"echo", "Echo text to output\n", cmd_echo},
-	{"grep", "Search pattern in files [-rinl] [--include=PATTERN]\n", cmd_grep},
+	{"grep", "Search pattern in files [-rinl] [--include=PATTERN]\n", cmd_grep,
+		CMD_READS_STDIN},
 	{"find", "Find files by name\n", cmd_find},
 	{"stty", "Set terminal width: stty [cols N] | stty detect\n", cmd_stty},
 	{"history", "List command history\n", cmd_history},
-	{"tee", "Write text to file and stdout\n", cmd_tee},
+	{"tee", "Write text to file and stdout\n", cmd_tee, CMD_READS_STDIN},
 	{"hexdump", "Display file in hex format\n", cmd_hexdump},
 	{"kill", "Send signal to a process\n", cmd_kill},
 	{"tkill", "Send signal to a thread\n", cmd_tkill},
@@ -2416,11 +2520,13 @@ static void cmd_help(struct shell *sh)
  * Parse command line into argv array.
  * Supports single quotes ('...') and double quotes ("...").
  * Quotes are removed from the arguments.
+ *
+ * argv[] is filled while scanning so that an empty quoted argument ("")
+ * still yields a valid empty string entry.
  */
 static int cmd_parse_argv(struct shell *sh)
 {
-	int i = 0, j = 0, len = sh->cmdline_len;
-	int argc = 0, pos = 0;
+	int i = 0, j = 0, len = 0, argc = 0;
 	char quote = 0, c = 0;
 	bool in_arg = false;
 
@@ -2428,71 +2534,53 @@ static int cmd_parse_argv(struct shell *sh)
 	len = sh->cmdline_len;
 
 	sh->argc = 0;
+	sh->argv_quoted = 0;
 
-	/*
-	 * First pass: process quotes and count arguments.
-	 * Replace spaces outside quotes with NUL, remove quote chars.
-	 */
-	for (i = 0, j = 0; i < len; i++) {
+	for (i = 0; i < len; i++) {
 		c = sh->cmdline[i];
 
 		if (quote) {
-			/* Inside quoted string */
-			if (c == quote) {
-				/* End of quoted string */
+			if (c == quote)
 				quote = 0;
-			} else {
+			else
 				sh->cmdline[j++] = c;
-			}
-		} else if (c == '"' || c == '\'') {
-			/* Start of quoted string */
+			continue;
+		}
+
+		if (c == '"' || c == '\'') {
 			quote = c;
 			if (!in_arg) {
+				if (argc >= CMD_DFTARGV_NUM - 1)
+					return -E2BIG;
+				sh->argv_quoted |= 1u << argc;
+				sh->argv[argc++] = &sh->cmdline[j];
 				in_arg = true;
-				argc++;
 			}
-		} else if (c == ' ' || c == '\t') {
-			/* Whitespace - end of argument */
+			continue;
+		}
+
+		if (is_ws(c)) {
 			if (in_arg) {
 				sh->cmdline[j++] = '\0';
 				in_arg = false;
 			}
-		} else {
-			/* Regular character */
-			if (!in_arg) {
-				in_arg = true;
-				argc++;
-			}
-			sh->cmdline[j++] = c;
+			continue;
 		}
+
+		if (!in_arg) {
+			if (argc >= CMD_DFTARGV_NUM - 1)
+				return -E2BIG;
+			sh->argv[argc++] = &sh->cmdline[j];
+			in_arg = true;
+		}
+		sh->cmdline[j++] = c;
 	}
 
-	/* Terminate last argument */
-	if (j < len)
-		sh->cmdline[j] = '\0';
+	sh->cmdline[j] = '\0';
 
-	/* Check for unclosed quotes */
 	if (quote != 0) {
 		shmsg_err(sh, "syntax error: unclosed quote\n");
 		return -EINVAL;
-	}
-
-	if (argc >= CMD_DFTARGV_NUM)
-		return -E2BIG;
-
-	/* Second pass: collect argument pointers */
-	in_arg = false;
-	for (i = 0; i <= j; i++) {
-		if (sh->cmdline[i] && !in_arg) {
-			if (pos >= argc) {
-				shmsg_err(sh, "argv overflow: argc=%d pos=%d\n", argc, pos);
-				return -E2BIG;
-			}
-			sh->argv[pos++] = &sh->cmdline[i];
-			in_arg = true;
-		} else if (!sh->cmdline[i]) {
-			in_arg = false;
-		}
 	}
 
 	sh->argc = argc;
@@ -2612,18 +2700,25 @@ static void cmd_record(struct shell *sh)
 	hist->ent_nav = hist->ent_wr;
 }
 
-static cmd_handler cmd_handler_of(const char *cmd)
+static const struct shell_cmd *cmd_entry_of(const char *cmd)
 {
 	int i = 0;
 
 	if (cmd) {
 		for (i = 0; cmd_handlers[i].cmd; i++) {
 			if (strcmp(cmd_handlers[i].cmd, cmd) == 0)
-				return cmd_handlers[i].func;
+				return &cmd_handlers[i];
 		}
 	}
 
 	return NULL;
+}
+
+static cmd_handler cmd_handler_of(const char *cmd)
+{
+	const struct shell_cmd *e = cmd_entry_of(cmd);
+
+	return e ? e->func : NULL;
 }
 
 static void pipe_stage_close_fds(struct shell_pipe_stage *ctx)
@@ -2642,6 +2737,14 @@ static void pipe_stage_close_fds(struct shell_pipe_stage *ctx)
 	}
 }
 
+static void pipe_stage_close_redir(struct shell_pipe_stage *ctx)
+{
+	if (ctx->has_redir) {
+		shell_redir_close(&ctx->redir);
+		ctx->has_redir = 0;
+	}
+}
+
 static void pipe_stage_free_ctx(struct shell_pipe_stage **pctx)
 {
 	struct shell_pipe_stage *ctx;
@@ -2649,6 +2752,7 @@ static void pipe_stage_free_ctx(struct shell_pipe_stage **pctx)
 	ctx = *pctx;
 
 	pipe_stage_close_fds(ctx);
+	pipe_stage_close_redir(ctx);
 	shell_free(ctx);
 	*pctx = NULL;
 }
@@ -2700,8 +2804,9 @@ static int shell_pipe_stage_run(struct shell_pipe_stage *ctx)
 	if (sh->stop_request)
 		return 0;
 
-	sh->io.stdin_fd = ctx->in_fd;
-	sh->io.stdout_fd = ctx->out_fd;
+	/* sh->io was finalized at setup time (pipe endpoints + redirections). */
+	if (ctx->err_fd >= 0)
+		sh->io.stderr_fd = ctx->err_fd;
 
 	if (ctx->func) {
 		ctx->func(sh);
@@ -2719,6 +2824,7 @@ static void shell_pipe_stage_finish(struct shell_pipe_stage *ctx, int ret)
 
 	shmsg_flush(sh);
 	pipe_stage_close_fds(ctx);
+	pipe_stage_close_redir(ctx);
 	/* Use release semantics so ret is visible before done is observed */
 	__atomic_store_n(&ctx->done, 1, __ATOMIC_RELEASE);
 }
@@ -2837,16 +2943,19 @@ static int shell_fg_builtin_enqueue(struct shell_pipe_stage *ctx)
 static int shell_spawn_pipeline_external_stage(struct shell_pipe_stage *ctx)
 {
 	pid_t pid = -1;
-	int ret = 0, in_fd = ctx->in_fd, out_fd = ctx->out_fd;
+	int ret = 0;
 	struct shell *sh = ctx->sh;
 
 	ctx->ret = 0;
 	ctx->pid = -1;
 
-	sh->io.stdin_fd = ctx->in_fd;
-	sh->io.stdout_fd = ctx->out_fd;
+	/* sh->io was finalized at setup time (pipe endpoints + redirections). */
+	ret = shell_ext_spawn_pipeline_stage(&pid, sh->io.stdin_fd,
+		sh->io.stdout_fd, sh->io.stderr_fd, sh->argv);
 
-	ret = shell_ext_spawn_pipeline_stage(&pid, in_fd, out_fd, sh->argv);
+	/* The child holds its own copies; the parent no longer needs them. */
+	pipe_stage_close_redir(ctx);
+
 	if (ret != 0)
 		return ret;
 
@@ -2985,6 +3094,8 @@ static int pipeline_setup_stage(struct shell *sh, struct shell_pipe_stage *ctx,
 
 	ctx->in_is_pipe = (stage_idx != 0);
 	ctx->out_is_pipe = (stage_idx != stage_count - 1);
+	/* Pipeline stages inherit stderr from the stage shell copy. */
+	ctx->err_fd = -1;
 
 	if (ctx->in_is_pipe) {
 		ctx->in_fd = shell_dup(pipefds[stage_idx - 1][0]);
@@ -3005,6 +3116,19 @@ static int pipeline_setup_stage(struct shell *sh, struct shell_pipe_stage *ctx,
 	ret = cmd_parse_argv(stage_sh);
 	if (ret < 0)
 		return ret;
+
+	/* Seed the stage io with its pipe endpoints, then let redirects override. */
+	stage_sh->io.stdin_fd = ctx->in_fd;
+	stage_sh->io.stdout_fd = ctx->out_fd;
+
+	ret = shell_redir_parse(stage_sh, &ctx->redir);
+	if (ret == -2)
+		return -EINVAL;
+	if (ret == 0) {
+		if (shell_redir_apply(stage_sh, &ctx->redir) < 0)
+			return -EIO;
+		ctx->has_redir = 1;
+	}
 
 	if (stage_sh->argv[0])
 		ctx->func = cmd_handler_of(stage_sh->argv[0]);
@@ -3031,8 +3155,10 @@ static int pipeline_prepare_stages(struct shell *sh,
 
 fail:
 	/* Clean up stages 0 to i (including the partially failed stage) */
-	for (j = 0; j <= i; j++)
+	for (j = 0; j <= i; j++) {
 		pipe_stage_close_fds(&stages[j]);
+		pipe_stage_close_redir(&stages[j]);
+	}
 	return ret;
 }
 
@@ -3100,13 +3226,18 @@ static int shell_exec_pipeline_fg(struct shell *sh)
 			ret = shell_thread_create(&ctx->tid, shell_pipe_stage_thread, ctx);
 			if (ret != 0)
 				goto cleanup_started;
+			/*
+			 * Builtin stages run in this process and own their pipe fds;
+			 * shell_pipe_stage_finish() closes them, which is also what
+			 * lets the next stage see EOF.
+			 */
 		} else {
 			ret = shell_spawn_pipeline_external_stage(ctx);
 			if (ret != 0)
 				goto cleanup_started;
+			/* The child holds dup'ed copies; drop ours so readers get EOF. */
+			pipe_stage_close_fds(ctx);
 		}
-		/* close the pipe fds in parent, otherwise the reader will not get EOF */
-		pipe_stage_close_fds(ctx);
 	}
 
 	/* Wait pipeline stages (Ctrl+C -> SIGINT for the pipeline) */
@@ -3118,8 +3249,10 @@ cleanup_started:
 	 * Some stages started (0 to i-1), some didn't (i to stage_count-1).
 	 * Close fds for stages that didn't start.
 	 */
-	for (j = i; j < stage_count; j++)
+	for (j = i; j < stage_count; j++) {
 		pipe_stage_close_fds(&stages[j]);
+		pipe_stage_close_redir(&stages[j]);
+	}
 
 	/* Wait for stages that did start */
 	if (i > 0)
@@ -3134,8 +3267,10 @@ cleanup_fds:
 	 * ends of the pipes.
 	 */
 	if (stages) {
-		for (j = 0; j < stage_count; j++)
+		for (j = 0; j < stage_count; j++) {
 			pipe_stage_close_fds(&stages[j]);
+			pipe_stage_close_redir(&stages[j]);
+		}
 	}
 cleanup_alloc:
 	shell_free(buf);
@@ -3228,67 +3363,194 @@ static unsigned int cmdline_scan_meta(char *s, int *len)
 }
 
 /*
- * Handle output redirection: > (overwrite) and >> (append)
- * Scans argv for redirection operators and sets up file output.
- * Returns: fd of opened file (caller must close), or -1 if no redirection.
- * On error, returns -2 and prints error message.
- * Modifies argc to exclude redirection operator and filename.
+ * I/O redirection: <, >, >>, 2>, 2>>, 2>&1 (plus glued forms like >file).
+ * Types are declared at the top of this file; see enum shell_redir_type.
  */
-static int cmd_setup_redirect(struct shell *sh)
-{
-	int i = 0, fd = -1, flags = (O_WRONLY | O_CREAT);
-	const char *filename = NULL;
-	char filepath[SHELL_PATH_MAX];
-	bool append = false;
 
-	for (i = 1; i < sh->argc; i++) {
-		if (strcmp(sh->argv[i], ">") == 0) {
-			if (i + 1 >= sh->argc) {
-				shmsg_err(sh, "syntax error: missing filename after >\n");
-				return -2;
-			}
-			filename = sh->argv[i + 1];
-			append = false;
-			sh->argc = i;
-			break;
-		} else if (strcmp(sh->argv[i], ">>") == 0) {
-			if (i + 1 >= sh->argc) {
-				shmsg_err(sh, "syntax error: missing filename after >>\n");
-				return -2;
-			}
-			filename = sh->argv[i + 1];
-			append = true;
-			sh->argc = i;
-			break;
-		} else if (sh->argv[i][0] == '>' && sh->argv[i][1] != '\0') {
-			if (sh->argv[i][1] == '>') {
-				filename = &sh->argv[i][2];
-				append = true;
+/*
+ * Scan argv, extracting redirect operators and their filenames.
+ * Returns 0 when at least one redirection was found (sh->argc shrinks),
+ * -1 when there is none, -2 on syntax error (message already printed).
+ */
+static int shell_redir_parse(struct shell *sh, struct shell_redir *r)
+{
+	int i = 0, j = 0, nops = 0;
+	unsigned int quoted_out = 0;
+
+	r->nops = 0;
+	r->nfds = 0;
+
+	for (i = 0; i < sh->argc; i++) {
+		const char *a = sh->argv[i];
+		int type = -1;
+		const char *fname = NULL;
+		bool take_next = false;
+
+		/* A quoted leading char makes the word literal, e.g. echo ">" */
+		if (sh->argv_quoted & (1u << i))
+			goto plain_word;
+
+		if (strcmp(a, "<") == 0) {
+			type = REDIR_IN;
+			take_next = true;
+		} else if (strcmp(a, ">") == 0) {
+			type = REDIR_OUT;
+			take_next = true;
+		} else if (strcmp(a, ">>") == 0) {
+			type = REDIR_APPEND;
+			take_next = true;
+		} else if (strcmp(a, "2>") == 0) {
+			type = REDIR_ERR;
+			take_next = true;
+		} else if (strcmp(a, "2>>") == 0) {
+			type = REDIR_ERR_APP;
+			take_next = true;
+		} else if (strcmp(a, "2>&1") == 0) {
+			type = REDIR_ERR_DUP;
+		} else if (a[0] == '<') {
+			type = REDIR_IN;
+			fname = a + 1;
+		} else if (a[0] == '>') {
+			if (a[1] == '>') {
+				type = REDIR_APPEND;
+				fname = a + 2;
 			} else {
-				filename = &sh->argv[i][1];
-				append = false;
+				type = REDIR_OUT;
+				fname = a + 1;
 			}
-			if (*filename == '\0') {
-				shmsg_err(sh, "syntax error: missing filename\n");
+		} else if (a[0] == '2' && a[1] == '>' && a[2] != '\0') {
+			if (a[2] == '>') {
+				type = REDIR_ERR_APP;
+				fname = a + 3;
+			} else {
+				type = REDIR_ERR;
+				fname = a + 2;
+			}
+		}
+
+		if (type < 0) {
+plain_word:
+			if (sh->argv_quoted & (1u << i))
+				quoted_out |= 1u << j;
+			sh->argv[j++] = sh->argv[i];
+			continue;
+		}
+
+		if (take_next) {
+			if (i + 1 >= sh->argc) {
+				shmsg_err(sh, "syntax error: missing filename after '%s'\n",
+					a);
 				return -2;
 			}
-			sh->argc = i;
+			fname = sh->argv[++i];
+		}
+		if (fname && fname[0] == '\0') {
+			shmsg_err(sh, "syntax error: empty filename\n");
+			return -2;
+		}
+		/* Glued fd-dup forms other than 2>&1 would create "&N" files */
+		if (!take_next && fname && fname[0] == '&') {
+			shmsg_err(sh, "unsupported redirection: '%s'\n", a);
+			return -2;
+		}
+		if (nops >= SHELL_REDIR_MAX) {
+			shmsg_err(sh, "too many redirections (max %d)\n",
+				SHELL_REDIR_MAX);
+			return -2;
+		}
+
+		r->ops[nops].type = type;
+		r->ops[nops].filename = fname;
+		nops++;
+	}
+
+	sh->argc = j;
+	sh->argv[j] = NULL;
+	sh->argv_quoted = quoted_out;
+	r->nops = nops;
+
+	return nops ? 0 : -1;
+}
+
+/*
+ * Apply recorded redirection ops in order, updating sh->io.
+ * On success returns 0; on failure returns -2 (message printed) and closes
+ * any fds opened so far. The caller restores sh->io from saved_io.
+ */
+static int shell_redir_apply(struct shell *sh, struct shell_redir *r)
+{
+	int i = 0, fd = -1, flags = 0;
+	char abspath[SHELL_PATH_MAX];
+	const struct shell_redir_op *op = NULL;
+	const char *path = NULL;
+
+	r->nfds = 0;
+
+	for (i = 0; i < r->nops; i++) {
+		op = &r->ops[i];
+		fd = -1;
+
+		/* shell_abspath() may return sh->cwd instead of filling abspath */
+		if (op->filename)
+			path = shell_abspath(sh, op->filename, abspath,
+				sizeof(abspath));
+
+		switch (op->type) {
+		case REDIR_IN:
+			fd = shell_open(path, O_RDONLY);
+			if (fd < 0)
+				goto fail;
+			sh->io.stdin_fd = fd;
+			break;
+		case REDIR_OUT:
+		case REDIR_APPEND:
+			flags = O_WRONLY | O_CREAT |
+				((op->type == REDIR_APPEND) ? O_APPEND : O_TRUNC);
+			fd = shell_open(path, flags, 0644);
+			if (fd < 0)
+				goto fail;
+			sh->io.stdout_fd = fd;
+			break;
+		case REDIR_ERR:
+		case REDIR_ERR_APP:
+			flags = O_WRONLY | O_CREAT |
+				((op->type == REDIR_ERR_APP) ? O_APPEND : O_TRUNC);
+			fd = shell_open(path, flags, 0644);
+			if (fd < 0)
+				goto fail;
+			sh->io.stderr_fd = fd;
+			break;
+		case REDIR_ERR_DUP:
+			/* Duplicate the *current* stdout (earlier ops may have changed it) */
+			fd = shell_dup(sh->io.stdout_fd);
+			if (fd < 0) {
+				shmsg_err(sh, "2>&1: dup stdout failed (%d)\n", fd);
+				shell_redir_close(r);
+				return -2;
+			}
+			sh->io.stderr_fd = fd;
 			break;
 		}
+
+		r->fds[r->nfds++] = fd;
 	}
 
-	if (!filename)
-		return -1;
+	return 0;
 
-	filename = shell_abspath(sh, filename, filepath, sizeof(filepath));
-	flags |= append ? O_APPEND : O_TRUNC;
-	fd = shell_open(filename, flags, 0644);
-	if (fd < 0) {
-		shmsg_err(sh, "%s: cannot open for writing\n", filename);
-		return -2;
-	}
+fail:
+	if (op->filename)
+		shmsg_err(sh, "%s: cannot open (%d)\n", op->filename, fd);
+	shell_redir_close(r);
+	return -2;
+}
 
-	return fd;
+static void shell_redir_close(struct shell_redir *r)
+{
+	int i = 0;
+
+	for (i = 0; i < r->nfds; i++)
+		shell_close(r->fds[i]);
+	r->nfds = 0;
 }
 
 static void cmd_runapp(struct shell *sh)
@@ -3303,7 +3565,7 @@ static void cmd_runapp(struct shell *sh)
 }
 
 static int cmd_run_foreground_builtin(struct shell *sh,
-	cmd_handler func)
+	cmd_handler func, unsigned int flags)
 {
 	struct shell_pipe_stage *ctx = NULL;
 	struct pollfd pfds[1];
@@ -3311,34 +3573,49 @@ static int cmd_run_foreground_builtin(struct shell *sh,
 	ssize_t rdbytes = 0;
 	int i = 0, signo = 0;
 	int echo_fd = -1, ret = 0;
+	int proxy[2] = {-1, -1};
+	int saved_stdin = sh->io.stdin_fd;
+	char linebuf[128];
+	int linelen = 0;
 	shell_tid_t tid = 0;
 
 	ctx = shell_calloc(1, sizeof(*ctx));
 	if (!ctx)
 		return -ENOMEM;
 
+	/*
+	 * A builtin reading the tty would race with the UI thread below for
+	 * keystrokes. Keep the UI thread as the only tty reader and feed the
+	 * builtin through a pipe instead; closing the write end on Ctrl+D
+	 * then delivers a real EOF.
+	 */
+	if ((flags & CMD_READS_STDIN) && sh->tty_fd >= 0 &&
+	    sh->io.stdin_fd == sh->tty_fd && shell_pipe(proxy) == 0) {
+		shell_set_nonblocking(proxy[1]);
+		sh->io.stdin_fd = proxy[0];
+	} else {
+		proxy[0] = proxy[1] = -1;
+	}
+
 	ctx->sh = sh;
 	ctx->func = func;
 	ctx->in_fd = sh->io.stdin_fd;
 	ctx->out_fd = sh->io.stdout_fd;
+	ctx->err_fd = sh->io.stderr_fd;
 	ctx->free_on_finish = 0;
 
 	echo_fd = sh->tty_fd;
-	if (sh->fg_builtin_new_thread) {
-		ret = shell_thread_create(&tid, shell_pipe_stage_thread, ctx);
-		if (ret != 0) {
-			shell_free(ctx);
-			return ret;
+	ret = shell_fg_builtin_enqueue(ctx);
+	if (ret != 0) {
+		if (proxy[0] >= 0) {
+			shell_close(proxy[0]);
+			shell_close(proxy[1]);
+			sh->io.stdin_fd = saved_stdin;
 		}
-		shell_thread_detach(tid);
-	} else {
-		ret = shell_fg_builtin_enqueue(ctx);
-		if (ret != 0) {
-			shell_free(ctx);
-			return ret;
-		}
-		tid = shell_fg_builtin_tid;
+		shell_free(ctx);
+		return ret;
 	}
+	tid = shell_fg_builtin_tid;
 
 	pfds[0].fd = sh->tty_fd;
 	pfds[0].events = POLLIN;
@@ -3365,23 +3642,81 @@ static int cmd_run_foreground_builtin(struct shell *sh,
 				sh->stop_request = 1;
 				continue;
 			}
+
+			if (proxy[1] >= 0) {
+				char c = inbuf[i];
+
+				/* Canonical mode: hand over whole lines only. */
+				if (c == SHELL_CTRL_D) {
+					if (linelen) {
+						shell_write(proxy[1], linebuf, linelen);
+						linelen = 0;
+					} else {
+						shell_close(proxy[1]);
+						proxy[1] = -1;
+					}
+					continue;
+				}
+
+				if (c == '\b' || c == 0x7F) {
+					if (linelen) {
+						linelen--;
+						if (echo_fd >= 0)
+							shell_write(echo_fd, "\b \b", 3);
+					}
+					continue;
+				}
+
+				if (c == '\r' || c == '\n') {
+					if (echo_fd >= 0)
+						shell_write(echo_fd, "\r\n", 2);
+					if (linelen < (int)sizeof(linebuf))
+						linebuf[linelen++] = '\n';
+					shell_write(proxy[1], linebuf, linelen);
+					linelen = 0;
+					continue;
+				}
+
+				if (echo_fd >= 0)
+					shell_write(echo_fd, &c, 1);
+				linebuf[linelen++] = c;
+				if (linelen == (int)sizeof(linebuf)) {
+					shell_write(proxy[1], linebuf, linelen);
+					linelen = 0;
+				}
+				continue;
+			}
+
 			shell_echo_and_buffer_typeahead(sh, echo_fd, inbuf[i]);
 		}
 	}
 
-	if (sh->fg_builtin_new_thread)
-		shell_thread_join(tid);
+	if (proxy[0] >= 0) {
+		shell_close(proxy[0]);
+		if (proxy[1] >= 0)
+			shell_close(proxy[1]);
+		sh->io.stdin_fd = saved_stdin;
+	}
+
 	shell_free(ctx);
 	return 0;
 }
-
 /* Foreground single command line executor (builtin or external). */
 static int shell_exec_single_cmdline(struct shell *sh)
 {
 	cmd_handler func = NULL;
-	int ret = 0, redir_fd = -1;
+	struct shell_redir redir;
+	int ret = 0, redir_ret = -1, i = 0;
 
 	shell_sanitize_cmdline(sh);
+
+	/* A blank line is a no-op, not a parse error */
+	for (i = 0; i < sh->cmdline_len; i++) {
+		if (!is_ws(sh->cmdline[i]))
+			break;
+	}
+	if (i == sh->cmdline_len)
+		return 0;
 
 	/*
 	 * Ensure any buffered output from previous commands is emitted before
@@ -3401,37 +3736,47 @@ static int shell_exec_single_cmdline(struct shell *sh)
 		goto cleanup;
 	}
 
-	/* Handle output redirection */
-	redir_fd = cmd_setup_redirect(sh);
-	if (redir_fd == -2) {
-		/* Redirection failed, skip command execution */
+	/*
+	 * Handle I/O redirection: <, >, >>, 2>, 2>>, 2>&1 (plus glued forms).
+	 * Ops apply in argv order; a later op may shadow an earlier one.
+	 */
+	redir_ret = shell_redir_parse(sh, &redir);
+	if (redir_ret == -2) {
+		/* Parse error already reported, skip command execution */
 		goto cleanup;
 	}
-	if (redir_fd >= 0) {
-		/* Redirect output to file */
+	if (redir_ret == 0) {
 		shmsg_flush(sh);
 		sh->saved_io = sh->io;
-		sh->io.stdout_fd = redir_fd;
+		if (shell_redir_apply(sh, &redir) < 0) {
+			/* apply() already closed its fds; drop the half-applied io
+			 * before anything can flush into a closed descriptor.
+			 */
+			sh->io = sh->saved_io;
+			goto cleanup;
+		}
 	}
 
 	if (sh->argc > 0) {
-		func = cmd_handler_of(sh->argv[0]);
+		const struct shell_cmd *ent = cmd_entry_of(sh->argv[0]);
+
+		func = ent ? ent->func : NULL;
 		if (func) {
 			/*
 			 * Foreground builtins must remain interruptible (Ctrl+C/typeahead).
 			 * Run builtin in a worker thread so the UI thread can keep polling tty.
 			 */
-			ret = cmd_run_foreground_builtin(sh, func);
+			ret = cmd_run_foreground_builtin(sh, func, ent->flags);
 		} else {
 			cmd_runapp(sh);
 		}
 	}
 
-	/* Restore output and close redirect file */
-	if (redir_fd >= 0) {
+	if (redir_ret == 0) {
+		/* Flush through the redirected fds, then restore and close. */
 		shmsg_flush(sh);
 		sh->io = sh->saved_io;
-		shell_close(redir_fd);
+		shell_redir_close(&redir);
 	}
 
 cleanup:
@@ -3558,13 +3903,14 @@ static int shell_spawn_pipeline_bg_job(struct shell *sh,
 			pipefds, false);
 		if (ret < 0) {
 			pipe_stage_close_fds(ctx);
+			pipe_stage_close_redir(ctx);
 			shell_free(ctx);
 			break;
 		}
 
 		if (!ctx->func) {
 			ret = shell_spawn_pipeline_external_stage(ctx);
-			/* close the pipe fds in parent, otherwise the reader will not get EOF */
+			/* The child holds dup'ed copies; drop ours so readers get EOF. */
 			pipe_stage_close_fds(ctx);
 			if (ret != 0) {
 				shell_free(ctx);
@@ -3574,9 +3920,10 @@ static int shell_spawn_pipeline_bg_job(struct shell *sh,
 			shell_free(ctx);
 			ctx = NULL;
 		} else {
-			/* close the pipe fds in parent, otherwise the reader will not get EOF */
-			pipe_stage_close_fds(ctx);
-			/* Builtin stage: keep ctx around for thread launch later */
+			/*
+			 * Builtin stage runs as a thread in this process and owns its
+			 * pipe fds until shell_pipe_stage_finish() closes them.
+			 */
 			ctx->job = job;
 			ctx->stage_idx = i;
 			ctx->free_on_finish = 1;
@@ -3597,7 +3944,8 @@ static int shell_spawn_pipeline_bg_job(struct shell *sh,
 			 * Some stages started successfully. Mark job as failed
 			 * and let jobmgr handle cleanup of running processes.
 			 */
-			shell_job_fail_drop(job, ret, stage_count - stages_setup, false);
+			shell_job_fail_drop(job, ret,
+				stage_count - stages_setup + builtins_cnt, false);
 			ret = 0; /* Job is queued, don't return error */
 		}
 		goto cleanup_alloc;
@@ -3658,12 +4006,62 @@ static void shell_jobmgr_job_free(struct shell_job *job)
 	shell_free(job);
 }
 
+/*
+ * Context handed to a background job-worker thread.
+ * The worker owns both the job and its temporary shell context and
+ * frees them once the work finishes.
+ */
+struct shell_job_sync {
+	struct shell_job *job;
+	struct shell *sh;
+	/* set for single builtin jobs (e.g. `ls &`) */
+	cmd_handler func;
+	/* redirections owned by the worker; closed on release */
+	struct shell_redir redir;
+	int has_redir;
+};
+
+static void shell_jobmgr_sync_release(struct shell_job_sync *sync)
+{
+	/*
+	 * Builtins emit via shmsg's ring buffer; drain it before freeing the
+	 * context (same as shell_pipe_stage_finish() does for foreground
+	 * builtins). Without this, small outputs (e.g. ls) would stay
+	 * buffered and the background command would appear to do nothing.
+	 */
+	shmsg_flush(sync->sh);
+	if (sync->has_redir)
+		shell_redir_close(&sync->redir);
+	shell_free(sync->sh);
+	shell_jobmgr_job_free(sync->job);
+	shell_free(sync);
+}
+
+static long shell_jobmgr_sync_thread(void *arg)
+{
+	struct shell_job_sync *sync = arg;
+
+	cmd_execute_semicolon_list(sync->sh);
+	shell_jobmgr_sync_release(sync);
+	return 0;
+}
+
+static long shell_jobmgr_builtin_thread(void *arg)
+{
+	struct shell_job_sync *sync = arg;
+
+	sync->func(sync->sh);
+	shell_jobmgr_sync_release(sync);
+	return 0;
+}
+
 static int shell_jobmgr_do_job(struct shell_job *job)
 {
 	struct shell *sh = NULL;
 	cmd_handler func = NULL;
+	struct shell_redir redir;
 	pid_t pid = -1;
-	int ret = 0;
+	int ret = 0, redir_ret = -1;
 	bool queued = false;
 
 	sh = shell_calloc(1, sizeof(*sh));
@@ -3681,7 +4079,33 @@ static int shell_jobmgr_do_job(struct shell_job *job)
 	sh->term_width = job->term_width;
 
 	if (cmdline_has_unquoted_semicolon(sh->cmdline, sh->cmdline_len)) {
-		ret = cmd_execute_semicolon_list(sh);
+		struct shell_job_sync *sync = shell_calloc(1, sizeof(*sync));
+		shell_tid_t tid = 0;
+
+		/*
+		 * Semicolon lists are executed with foreground semantics:
+		 * each external segment blocks until its child exits. Offload
+		 * the list to a worker thread so the job manager keeps
+		 * draining shell_jobmgr_q and reaping finished children;
+		 * running it inline would let one long-running segment stall
+		 * all background work and pile up completed jobs.
+		 */
+		if (sync) {
+			sync->job = job;
+			sync->sh = sh;
+			if (shell_thread_create(&tid, shell_jobmgr_sync_thread,
+					sync) == 0) {
+				shell_thread_detach(tid);
+				/* Ownership of job and sh moved to the worker. */
+				queued = true;
+				sh = NULL;
+				ret = 0;
+			} else {
+				shell_free(sync);
+			}
+		}
+		if (!queued)
+			ret = cmd_execute_semicolon_list(sh);
 		goto out;
 	}
 
@@ -3698,10 +4122,48 @@ static int shell_jobmgr_do_job(struct shell_job *job)
 	if (ret < 0)
 		goto out;
 
+	redir_ret = shell_redir_parse(sh, &redir);
+	if (redir_ret == -2) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (redir_ret == 0 && shell_redir_apply(sh, &redir) < 0) {
+		ret = -EIO;
+		goto out;
+	}
+
 	func = cmd_handler_of(sh->argv[0]);
 	if (func) {
-		/* Background builtins: run inline (stdin is /dev/null). */
-		func(sh);
+		struct shell_job_sync *sync = shell_calloc(1, sizeof(*sync));
+		shell_tid_t tid = 0;
+
+		/*
+		 * Builtins may run for a long time (find, grep -r, ...).
+		 * Run them on a worker thread so the job manager keeps
+		 * draining the queue and reaping finished children;
+		 * running inline would stall all background work.
+		 */
+		if (sync) {
+			sync->job = job;
+			sync->sh = sh;
+			sync->func = func;
+			sync->has_redir = (redir_ret == 0);
+			if (redir_ret == 0)
+				sync->redir = redir;
+			if (shell_thread_create(&tid, shell_jobmgr_builtin_thread,
+					sync) == 0) {
+				shell_thread_detach(tid);
+				/* Ownership of job, sh and redir moved to the worker. */
+				queued = true;
+				sh = NULL;
+				redir_ret = -1;
+				ret = 0;
+			} else {
+				shell_free(sync);
+			}
+		}
+		if (!queued)
+			func(sh); /* fallback: run inline (stdin is /dev/null) */
 		goto out;
 	}
 
@@ -3713,6 +4175,9 @@ static int shell_jobmgr_do_job(struct shell_job *job)
 	}
 
 out:
+	/* The worker takes over open redirect fds when ownership moved. */
+	if (redir_ret == 0)
+		shell_redir_close(&redir);
 	shell_free(sh);
 	if (!queued)
 		shell_jobmgr_job_free(job);
@@ -3799,10 +4264,25 @@ static long shell_jobmgr_thread(void *arg)
 	int idle_ms = 0, did_work = 0;
 
 	for (;;) {
+		int drained = 0;
+
 		did_work = 0;
+		/*
+		 * Reap finished children before draining new jobs. Under
+		 * sustained input the queue may stay non-empty for long
+		 * stretches; reaping up front (and periodically below)
+		 * guarantees completed jobs are released promptly instead
+		 * of piling up in shell_jobmgr_run.
+		 */
+		shell_jobmgr_reap_running();
+
 		while ((job = shell_jobmgr_dequeue()) != NULL) {
 			shell_jobmgr_do_job(job);
 			did_work = 1;
+			if (++drained >= SHELL_JOBMGR_REAP_EVERY) {
+				drained = 0;
+				shell_jobmgr_reap_running();
+			}
 		}
 
 		shell_jobmgr_reap_running();
@@ -4089,6 +4569,21 @@ static void key_ctrlc(struct shell *sh)
 	shmsg_putc(sh, '\n');
 	shmsg_raw(sh, SHELL_PROMPT, SHELL_PROMPT_LEN);
 	sh->term_col = SHELL_PROMPT_LEN;
+}
+
+/*
+ * Ctrl+D (EOF): on an empty command line, request shell exit;
+ * otherwise behave like Delete (remove char at cursor), matching readline.
+ */
+static void key_ctrld(struct shell *sh)
+{
+	if (sh->cmdline_len > 0) {
+		key_delete(sh);
+		return;
+	}
+
+	shmsg_putc(sh, '\n');
+	sh->eof_request = 1;
 }
 
 /*
@@ -4643,6 +5138,7 @@ static const struct key_code key_handlers[] = {
 	{key_enter,       "\x0D",                                 1}, /* Enter (CR) */
 	{key_enter,       "\x0A",                                 1}, /* Enter (LF) */
 	{key_ctrlc,       "\x03",                                 1}, /* Ctrl+C (ETX) */
+	{key_ctrld,       "\x04",                                 1}, /* Ctrl+D (EOT) */
 	{key_dummy,       "\x1C",                                 1}, /* Ctrl+\ (FS) */
 	{key_dummy,       "\x1F",                                 1}, /* Ctrl+/ (US) */
 	{key_tab,         "\x09",                                 1}, /* Tab (HT) */
@@ -4762,9 +5258,6 @@ void shell_entry(void)
 	sh->io.stdout_fd = STDOUT_FILENO;
 	sh->io.stderr_fd = STDERR_FILENO;
 
-	/* Foreground builtin execution mode (0: cmd queue, 1: new thread for each cmd) */
-	sh->fg_builtin_new_thread = 0;
-
 	shell_set_nonblocking(sh->tty_fd);
 
 	/* Discard the old strings - 20ms timeout */
@@ -4796,6 +5289,13 @@ void shell_entry(void)
 
 		while (sh->input_len > 0)
 			shell_handle_inputs(sh);
+
+		/* Ctrl+D on an empty command line: end of input. */
+		if (sh->eof_request)
+			break;
 	}
+
+	shell_free(sh->history);
+	shell_free(sh);
 }
 
