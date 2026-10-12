@@ -182,6 +182,9 @@ int shell_thread_detach(shell_tid_t tid);
 	(((rdbytes) == (bufsize)) && ((buf)[(rdbytes) - 1] == 0)))
 
 void *shell_malloc(size_t size);
+
+/* release the heap's reclaimable tail back to the kernel */
+void shell_heap_trim(void);
 void *shell_calloc(size_t nmemb, size_t size);
 void shell_free(void *ptr);
 

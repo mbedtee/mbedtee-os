@@ -27,6 +27,11 @@ void *shell_malloc(size_t size)
 	return kmalloc(size);
 }
 
+/* No user-space heap to trim in the kernel shell build. */
+void shell_heap_trim(void)
+{
+}
+
 void *shell_calloc(size_t nmemb, size_t size)
 {
 	return kcalloc(nmemb, size);

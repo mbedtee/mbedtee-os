@@ -10,10 +10,17 @@
 #include <utrace.h>
 #include <pthread.h>
 #include <poll.h>
+#include <malloc.h>
 
 #include <shell.h>
 
 /* Implementation of shell abstraction layer for user space */
+
+/* the libc heap never shrinks by itself (see shell.h) */
+void shell_heap_trim(void)
+{
+	(void)malloc_trim(0);
+}
 
 void *shell_malloc(size_t size)
 {

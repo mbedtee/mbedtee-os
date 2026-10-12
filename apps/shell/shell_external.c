@@ -88,6 +88,8 @@ static int shell_stdio_add_actions(posix_spawn_file_actions_t *fa,
 {
 	int ret = 0;
 	int stdin_src = plan->proxy_enabled ? plan->proxy_in : plan->in_fd;
+	int close_fds[6];
+	int nclose = 0, i = 0;
 
 	ret = posix_spawn_file_actions_adddup2(fa, stdin_src, STDIN_FILENO);
 	if (ret != 0)
@@ -99,46 +101,41 @@ static int shell_stdio_add_actions(posix_spawn_file_actions_t *fa,
 	if (ret != 0)
 		return ret;
 
+	/*
+	 * Prepare may have repointed out_fd/err_fd at their *_tmp dups, so the
+	 * source and tmp sets can name the same fd. Closing an fd twice fails
+	 * with EBADF and aborts the whole spawn, so close each fd once.
+	 */
 	if (plan->proxy_enabled) {
-		ret = posix_spawn_file_actions_addclose(fa, plan->proxy_in);
-		if (ret != 0)
-			return ret;
-		ret = posix_spawn_file_actions_addclose(fa, plan->proxy_out);
-		if (ret != 0)
-			return ret;
+		close_fds[nclose++] = plan->proxy_in;
+		close_fds[nclose++] = plan->proxy_out;
 	} else if (close_sources) {
-		if (stdin_src != STDIN_FILENO) {
-			ret = posix_spawn_file_actions_addclose(fa, stdin_src);
-			if (ret != 0)
-				return ret;
-		}
+		if (stdin_src != STDIN_FILENO)
+			close_fds[nclose++] = stdin_src;
 		if (plan->out_fd != STDOUT_FILENO && plan->out_fd != STDERR_FILENO
-			&& plan->out_fd != stdin_src) {
-			ret = posix_spawn_file_actions_addclose(fa, plan->out_fd);
-			if (ret != 0)
-				return ret;
-		}
+			&& plan->out_fd != stdin_src)
+			close_fds[nclose++] = plan->out_fd;
 		if (plan->err_fd != STDERR_FILENO && plan->err_fd != STDOUT_FILENO
-			&& plan->err_fd != stdin_src && plan->err_fd != plan->out_fd) {
-			ret = posix_spawn_file_actions_addclose(fa, plan->err_fd);
-			if (ret != 0)
-				return ret;
-		}
+			&& plan->err_fd != stdin_src && plan->err_fd != plan->out_fd)
+			close_fds[nclose++] = plan->err_fd;
 	}
+	close_fds[nclose++] = plan->in_tmp;
+	close_fds[nclose++] = plan->out_tmp;
+	close_fds[nclose++] = plan->err_tmp;
 
-	if (plan->in_tmp >= 0) {
-		ret = posix_spawn_file_actions_addclose(fa, plan->in_tmp);
-		if (ret != 0)
-			return ret;
-	}
-	if (plan->out_tmp >= 0 && plan->out_tmp != plan->in_tmp) {
-		ret = posix_spawn_file_actions_addclose(fa, plan->out_tmp);
-		if (ret != 0)
-			return ret;
-	}
-	if (plan->err_tmp >= 0 && plan->err_tmp != plan->in_tmp
-		&& plan->err_tmp != plan->out_tmp) {
-		ret = posix_spawn_file_actions_addclose(fa, plan->err_tmp);
+	for (i = 0; i < nclose; i++) {
+		int fd = close_fds[i];
+		int j = 0;
+
+		if (fd < 0)
+			continue;
+		for (j = 0; j < i; j++) {
+			if (close_fds[j] == fd)
+				break;
+		}
+		if (j != i)
+			continue;
+		ret = posix_spawn_file_actions_addclose(fa, fd);
 		if (ret != 0)
 			return ret;
 	}

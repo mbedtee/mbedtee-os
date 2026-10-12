@@ -10,16 +10,12 @@
 #define MAX_SEMICOLON_COMMANDS 16
 #define SHELL_REALPATH_MAX_COMPONENTS 64
 #define SHELL_REDIR_MAX 8
-/* Reap finished background children every N dequeued jobs so that
- * sustained input cannot postpone reaping indefinitely. */
+/* reap finished children every N dequeued jobs */
 #define SHELL_JOBMGR_REAP_EVERY 8
 
 /*
- * I/O redirection: <, >, >>, 2>, 2>>, 2>&1 (plus glued forms like >file).
- *
- * Ops are recorded in argv order and applied in order at execution time, so
- * "cmd > f 2>&1" sends stderr to f while "cmd 2>&1 > f" keeps stderr on the
- * old stdout. Op filenames point into the owning shell's cmdline.
+ * Redirections: <, >, >>, 2>, 2>>, 2>&1 (+ glued like >file); applied in
+ * argv order, so "cmd > f 2>&1" and "cmd 2>&1 > f" differ.
  */
 enum shell_redir_type {
 	REDIR_IN,		/* < file */
@@ -1503,11 +1499,7 @@ out:
 		shell_close(dstfd);
 }
 
-/*
- * Ctrl+D on the interactive tty acts as EOF for commands reading stdin
- * (cat/grep/tee). Pipes and regular files deliver real EOF via read()==0,
- * so binary 0x04 bytes from them are passed through untouched.
- */
+/* Ctrl+D on the tty = EOF for stdin readers; files/pipes give real EOF */
 static inline bool is_stdin_eof_byte(struct shell *sh, int fd, unsigned char ch)
 {
 	return ch == SHELL_CTRL_D && fd >= 0 && fd == sh->tty_fd;
@@ -2956,8 +2948,11 @@ static int shell_spawn_pipeline_external_stage(struct shell_pipe_stage *ctx)
 	/* The child holds its own copies; the parent no longer needs them. */
 	pipe_stage_close_redir(ctx);
 
-	if (ret != 0)
+	if (ret != 0) {
+		shmsg_err(sh, "pipeline: cannot run '%s' (%d)\n",
+			sh->argv[0] ? sh->argv[0] : "?", ret);
 		return ret;
+	}
 
 	ctx->pid = pid;
 
@@ -3226,11 +3221,8 @@ static int shell_exec_pipeline_fg(struct shell *sh)
 			ret = shell_thread_create(&ctx->tid, shell_pipe_stage_thread, ctx);
 			if (ret != 0)
 				goto cleanup_started;
-			/*
-			 * Builtin stages run in this process and own their pipe fds;
-			 * shell_pipe_stage_finish() closes them, which is also what
-			 * lets the next stage see EOF.
-			 */
+			/* builtin stage owns its pipe fds; finish() closes them
+			 * (that is what gives the next stage EOF) */
 		} else {
 			ret = shell_spawn_pipeline_external_stage(ctx);
 			if (ret != 0)
@@ -3362,16 +3354,8 @@ static unsigned int cmdline_scan_meta(char *s, int *len)
 	return flags;
 }
 
-/*
- * I/O redirection: <, >, >>, 2>, 2>>, 2>&1 (plus glued forms like >file).
- * Types are declared at the top of this file; see enum shell_redir_type.
- */
-
-/*
- * Scan argv, extracting redirect operators and their filenames.
- * Returns 0 when at least one redirection was found (sh->argc shrinks),
- * -1 when there is none, -2 on syntax error (message already printed).
- */
+/* Scan argv for redirections; 0 = found (argc shrinks), -1 = none,
+ * -2 = syntax error (message printed) */
 static int shell_redir_parse(struct shell *sh, struct shell_redir *r)
 {
 	int i = 0, j = 0, nops = 0;
@@ -3472,11 +3456,8 @@ plain_word:
 	return nops ? 0 : -1;
 }
 
-/*
- * Apply recorded redirection ops in order, updating sh->io.
- * On success returns 0; on failure returns -2 (message printed) and closes
- * any fds opened so far. The caller restores sh->io from saved_io.
- */
+/* Apply ops in order to sh->io; on error (-2) closes opened fds;
+ * caller restores sh->io from saved_io */
 static int shell_redir_apply(struct shell *sh, struct shell_redir *r)
 {
 	int i = 0, fd = -1, flags = 0;
@@ -3583,12 +3564,8 @@ static int cmd_run_foreground_builtin(struct shell *sh,
 	if (!ctx)
 		return -ENOMEM;
 
-	/*
-	 * A builtin reading the tty would race with the UI thread below for
-	 * keystrokes. Keep the UI thread as the only tty reader and feed the
-	 * builtin through a pipe instead; closing the write end on Ctrl+D
-	 * then delivers a real EOF.
-	 */
+	/* optional: feed tty stdin to the builtin via a proxy pipe (no UI
+	 * thread race); Ctrl+D closes the write end = real EOF */
 	if ((flags & CMD_READS_STDIN) && sh->tty_fd >= 0 &&
 	    sh->io.stdin_fd == sh->tty_fd && shell_pipe(proxy) == 0) {
 		shell_set_nonblocking(proxy[1]);
@@ -4006,11 +3983,7 @@ static void shell_jobmgr_job_free(struct shell_job *job)
 	shell_free(job);
 }
 
-/*
- * Context handed to a background job-worker thread.
- * The worker owns both the job and its temporary shell context and
- * frees them once the work finishes.
- */
+/* background-job worker context; the worker owns and frees job + sh */
 struct shell_job_sync {
 	struct shell_job *job;
 	struct shell *sh;
@@ -4023,12 +3996,8 @@ struct shell_job_sync {
 
 static void shell_jobmgr_sync_release(struct shell_job_sync *sync)
 {
-	/*
-	 * Builtins emit via shmsg's ring buffer; drain it before freeing the
-	 * context (same as shell_pipe_stage_finish() does for foreground
-	 * builtins). Without this, small outputs (e.g. ls) would stay
-	 * buffered and the background command would appear to do nothing.
-	 */
+	/* drain buffered builtin output before freeing (else `ls &`
+	 * prints nothing) */
 	shmsg_flush(sync->sh);
 	if (sync->has_redir)
 		shell_redir_close(&sync->redir);
@@ -4082,14 +4051,8 @@ static int shell_jobmgr_do_job(struct shell_job *job)
 		struct shell_job_sync *sync = shell_calloc(1, sizeof(*sync));
 		shell_tid_t tid = 0;
 
-		/*
-		 * Semicolon lists are executed with foreground semantics:
-		 * each external segment blocks until its child exits. Offload
-		 * the list to a worker thread so the job manager keeps
-		 * draining shell_jobmgr_q and reaping finished children;
-		 * running it inline would let one long-running segment stall
-		 * all background work and pile up completed jobs.
-		 */
+		/* semicolon list blocks per segment: run it on a worker thread,
+		 * else one long segment stalls jobmgr draining/reaping */
 		if (sync) {
 			sync->job = job;
 			sync->sh = sh;
@@ -4137,12 +4100,8 @@ static int shell_jobmgr_do_job(struct shell_job *job)
 		struct shell_job_sync *sync = shell_calloc(1, sizeof(*sync));
 		shell_tid_t tid = 0;
 
-		/*
-		 * Builtins may run for a long time (find, grep -r, ...).
-		 * Run them on a worker thread so the job manager keeps
-		 * draining the queue and reaping finished children;
-		 * running inline would stall all background work.
-		 */
+		/* long builtins (find, grep -r) run on a worker thread so the
+		 * jobmgr keeps draining and reaping */
 		if (sync) {
 			sync->job = job;
 			sync->sh = sh;
@@ -4267,13 +4226,8 @@ static long shell_jobmgr_thread(void *arg)
 		int drained = 0;
 
 		did_work = 0;
-		/*
-		 * Reap finished children before draining new jobs. Under
-		 * sustained input the queue may stay non-empty for long
-		 * stretches; reaping up front (and periodically below)
-		 * guarantees completed jobs are released promptly instead
-		 * of piling up in shell_jobmgr_run.
-		 */
+		/* reap before draining (and periodically below): sustained input
+		 * must not postpone releasing finished jobs */
 		shell_jobmgr_reap_running();
 
 		while ((job = shell_jobmgr_dequeue()) != NULL) {
@@ -4291,9 +4245,13 @@ static long shell_jobmgr_thread(void *arg)
 			(!list_empty(&shell_jobmgr_run));
 
 		timeout = busy ? 100 : 300;
-		if (busy || did_work)
+		if (busy || did_work) {
 			idle_ms = 0;
-		else {
+		} else {
+			/* burst drained: give the heap tail back to the kernel */
+			if (idle_ms == 0)
+				shell_heap_trim();
+
 			idle_ms += timeout;
 			if (idle_ms >= 10000) {
 				shell_jobmgr_lock_enter();
@@ -4571,10 +4529,7 @@ static void key_ctrlc(struct shell *sh)
 	sh->term_col = SHELL_PROMPT_LEN;
 }
 
-/*
- * Ctrl+D (EOF): on an empty command line, request shell exit;
- * otherwise behave like Delete (remove char at cursor), matching readline.
- */
+/* Ctrl+D: empty line = exit; otherwise Delete (readline-like) */
 static void key_ctrld(struct shell *sh)
 {
 	if (sh->cmdline_len > 0) {
