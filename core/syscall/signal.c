@@ -61,6 +61,53 @@ static void sigdropign(struct process *p, int signo)
 	spin_unlock(&p->slock);
 }
 
+/*
+ * Retract the not-yet-delivered signals of #timerid (disarm/delete).
+ * Timers only queue process-directed signals, so no per-thread walk.
+ */
+void sigtimer_drop(pid_t id, timer_t timerid)
+{
+	struct process *p = process_get(id);
+	struct signal_proc *sigp = NULL;
+	struct sigqueue *q = NULL, *n = NULL;
+	unsigned long flags = 0;
+	sigset_t dropped, remains;
+	int signo = 0;
+
+	if (!p || (timerid == 0))
+		return;
+
+	sigp = &p->sigp;
+	dropped = remains = 0;
+
+	spin_lock_irqsave(&sigp->lock, flags);
+
+	list_for_each_entry_safe(q, n, &sigp->queue, node) {
+		if (q->info.si_timerid != timerid)
+			continue;
+
+		sigaddset(&dropped, q->info.si_signo);
+		list_del(&q->node);
+		kfree(q);
+		sigp->nrqueued--;
+	}
+
+	if (dropped != 0) {
+		list_for_each_entry(q, &sigp->queue, node)
+			sigaddset(&remains, q->info.si_signo);
+
+		for (signo = 1; signo < NSIG; signo++) {
+			if (sigismember(&dropped, signo) &&
+			    !sigismember(&remains, signo))
+				sigdelset(&sigp->pending, signo);
+		}
+	}
+
+	spin_unlock_irqrestore(&sigp->lock, flags);
+
+	process_put(p);
+}
+
 
 int sigaction(int signo, const struct sigaction *act, struct sigaction *oldact)
 {
@@ -437,10 +484,24 @@ err:
 int sigenqueue(pid_t id, int signo, int sigcause,
 	const union sigval value, bool threaddirected)
 {
-	int ret = -EINVAL;
 	siginfo_t info = {signo, sigcause, value};
-	struct process *dst = process_get(id);
 
+	return sigenqueue_info(id, &info, threaddirected);
+}
+
+/* same as sigenqueue(), with the siginfo built by the caller */
+int sigenqueue_info(pid_t id, const siginfo_t *info, bool threaddirected)
+{
+	int ret = -EINVAL;
+	siginfo_t si;
+	struct process *dst = NULL;
+
+	if (!info)
+		return -EINVAL;
+
+	si = *info;
+
+	dst = process_get(id);
 	if (!dst)
 		return -ESRCH;
 
@@ -448,15 +509,15 @@ int sigenqueue(pid_t id, int signo, int sigcause,
 	if (ret != 0)
 		goto out;
 
-	DMSG("Send signal %d to %04d %d\n", signo, id, threaddirected);
+	DMSG("Send signal %d to %04d %d\n", si.si_signo, id, threaddirected);
 
-	if ((unsigned int)signo >= NSIG)
+	if ((unsigned int)si.si_signo >= NSIG)
 		goto out;
 
 	if (threaddirected)
-		ret = sigenqueue_t(id, &info);
+		ret = sigenqueue_t(id, &si);
 	else
-		ret = sigenqueue_p(dst, &info);
+		ret = sigenqueue_p(dst, &si);
 
 out:
 	process_put(dst);
@@ -584,6 +645,14 @@ int sigdequeue(struct thread *t, sigset_t *mask, siginfo_t *info)
 		signo = __sigdequeue(sigp, sigt, mask, info, false);
 
 	spin_unlock_irqrestore(&sigp->lock, flags);
+
+	/*
+	 * A timer signal tells its timer from si_timerid: let it latch the
+	 * overrun into this siginfo, outside sigp->lock (it takes its own).
+	 */
+	if (signo)
+		sigtimer_accepted(info);
+
 	return signo;
 }
 
@@ -692,6 +761,10 @@ int sigtimedwait(const sigset_t *set,
 
 	sigemptyset(&sigt->sigwait);
 	spin_unlock_irqrestore(&sigp->lock, flags);
+
+	/* same as in sigdequeue(): the siginfo is now what the caller gets */
+	if (signo)
+		sigtimer_accepted(info);
 
 	if (signo != 0)
 		return signo;
@@ -828,6 +901,16 @@ int sigenqueue(pid_t id, int signo, int sigcause,
 	const union sigval value, bool threaddirected)
 {
 	return -ENOTSUP;
+}
+
+int sigenqueue_info(pid_t id, const siginfo_t *info, bool threaddirected)
+{
+	return -ENOTSUP;
+}
+
+/* sigtimer_accepted() lives in utimer.c, only sigtimer_drop() needs a stub */
+void sigtimer_drop(pid_t id, timer_t timerid)
+{
 }
 
 int sigdequeue(struct thread *t, sigset_t *mask, siginfo_t *info)

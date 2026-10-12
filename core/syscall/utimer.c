@@ -13,6 +13,7 @@
 #include <sched.h>
 #include <kmalloc.h>
 #include <mutex.h>
+#include <atomic.h>
 #include <prng.h>
 #include <timer.h>
 #include <ktime.h>
@@ -36,10 +37,15 @@ struct utimer {
 	struct sigevent evp;
 	pthread_attr_t attr;
 	struct work w;
-	int overrun;
+	/* bumped from the tevent ISR, consumed under t->lock -> must be atomic */
+	struct atomic_num overrun;
+	/* latched when a notification is accepted; what timer_getoverrun() reports */
+	int overrun_last;
 	pid_t pid;
 	pid_t evplasttid;
 	short refc;
+	/* cleared on disarm/delete; an already queued work must not notify */
+	bool armed;
 	struct spinlock lock;
 };
 
@@ -59,6 +65,26 @@ static struct utimer *timer_find(timer_t id)
 	return rb_entry(rb_find((void *)id,
 			utimers, _timer_rbfind_cmp),
 			struct utimer, node);
+}
+
+/* SIGTIMER is generated as SIGALRM */
+static inline int timer_signo(const struct utimer *t)
+{
+	int signo = t->evp.sigev_signo;
+
+	return (signo == SIGTIMER) ? SIGALRM : signo;
+}
+
+/*
+ * Drop a generated-but-undelivered notification on disarm/delete.  SIGTIMER
+ * is exempt: its signal must survive the worker's auto-delete.
+ */
+static void timer_drop_pending(struct utimer *t)
+{
+	if (t->evp.sigev_signo == SIGTIMER)
+		return;
+
+	sigtimer_drop(t->pid, t->id);
 }
 
 static inline struct utimer *timer_lookup(timer_t id)
@@ -128,14 +154,22 @@ static void timer_worker(struct work *w)
 	unsigned long flags = 0;
 	struct utimer *t = container_of(w, struct utimer, w);
 	timer_t id = t->id;
-	int evpsigtimer = 0;
+	bool evpsigtimer = false;
 
 	spin_lock_irqsave(&t->lock, flags);
 
-	/* process exiting ? */
-	proc = process_get(t->pid);
-	if (!proc)
+	/* disarmed while queued: t->pid may be freed/reused, don't look it up */
+	if (!t->armed) {
+		t->refc--;
 		goto out;
+	}
+
+	proc = process_get(t->pid);
+	if (!proc) {
+		/* nothing will re-arm it now, so release this work's reference */
+		t->refc--;
+		goto out;
+	}
 
 	if (t->evp.sigev_notify == SIGEV_THREAD) {
 		struct thread *lastthd = thread_get(t->evplasttid);
@@ -147,23 +181,29 @@ static void timer_worker(struct work *w)
 			if (ret > 0) {
 				t->evplasttid = ret;
 				sched_ready(ret);
-				t->overrun--;
+				/* a thread notification is accepted the moment it starts */
+				t->overrun_last = atomic_read(&t->overrun);
+				atomic_set(&t->overrun, 0);
 			}
 		} else {
+			/* the previous callback is still running -> overrun */
 			thread_put(lastthd);
+			atomic_inc(&t->overrun);
 		}
 	} else {
-		int signo = t->evp.sigev_signo;
+		siginfo_t info = {timer_signo(t), SI_TIMER, t->evp.sigev_value};
 
-		if (signo == SIGTIMER) {
-			evpsigtimer = signo;
-			signo = SIGALRM;
-		}
+		/*
+		 * SIGTIMER (alarm()): deleted right after this notification, so
+		 * the id is never reusable.
+		 */
+		evpsigtimer = (t->evp.sigev_signo == SIGTIMER);
 
-		ret = sigenqueue(t->pid, signo, SI_TIMER,
-				t->evp.sigev_value, false);
-		if (ret == 0)
-			t->overrun--;
+		/* the core hands the id back at acceptance to latch si_overrun */
+		info.si_timerid = t->id;
+		ret = sigenqueue_info(t->pid, &info, false);
+		if (ret != 0)
+			atomic_inc(&t->overrun);
 	}
 
 	if (timespecisset(&t->newval)) {
@@ -175,8 +215,9 @@ static void timer_worker(struct work *w)
 		if ((ret < 0) && (tval.tv_sec < 10)) {
 			/* min 5ms, max 10s */
 			unsigned long usecs = time_to_usecs(&tval);
+			unsigned long ovr = atomic_read(&t->overrun);
 
-			usecs = t->overrun * max(usecs, 5000ul);
+			usecs = max(ovr, 1ul) * max(usecs, 5000ul);
 			usecs_to_time(min(usecs, MICROSECS_PER_SEC * 10), &tval);
 		}
 		timespecadd(&t->ts.it_value, &tval, &t->ts.it_value);
@@ -202,16 +243,20 @@ static void timer_event(struct tevent *e)
 {
 	struct utimer *t = container_of(e, struct utimer, tevent);
 
-	t->overrun++;
-
-	schedule_work(&t->w);
+	/* an expiry that cannot queue a new notification is an overrun */
+	if (!schedule_work(&t->w))
+		atomic_inc(&t->overrun);
 }
 
 static bool __timer_del(struct utimer *t)
 {
+	timer_drop_pending(t);
+	t->armed = false;
 	timespecclear(&t->newval);
-	t->ts.it_interval = t->newval;
-	if (tevent_stop(&t->tevent))
+	timespecclear(&t->ts.it_interval);
+
+	/* a queued work owns a reference; take it back only if it cannot run */
+	if (tevent_stop(&t->tevent) || cancel_work(&t->w))
 		t->refc--;
 
 	return t->refc == 0;
@@ -425,6 +470,19 @@ int timer_settime(timer_t timerid, int flags,
 		ovalue->it_interval = t->ts.it_interval;
 	}
 
+	/* POSIX: a zero it_value disarms the timer, whatever it_interval says. */
+	if (!timespecisset(&value->it_value)) {
+		timer_drop_pending(t);
+		t->armed = false;
+		timespecclear(&t->ts.it_value);
+		timespecclear(&t->ts.it_interval);
+		timespecclear(&t->newval);
+		if (tevent_stop(&t->tevent))
+			t->refc--;
+		ret = 0;
+		goto out;
+	}
+
 	if (flags & TIMER_ABSTIME) {
 		timespecsub(&value->it_value, &curr, &diff);
 		if (diff.tv_sec >= 0) {
@@ -441,6 +499,9 @@ int timer_settime(timer_t timerid, int flags,
 	}
 
 	t->ts.it_interval = value->it_interval;
+	t->armed = true;
+	atomic_set(&t->overrun, 0);
+	t->overrun_last = 0;
 
 	if (t->refc == 1) {
 		t->refc++;
@@ -500,9 +561,34 @@ int timer_getoverrun(timer_t timerid)
 	if (!t)
 		return -EINVAL;
 
-	ret = t->overrun;
+	/* POSIX caps the count at DELAYTIMER_MAX, which is INT_MAX here */
+	ret = t->overrun_last;
 
 	timer_put_lock(t, slflags);
 
 	return ret;
+}
+
+/*
+ * #info is the siginfo just dequeued, carrying our timer id in si_timerid
+ * (0 = somebody else's signal).  POSIX: the overrun belongs to the
+ * notification being accepted, not to the expiry.
+ */
+void sigtimer_accepted(siginfo_t *info)
+{
+	struct utimer *t = NULL;
+	unsigned long flags = 0;
+
+	if (!info || (info->si_timerid == 0))
+		return;
+
+	t = timer_get_lock(info->si_timerid, &flags);
+	if (!t)
+		return;
+
+	t->overrun_last = atomic_read(&t->overrun);
+	atomic_set(&t->overrun, 0);
+	info->si_overrun = t->overrun_last;
+
+	timer_put_lock(t, flags);
 }

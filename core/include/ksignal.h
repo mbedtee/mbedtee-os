@@ -23,7 +23,16 @@ struct process;
 int sigenqueue(pid_t id, int signo, int sigcause,
 	const union sigval value, bool threaddirected);
 
+/* queue a signal whose siginfo_t the caller built (a timer sets si_timerid) */
+int sigenqueue_info(pid_t id, const siginfo_t *info, bool threaddirected);
+
 int sigdequeue(struct thread *t, sigset_t *mask, siginfo_t *info);
+
+/*
+ * Timer <-> signal core contract for queued timer notifications.
+ */
+void sigtimer_accepted(siginfo_t *info);
+void sigtimer_drop(pid_t id, timer_t timerid);
 
 int sigt_init(struct thread *t);
 int sigt_free(struct thread *t);
