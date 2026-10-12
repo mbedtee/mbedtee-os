@@ -118,13 +118,9 @@ void __process_unwind_init(void)
 	int i = 0;
 	struct unwind_info *unw = &__proc_info.unwind;
 	unsigned int nrtabs = unw->nrtabs;
-	/*
-	 * One-shot: libgcc's __register_frame() allocates state that is never
-	 * released, so the tables must only ever be registered once.
-	 */
+	/* __register_frame() state is never released: register at most once */
 	static int __unwind_inited;
 
-	/* Register the tables exactly once per process. */
 	if (__atomic_exchange_n(&__unwind_inited, 1, __ATOMIC_ACQ_REL))
 		return;
 

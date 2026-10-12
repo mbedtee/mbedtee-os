@@ -9,12 +9,32 @@
 
 int usleep(useconds_t us)
 {
+	long ret = 0;
+
 	pthread_testcancel();
-	return syscall1(SYSCALL_USLEEP, us);
+
+	ret = syscall1(SYSCALL_USLEEP, us);
+
+	/* a positive value is the unslept time: report EINTR per POSIX */
+	if (ret > 0) {
+		errno = EINTR;
+		return -1;
+	}
+
+	return ret;
 }
 
 unsigned int sleep(unsigned int seconds)
 {
+	long ret = 0;
+
 	pthread_testcancel();
-	return syscall1(SYSCALL_MSLEEP, seconds * 1000UL);
+
+	ret = syscall1(SYSCALL_MSLEEP, seconds * 1000UL);
+
+	/* msleep_interruptible() reports unslept ms; sleep() reports seconds */
+	if (ret > 0)
+		return (unsigned int)((ret + 999) / 1000);
+
+	return 0;
 }

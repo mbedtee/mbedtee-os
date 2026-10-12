@@ -10,14 +10,25 @@
 
 int clock_getcpuclockid(pid_t pid, clockid_t *clockid)
 {
+	int ret = 0;
+
 	if (!clockid)
 		return EINVAL;
 
-	if ((pid != getpid()) && (pid != 0))
-		return EPERM;
+	if ((pid == getpid()) || (pid == 0)) {
+		*clockid = CLOCK_PROCESS_CPUTIME_ID;
+		return 0;
+	}
 
-	*clockid = CLOCK_PROCESS_CPUTIME_ID;
-	return 0;
+	/*
+	 * POSIX: ESRCH when no such process, EPERM when not the caller's.
+	 * Signal 0 does exactly those two checks.
+	 */
+	ret = sigqueue(pid, 0, (union sigval){0});
+	if ((ret != 0) && (errno == ESRCH))
+		return ESRCH;
+
+	return EPERM;
 }
 
 int clock_gettime(clockid_t clockid, struct timespec *t)

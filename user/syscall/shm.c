@@ -27,8 +27,14 @@ static int shm_build_name(const char *name, char *buf)
 		++name;
 
 	namelen = strlen(name) + 1;
-	if (namelen >= NAME_MAX || namelen <= 1) {
+	if (namelen <= 1) {
 		errno = EINVAL;
+		return -1;
+	}
+
+	/* an over-long name fails with ENAMETOOLONG per POSIX */
+	if (namelen >= NAME_MAX) {
+		errno = ENAMETOOLONG;
 		return -1;
 	}
 

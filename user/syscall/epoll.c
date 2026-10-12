@@ -4,6 +4,8 @@
  * eventpoll
  */
 
+#include <fcntl.h>
+
 #include <syscall.h>
 
 #include <epoll.h>
@@ -20,12 +22,29 @@ int epoll_create(int size)
 
 int epoll_create1(int flags)
 {
-	int ret = 0;
+	int ret = 0, fd = 0;
 
-	ret = syscall1(SYSCALL_EPOLL_CREATE, flags);
+	if (flags & ~EPOLL_CLOEXEC) {
+		errno = EINVAL;
+		return -1;
+	}
 
-	errno = syscall_errno(ret);
-	return syscall_retval(ret);
+	fd = epoll_create(1);
+	if (fd < 0)
+		return fd;
+
+	if (flags & EPOLL_CLOEXEC) {
+		ret = fcntl(fd, F_SETFD, FD_CLOEXEC);
+		if (ret < 0) {
+			int err = errno;
+
+			close(fd);
+			errno = err;
+			return -1;
+		}
+	}
+
+	return fd;
 }
 
 int epoll_ctl(int epfd, int op, int fd,

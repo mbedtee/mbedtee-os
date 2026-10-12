@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <limits.h>
+#include <fcntl.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,6 +36,9 @@ extern "C" {
 #define EPOLL_CTL_ADD    1
 #define EPOLL_CTL_DEL    2
 #define EPOLL_CTL_MOD    3
+
+/* epoll_create1() flags: only EPOLL_CLOEXEC is defined */
+#define EPOLL_CLOEXEC    O_CLOEXEC
 
 struct epoll_event {
 	uint32_t events;

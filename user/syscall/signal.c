@@ -190,43 +190,61 @@ int pause(void)
 	return -1;
 }
 
+/*
+ * A SIGTIMER timer dies with its notification, so arm a fresh one per call:
+ * re-arming a fired id would be cancelled by that deletion.
+ */
+static int __alarm_timer_create(timer_t *timerid)
+{
+	struct sigevent evp;
+
+	memset(&evp, 0, sizeof(evp));
+	evp.sigev_notify = SIGEV_SIGNAL;
+	evp.sigev_signo = SIGTIMER;
+
+	return timer_create(CLOCK_REALTIME, &evp, timerid);
+}
+
 unsigned int alarm(unsigned int seconds)
 {
 	static timer_t timerid = -1;
-	timer_t tid = 0;
-	timer_t expected = -1;
-	unsigned int ret = 0;
-	struct sigevent evp;
+	timer_t tid = (timer_t)-1, old = 0;
 	struct itimerspec ts, ots;
+	unsigned int remaining = 0;
 
-	tid = __atomic_load_n(&timerid, __ATOMIC_ACQUIRE);
-	if (tid == (timer_t)-1) {
-		memset(&evp, 0, sizeof(evp));
-		evp.sigev_notify = SIGEV_SIGNAL;
-		evp.sigev_signo = SIGTIMER;
-		ret = timer_create(CLOCK_REALTIME, &evp, &tid);
-		if (ret != 0)
+	if (seconds != 0) {
+		memset(&ts, 0, sizeof(ts));
+		ts.it_value.tv_sec = seconds;
+
+		if (__alarm_timer_create(&tid) != 0)
 			return 0;
 
-		if (!__atomic_compare_exchange_n(&timerid, &expected, tid,
-			false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+		if (timer_settime(tid, 0, &ts, NULL) != 0) {
 			timer_delete(tid);
-			tid = expected;
+			return 0;
 		}
 	}
 
-	memset(&ts, 0, sizeof(ts));
-	ts.it_value.tv_sec = seconds;
-	ret = timer_settime(tid, 0, &ts, &ots);
-	if (ret != 0)
+	old = __atomic_exchange_n(&timerid, tid, __ATOMIC_ACQ_REL);
+	if (old == (timer_t)-1)
 		return 0;
 
-	ret = ots.it_value.tv_sec;
-	if ((ots.it_value.tv_nsec >= 500000000L) ||
-		(ret == 0 && ots.it_value.tv_nsec > 0))
-		++ret;
+	/*
+	 * What was left of the previous alarm (rounded up, as before); an id
+	 * that already fired reports nothing, which is a remaining of 0 too.
+	 */
+	memset(&ots, 0, sizeof(ots));
+	if (timer_gettime(old, &ots) == 0) {
+		remaining = ots.it_value.tv_sec;
+		if ((ots.it_value.tv_nsec >= 500000000L) ||
+			((remaining == 0) && (ots.it_value.tv_nsec > 0)))
+			++remaining;
+	}
 
-	return ret;
+	/* cancel it; a notification that is already queued stays queued */
+	timer_delete(old);
+
+	return remaining;
 }
 
 static void __dead2 __sigreturn(void)
@@ -238,14 +256,28 @@ static void __dead2 __sigreturn(void)
 /* Default signal handler */
 static void __sigdefault(int signo,	siginfo_t *info, void *ctx)
 {
+	struct __pthread *self = __pthread_self;
+
 	LMSG("recv %d - code %d val %p\n", signo,
 		info->si_code, info->si_value.sival_ptr);
 
 	/* SIGCANCEL is thread-wide */
-	if (signo == SIGCANCEL)
+	if (signo == SIGCANCEL) {
+		/*
+		 * pthread_join()/pthread_detach() wake a parked (detaching)
+		 * thread with SIGCANCEL. The signal payload is only a hint:
+		 * the kernel synthesizes it (ENOMEM -> 0xc) when the sigqueue
+		 * node could not be allocated, which must not leak into the
+		 * exit value. The authoritative value is the one this thread
+		 * published in join_q.notification before parking.
+		 */
+		if (self->detaching)
+			pthread_exit(pthread_aux(self)->join_q.notification);
+
 		pthread_exit(info->si_value.sival_ptr);
-	else
+	} else {
 		exit(info->si_value.sival_int);
+	}
 }
 
 extern void signal_entry(void (*sighandler)(int signo,
