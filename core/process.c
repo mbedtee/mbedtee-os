@@ -228,19 +228,63 @@ err:
 	return ret;
 }
 
+/*
+ * Orphan the children of a dying process.
+ *
+ * A posix_spawn() child carries an extra reference (the "waitable" one)
+ * that only waitpid() would drop when reaping it. Once the parent is gone
+ * nobody can ever wait for that child again, so that reference must be
+ * reclaimed here - otherwise the process object (with its page tables,
+ * ELF mappings, argv, vma, ...) can never be freed after the child exits.
+ *
+ * Claiming uses the same CAS protocol as kwaitpid(): exactly one winner
+ * owns the reference, and a kwaitpid() racer that loses the race simply
+ * drops its own reference and returns -ECHILD.
+ */
 static void process_orphan_children(struct process *proc)
 {
 	unsigned long flags = 0;
 	struct process *child = NULL, *tmp = NULL;
+	struct list_head orphans = LIST_HEAD_INIT(orphans);
+	int expected = 0;
 
 	spin_lock_irqsave(&__plock, flags);
 
 	list_for_each_entry_safe(child, tmp, &proc->children, sibling) {
 		list_del(&child->sibling);
 		child->parent_id = 0;
+
+		if ((atomic_read(&child->wait_state) & PROC_WAIT_WAITABLE) == 0)
+			continue;
+
+		for (;;) {
+			expected = atomic_read(&child->wait_state);
+
+			/* a kwaitpid() racer already owns this child's refs */
+			if (expected & PROC_WAIT_REAPED)
+				break;
+
+			if (atomic_compare_set(&child->wait_state, &expected,
+					expected | PROC_WAIT_REAPED)) {
+				/* we own the waitable reference now */
+				list_add_tail(&child->sibling, &orphans);
+				break;
+			}
+			/* wait_state changed concurrently (e.g. EXITED): retry */
+		}
 	}
 
 	spin_unlock_irqrestore(&__plock, flags);
+
+	/*
+	 * Drop the claimed references outside of __plock: process_put() takes
+	 * the lock itself and may destroy the orphan (recursively orphaning
+	 * its own children).
+	 */
+	list_for_each_entry_safe(child, tmp, &orphans, sibling) {
+		list_del(&child->sibling);
+		process_put(child);
+	}
 }
 
 static void __process_destroy(struct process *proc)
