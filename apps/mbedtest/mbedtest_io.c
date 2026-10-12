@@ -9,6 +9,7 @@
 #include <poll.h>
 #include <epoll.h>
 #include <eventfd.h>
+#include <ioctl.h>
 #include <sys/select.h>
 
 #define EPOLL_MAX_FDS  4096
@@ -198,6 +199,13 @@ void poll_test(void)
 
 	TEST_START("poll_test");
 
+	/* nfds == 0 is a portable sleep; it must not report EINVAL */
+	ret = poll(NULL, 0, 0);
+	CHECK(ret == 0, errno, "poll(NULL,0,0) ret=%d", ret);
+	ret = poll(NULL, 0, 1);
+	CHECK((ret == 0) || ((ret == -1) && (errno == EINTR)), errno,
+		"poll(NULL,0,1ms) ret=%d errno=%d", ret, errno);
+
 	_fd = open("/dev/uart1", O_RDWR | O_NONBLOCK);
 	if (_fd < 0) {
 		if (!(test_rand() % 3))
@@ -294,6 +302,8 @@ void epoll_test1(void)
 	TDBG("EPOLL_CTL_DEL ret = %d errno %d\n", ret, errno);
 
 	ret = epoll_ctl(epfd, EPOLL_CTL_ADD, _fd, &evt);
+	/* a failed ADD (e.g. ENOMEM) would leave the wait below with no event */
+	CHECK(ret == 0, errno, "ADD ret=%d", ret);
 	TDBG("EPOLL_CTL_ADD 1ret = %d errno %d\n", ret, errno);
 	ret = epoll_ctl(epfd, EPOLL_CTL_ADD, _fd, NULL);
 	TDBG("EPOLL_CTL_ADD 2ret = %d errno %d\n", ret, errno);
@@ -416,6 +426,8 @@ void epoll_test2(void)
 	TDBG("EPOLL_CTL_DEL ret = %d errno %d\n", ret, errno);
 
 	ret = epoll_ctl(epfd, EPOLL_CTL_ADD, _fd, &evt);
+	/* a failed ADD (e.g. ENOMEM) would leave the wait below with no event */
+	CHECK(ret == 0, errno, "ADD ret=%d", ret);
 	TDBG("EPOLL_CTL_ADD 1ret = %d errno %d\n", ret, errno);
 	ret = epoll_ctl(epfd, EPOLL_CTL_ADD, _fd, NULL);
 	TDBG("EPOLL_CTL_ADD 2ret = %d errno %d\n", ret, errno);
@@ -490,6 +502,121 @@ out:
 	test_close_fd(&_fd);
 	test_close_fd(&epfd);
 	free(epollfds);
+	TEST_END();
+}
+
+/*
+ * epoll_create1_test: epoll_create()/epoll_create1() argument contract.
+ *
+ * - epoll_create(size <= 0) must fail with EINVAL (size is a hint that
+ *   must be positive, core/syscall/epoll.c validates it);
+ * - epoll_create1(0) is the standard "no flags" call and must succeed;
+ * - EPOLL_CLOEXEC is applied to the new fd via F_SETFD/FD_CLOEXEC;
+ * - any other flag bit is rejected with EINVAL, like Linux.
+ */
+void epoll_create1_test(void)
+{
+	int fd = -1;
+	int fdfl = 0;
+
+	TEST_START("epoll_create1_test");
+
+	fd = epoll_create(0);
+	CHECK(fd < 0 && errno == EINVAL, errno, "epoll_create(0) fd=%d", fd);
+
+	fd = epoll_create(1);
+	CHECK(fd >= 0, errno, "epoll_create(1)");
+	test_close_fd(&fd);
+
+	/* negative sizes are rejected as well (size <= 0 in the kernel) */
+	fd = epoll_create(-1);
+	CHECK(fd < 0 && errno == EINVAL, errno, "epoll_create(-1) fd=%d", fd);
+	fd = epoll_create(INT_MIN);
+	CHECK(fd < 0 && errno == EINVAL, errno, "epoll_create(INT_MIN) fd=%d", fd);
+
+	fd = epoll_create1(0);
+	CHECK(fd >= 0, errno, "epoll_create1(0) fd=%d", fd);
+	fdfl = fcntl(fd, F_GETFD);
+	CHECK(fdfl >= 0, errno, "F_GETFD epoll_create1 fd");
+	CHECK((fdfl & FD_CLOEXEC) == 0, EIO, "default CLOEXEC flags=0x%x", fdfl);
+	test_close_fd(&fd);
+
+	fd = epoll_create1(EPOLL_CLOEXEC);
+	CHECK(fd >= 0, errno, "epoll_create1(CLOEXEC) fd=%d", fd);
+	fdfl = fcntl(fd, F_GETFD);
+	CHECK(fdfl >= 0, errno, "F_GETFD CLOEXEC fd");
+	CHECK((fdfl & FD_CLOEXEC) != 0, EIO, "CLOEXEC not set flags=0x%x", fdfl);
+	test_close_fd(&fd);
+
+	fd = epoll_create1(0x1000);
+	CHECK(fd < 0 && errno == EINVAL, errno, "bad flags fd=%d", fd);
+
+out:
+	test_close_fd(&fd);
+	TEST_END();
+}
+
+/*
+ * epoll_ctl_error_test: epoll_ctl() error contract.
+ *
+ * core/syscall/epoll.c:
+ * - an epfd that is not an epoll fd     -> EINVAL;
+ * - the epoll fd itself as target       -> EINVAL (anti-recursion guard);
+ * - EPOLL_CTL_ADD of an existing member -> EEXIST;
+ * - EPOLL_CTL_DEL/MOD of a non-member   -> ENOENT;
+ * - an unknown op                       -> EINVAL.
+ *
+ * EPOLL_CTL_ADD with a NULL event is deliberately not tested: the
+ * kernel reports EFAULT, which the suite classifies as a resource
+ * error (SKIP) instead of a hard failure.
+ */
+void epoll_ctl_error_test(void)
+{
+	int p[2] = {-1, -1};
+	int efd = -1;
+	int ret = -1;
+	struct epoll_event ev = {0};
+
+	TEST_START("epoll_ctl_error_test");
+
+	efd = epoll_create(1);
+	CHECK(efd >= 0, errno, "epoll_create");
+	ret = pipe(p);
+	CHECK(ret == 0, errno);
+
+	ev.events = EPOLLIN;
+	ev.data.fd = p[0];
+
+	/* the epfd must be an epoll fd */
+	ret = epoll_ctl(p[0], EPOLL_CTL_ADD, p[1], &ev);
+	CHECK(ret < 0 && errno == EINVAL, errno, "non-epoll epfd ret=%d", ret);
+
+	/* an unknown op is rejected */
+	ret = epoll_ctl(efd, 99, p[0], &ev);
+	CHECK(ret < 0 && errno == EINVAL, errno, "bad op ret=%d", ret);
+
+	/* a non-member cannot be deleted or modified */
+	ret = epoll_ctl(efd, EPOLL_CTL_DEL, p[0], NULL);
+	CHECK(ret < 0 && errno == ENOENT, errno, "DEL non-member ret=%d", ret);
+	ret = epoll_ctl(efd, EPOLL_CTL_MOD, p[0], &ev);
+	CHECK(ret < 0 && errno == ENOENT, errno, "MOD non-member ret=%d", ret);
+
+	/* the epoll fd itself must not become a member */
+	ret = epoll_ctl(efd, EPOLL_CTL_ADD, efd, &ev);
+	CHECK(ret < 0 && errno == EINVAL, errno, "ADD self ret=%d", ret);
+
+	/* a member cannot be added twice, but can be deleted once */
+	ret = epoll_ctl(efd, EPOLL_CTL_ADD, p[0], &ev);
+	CHECK(ret == 0, errno, "ADD member ret=%d", ret);
+	ret = epoll_ctl(efd, EPOLL_CTL_ADD, p[0], &ev);
+	CHECK(ret < 0 && errno == EEXIST, errno, "ADD member twice ret=%d", ret);
+	ret = epoll_ctl(efd, EPOLL_CTL_DEL, p[0], NULL);
+	CHECK(ret == 0, errno, "DEL member ret=%d", ret);
+
+out:
+	test_close_fd(&p[0]);
+	test_close_fd(&p[1]);
+	test_close_fd(&efd);
 	TEST_END();
 }
 
@@ -600,6 +727,64 @@ out:
 	test_close_fd(&owned);
 	test_close_fd(&p[0]);
 	test_close_fd(&p[1]);
+	TEST_END();
+}
+
+/*
+ * ioctl_test: ioctl() contract.
+ *
+ * - fds 0..2 are short-circuited by the libc wrapper (returns 0 without
+ *   entering the kernel, user/syscall/ioctl.c);
+ * - an invalid fd reaches the kernel and fails with EBADF;
+ * - a filesystem whose file_operations has no .ioctl fails with ENXIO
+ *   (fs/file.c: sys_ioctl).  That check runs before the O_DIRECTORY one,
+ *   so an O_DIRECTORY fd on such a filesystem also reports ENXIO; EISDIR
+ *   is only reachable for a filesystem that does implement .ioctl.
+ *
+ * Note: no in-tree driver implements a request that can be driven from
+ * this test, so only the error contract is covered here.
+ */
+void ioctl_test(void)
+{
+	int fd = -1, dirfd = -1;
+	int ret = -1;
+	int arg = 1;
+	char name[128] = {0};
+
+	TEST_START("ioctl_test");
+
+	/* libc short-circuit for the standard descriptors */
+	ret = ioctl(STDOUT_FILENO, 0, NULL);
+	CHECK(ret == 0, errno, "ioctl(stdout) ret=%d", ret);
+
+	/* invalid fd reaches the kernel */
+	ret = ioctl(-1, 0, NULL);
+	CHECK(ret < 0 && errno == EBADF, errno, "ioctl(-1) ret=%d", ret);
+
+	snprintf(name, sizeof(name), "/ioctl_%04d_%x.txt",
+		gettid(), test_rand());
+	test_unlink(name);
+	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
+	CHECK(fd >= 0, errno, "open %s", name);
+
+	/* ramfs file_operations carry no .ioctl */
+	ret = ioctl(fd, 0, &arg);
+	CHECK(ret < 0 && errno == ENXIO, errno, "ioctl(ramfs) ret=%d", ret);
+
+	/* the failed ioctl must leave the fd usable */
+	ret = write(fd, "x", 1);
+	CHECK(ret == 1, errno, "write after ioctl ret=%d", ret);
+
+	/* a directory is rejected the same way: no .ioctl on ramfs */
+	dirfd = open("/", O_RDONLY | O_DIRECTORY);
+	CHECK(dirfd >= 0, errno, "open / O_DIRECTORY");
+	ret = ioctl(dirfd, 0, NULL);
+	CHECK(ret < 0 && errno == ENXIO, errno, "ioctl(dir) ret=%d", ret);
+
+out:
+	test_close_fd(&fd);
+	test_close_fd(&dirfd);
+	test_unlink(name);
 	TEST_END();
 }
 
@@ -1031,6 +1216,7 @@ void pselect_basic_test(void)
 	fd_set rfds;
 	struct timespec ts = {0};
 	sigset_t mask, oldmask;
+	int mask_saved = 0;
 	char c = 0;
 
 	TEST_START("pselect_basic_test");
@@ -1054,6 +1240,7 @@ void pselect_basic_test(void)
 	sigaddset(&mask, SIGUSR2);
 	ret = sigprocmask(SIG_BLOCK, &mask, &oldmask);
 	CHECK(ret == 0, errno);
+	mask_saved = 1;
 
 	/*
 	 * Write data, then pselect with a null sigmask replacement.
@@ -1081,11 +1268,9 @@ void pselect_basic_test(void)
 	ret = pselect(0, NULL, NULL, NULL, &ts, NULL);
 	CHECK(ret == 0, errno, "pselect empty");
 
-	/* Restore original mask. */
-	sigprocmask(SIG_SETMASK, &oldmask, NULL);
-
 out:
-	sigprocmask(SIG_SETMASK, &oldmask, NULL);
+	if (mask_saved)
+		sigprocmask(SIG_SETMASK, &oldmask, NULL);
 	test_close_fd(&p[0]);
 	test_close_fd(&p[1]);
 	test_close_fd(&phi[0]);

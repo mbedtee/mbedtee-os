@@ -8,6 +8,9 @@
 #include "mbedtest.h"
 #include "mbedtest_internal.h"
 
+/* support has no bound under load: wait on the clock, not on a count */
+#define TMR_WAIT_MS	20000
+
 static int sigev_cnt = 0, sigev_cnt_sig = 0;
 
 /*
@@ -163,6 +166,53 @@ void clock_getres_test(void)
 	CHECK(ret == 0, errno, "CLOCK_MONOTONIC");
 	CHECK(ts.tv_sec >= 0, ERANGE, "MONO sec=%ld", (long)ts.tv_sec);
 	CHECK(ts.tv_nsec >= 0, ERANGE, "MONO nsec=%ld", (long)ts.tv_nsec);
+
+out:
+	TEST_END();
+}
+
+/*
+ * cpuclockid_test: clock_getcpuclockid() contract - errnos are returned
+ * directly, not as -1/errno (user/syscall/time.c)
+ */
+void cpuclockid_test(void)
+{
+	clockid_t clk = (clockid_t)-1;
+	struct timespec ts = {0}, ts2 = {0};
+	int ret = -1;
+
+	TEST_START("cpuclockid_test");
+
+	ret = clock_getcpuclockid(0, &clk);
+	CHECK(ret == 0, ret, "pid=0 ret=%d", ret);
+	CHECK(clk == CLOCK_PROCESS_CPUTIME_ID, EINVAL, "clockid=%d", (int)clk);
+
+	ret = clock_gettime(clk, &ts);
+	CHECK(ret == 0, errno, "clock_gettime(cpuclockid)");
+
+	/* the returned clockid must behave like CLOCK_PROCESS_CPUTIME_ID */
+	ret = clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts2);
+	CHECK(ret == 0, errno, "clock_gettime(PROCESS_CPUTIME)");
+	CHECK(ts2.tv_sec > ts.tv_sec ||
+		(ts2.tv_sec == ts.tv_sec && ts2.tv_nsec >= ts.tv_nsec),
+		EINVAL, "cpu clock went backwards");
+
+	ret = clock_getcpuclockid(getpid(), &clk);
+	CHECK(ret == 0, ret, "own pid ret=%d", ret);
+	CHECK(clk == CLOCK_PROCESS_CPUTIME_ID, EINVAL, "own clockid=%d",
+		(int)clk);
+
+	/* no such process: ESRCH (POSIX), returned directly */
+	ret = clock_getcpuclockid(INT_MAX, &clk);
+	CHECK(ret == ESRCH, ret, "unknown pid ret=%d", ret);
+
+	/* a foreign pid: ESRCH when gone, EPERM when alive - never success */
+	ret = clock_getcpuclockid(getpid() + 1, &clk);
+	CHECK((ret == ESRCH) || (ret == EPERM), ret, "foreign pid ret=%d", ret);
+
+	/* NULL clockid: EINVAL, returned directly */
+	ret = clock_getcpuclockid(0, NULL);
+	CHECK(ret == EINVAL, ret, "NULL clockid ret=%d", ret);
 
 out:
 	TEST_END();
@@ -377,14 +427,32 @@ out:
 }
 
 static volatile sig_atomic_t getoverrun_count;
+static volatile sig_atomic_t getoverrun_latched;	/* timer_getoverrun() in the handler */
+static volatile int getoverrun_field = -1;	/* si_overrun of that delivery */
+static timer_t getoverrun_timerid;
+
+/* sigevent marker: only this timer's notifications are counted */
+#define GETOVERRUN_SIGVAL 0x5a5a1234
+
 static void getoverrun_sigev(int signo, siginfo_t *info, void *ctx)
 {
-	getoverrun_count++;
+	if (!info || info->si_value.sival_int != GETOVERRUN_SIGVAL)
+		return;
+
+	/* POSIX: the count belongs to the notification being handled */
+	if (getoverrun_count++ == 0) {
+		getoverrun_latched = timer_getoverrun(getoverrun_timerid);
+		getoverrun_field = info->si_overrun;
+	}
 }
 
 /*
- * timer_getoverrun_test: verify timer_getoverrun() returns zero
- * after timer cancellation, and >0 when timer expires faster than handled.
+ * timer_getoverrun_test: timer_getoverrun() reports the overrun count of the
+ * notified expiry, and the handler sees the same number in si_overrun.
+ *
+ * Single-threaded only (runs first in the suite): with a sibling thread the
+ * next delivery is accepted concurrently and moves the timer's latch between
+ * the handler's two reads - POSIX-legal, but then there is nothing to assert.
  */
 void timer_getoverrun_test(void)
 {
@@ -395,6 +463,7 @@ void timer_getoverrun_test(void)
 	int created = 0, sa_installed = 0;
 	int overrun = 0;
 	int ret = 0;
+	int mask_blocked = 0;
 	sigset_t blkset, oldset;
 
 	TEST_START("timer_getoverrun_test");
@@ -403,6 +472,8 @@ void timer_getoverrun_test(void)
 	sa.sa_flags = SA_SIGINFO;
 	sigemptyset(&sa.sa_mask);
 	getoverrun_count = 0;
+	getoverrun_latched = -1;
+	getoverrun_field = -1;
 
 	ret = sigaction(SIGUSR1, &sa, &oldsa);
 	CHECK(ret == 0, errno, "sigaction USR1");
@@ -410,9 +481,11 @@ void timer_getoverrun_test(void)
 
 	sev.sigev_notify = SIGEV_SIGNAL;
 	sev.sigev_signo = SIGUSR1;
+	sev.sigev_value.sival_int = GETOVERRUN_SIGVAL;
 	ret = timer_create(CLOCK_REALTIME, &sev, &timerid);
 	CHECK(ret == 0, errno, "timer_create");
 	created = 1;
+	getoverrun_timerid = timerid;
 
 	/*
 	 * Fast periodic timer: 1 ms interval, 1 ms first expiry.
@@ -422,6 +495,7 @@ void timer_getoverrun_test(void)
 	sigaddset(&blkset, SIGUSR1);
 	ret = sigprocmask(SIG_BLOCK, &blkset, &oldset);
 	CHECK(ret == 0, errno, "sigprocmask block");
+	mask_blocked = 1;
 
 	its.it_value.tv_sec = 0;
 	its.it_value.tv_nsec = 1 * 1000 * 1000;  /* 1 ms */
@@ -434,11 +508,19 @@ void timer_getoverrun_test(void)
 
 	ret = sigprocmask(SIG_SETMASK, &oldset, NULL);
 	CHECK(ret == 0, errno, "sigprocmask unblock");
+	mask_blocked = 0;
 
 	/* Give the queued signal a moment to deliver. */
 	usleep(10 * 1000);
-	overrun = timer_getoverrun(timerid);
-	CHECK(overrun >= 0, errno, "timer_getoverrun=%d", overrun);
+
+	CHECK(getoverrun_count > 0, ETIMEDOUT, "SIGUSR1 never delivered");
+
+	overrun = getoverrun_latched;
+	CHECK(overrun >= 0, ERANGE, "timer_getoverrun()=%d", overrun);
+	CHECK(getoverrun_field == overrun, EBADMSG,
+		"si_overrun=%d timer_getoverrun()=%d",
+		getoverrun_field, overrun);
+	TDBG("getoverrun count=%d latched=%d\n", (int)getoverrun_count, overrun);
 
 out:
 	if (created) {
@@ -447,6 +529,278 @@ out:
 		timer_delete(timerid);
 	}
 	if (sa_installed)
+		sigaction(SIGUSR1, &oldsa, NULL);
+	if (mask_blocked)
+		sigprocmask(SIG_SETMASK, &oldset, NULL);
+	TEST_END();
+}
+
+/* wait for a blocked SIGUSR1 notification to be queued */
+static bool tmr_wait_pending(void)
+{
+	struct timespec t0;
+	sigset_t pend;
+
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+
+	for (;;) {
+		if (sigpending(&pend) != 0)
+			return false;
+		if (sigismember(&pend, SIGUSR1))
+			return true;
+		if (test_ms_since(&t0) >= TMR_WAIT_MS)
+			return false;
+
+		usleep(1000);
+	}
+}
+
+/*
+ * timer_stale_signal_test: a notification generated but not yet delivered
+ * must be dropped by timer_delete()/disarm, like Linux does; otherwise it
+ * is delivered later, to whatever handler is installed at that point.
+ *
+ * Must run before any test that creates threads: a live sibling thread
+ * with SIGUSR1 unblocked steals the process-directed notification even
+ * while this thread has it blocked (POSIX-legal; same happens on Linux).
+ */
+static volatile sig_atomic_t stale_cnt;
+static volatile int stale_tid;	/* tid the handler ran on (diagnostic) */
+
+static void stale_sigev(int signo, siginfo_t *info, void *ctx)
+{
+	stale_tid = gettid();
+	stale_cnt++;
+}
+
+void timer_stale_signal_test(void)
+{
+	struct sigaction sa = {0}, oldsa = {0};
+	struct sigevent sev = {0};
+	struct itimerspec its = {0};
+	struct itimerspec zero = {0};
+	sigset_t set, pend;
+	timer_t tid = (timer_t)0;
+	int created = 0, sa_set = 0;
+	int ret = 0;
+	int main_tid = gettid();
+	struct timespec t0;
+
+	TEST_START("timer_stale_signal_test");
+
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+
+	sa.sa_sigaction = stale_sigev;
+	sa.sa_flags = SA_SIGINFO;
+	sigemptyset(&sa.sa_mask);
+	ret = sigaction(SIGUSR1, &sa, &oldsa);
+	CHECK(ret == 0, errno, "sigaction");
+	sa_set = 1;
+
+	sev.sigev_notify = SIGEV_SIGNAL;
+	sev.sigev_signo = SIGUSR1;
+	its.it_value.tv_nsec = 1 * 1000 * 1000;	/* one-shot, 1 ms */
+
+	/* pending notification + timer_delete() */
+	stale_cnt = 0;
+	stale_tid = 0;
+	ret = sigprocmask(SIG_BLOCK, &set, NULL);
+	CHECK(ret == 0, errno, "block");
+	ret = timer_create(CLOCK_REALTIME, &sev, &tid);
+	CHECK(ret == 0, errno, "timer_create");
+	created = 1;
+	ret = timer_settime(tid, 0, &its, NULL);
+	CHECK(ret == 0, errno, "timer_settime");
+	/* queued first: only a queued notification can be retracted */
+	CHECK(tmr_wait_pending(), ETIMEDOUT,
+		"no notification before timer_delete()");
+	ret = timer_delete(tid);
+	CHECK(ret == 0, errno, "timer_delete");
+	created = 0;
+
+	ret = sigpending(&pend);
+	CHECK(ret == 0, errno, "sigpending");
+	CHECK(!sigismember(&pend, SIGUSR1), EBADMSG,
+		"deleted timer leaves signal pending");
+
+	ret = sigprocmask(SIG_UNBLOCK, &set, NULL);
+	CHECK(ret == 0, errno, "unblock");
+	usleep(50 * 1000);
+	CHECK(stale_cnt == 0, EBADMSG,
+		"stale signal delivered cnt=%d tid=%d main=%d",
+		(int)stale_cnt, (int)stale_tid, main_tid);
+
+	/* pending notification + disarm */
+	stale_cnt = 0;
+	stale_tid = 0;
+	ret = sigprocmask(SIG_BLOCK, &set, NULL);
+	CHECK(ret == 0, errno, "block");
+	ret = timer_create(CLOCK_REALTIME, &sev, &tid);
+	CHECK(ret == 0, errno, "timer_create");
+	created = 1;
+	ret = timer_settime(tid, 0, &its, NULL);
+	CHECK(ret == 0, errno, "timer_settime");
+	CHECK(tmr_wait_pending(), ETIMEDOUT,
+		"no notification before disarm");
+	ret = timer_settime(tid, 0, &zero, NULL);
+	CHECK(ret == 0, errno, "disarm");
+	ret = sigprocmask(SIG_UNBLOCK, &set, NULL);
+	CHECK(ret == 0, errno, "unblock");
+	usleep(50 * 1000);
+	CHECK(stale_cnt == 0, EBADMSG,
+		"disarmed timer delivered cnt=%d tid=%d main=%d",
+		(int)stale_cnt, (int)stale_tid, main_tid);
+
+	/* control: the same timer still delivers while left armed */
+	stale_cnt = 0;
+	stale_tid = 0;
+	ret = sigprocmask(SIG_BLOCK, &set, NULL);
+	CHECK(ret == 0, errno, "block");
+	ret = timer_settime(tid, 0, &its, NULL);
+	CHECK(ret == 0, errno, "arm again");
+	CHECK(tmr_wait_pending(), ETIMEDOUT,
+		"no notification before the control wait");
+	ret = sigprocmask(SIG_UNBLOCK, &set, NULL);
+	CHECK(ret == 0, errno, "unblock");
+
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	while ((stale_cnt == 0) && (test_ms_since(&t0) < TMR_WAIT_MS))
+		usleep(1000);
+
+	CHECK(stale_cnt == 1, ETIMEDOUT, "control delivery cnt=%d",
+		(int)stale_cnt);
+
+out:
+	if (created)
+		timer_delete(tid);
+	/* drain a leaked notification so later tests do not see it */
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
+	usleep(10 * 1000);
+	if (sa_set)
+		sigaction(SIGUSR1, &oldsa, NULL);
+	TEST_END();
+}
+
+/* one-shot SIGUSR1 timer carrying #mark in sigev_value */
+static int tmr_mark_arm(timer_t *tid, int mark)
+{
+	struct sigevent sev = {0};
+	struct itimerspec its = {0};
+
+	sev.sigev_notify = SIGEV_SIGNAL;
+	sev.sigev_signo = SIGUSR1;
+	sev.sigev_value.sival_int = mark;
+	its.it_value.tv_nsec = 50 * 1000 * 1000;	/* 50 ms */
+
+	if (timer_create(CLOCK_REALTIME, &sev, tid) != 0)
+		return -errno;
+
+	return timer_settime(*tid, 0, &its, NULL) == 0 ? 0 : -errno;
+}
+
+static volatile sig_atomic_t tmr_mark_hits[2];
+
+static void tmr_mark_handler(int signo, siginfo_t *info, void *ctx)
+{
+	int mark = info ? info->si_value.sival_int : -1;
+
+	if ((mark >= 0) && (mark < 2))
+		tmr_mark_hits[mark]++;
+}
+
+/*
+ * timer_ignored_pending_test: SIG_IGN discards a queued notification and its
+ * timer must forget it - else timer_delete() of that timer retracts the pending
+ * notification of another timer sharing the signo (single-threaded only).
+ */
+void timer_ignored_pending_test(void)
+{
+	struct sigaction sa = {0}, oldsa = {0};
+	sigset_t set, pend;
+	struct timespec t0, ts;
+	timer_t a = 0, b = 0;
+	int sa_set = 0, a_ok = 0, b_ok = 0, ret = 0;
+
+	TEST_START("timer_ignored_pending_test");
+
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+
+	tmr_mark_hits[0] = tmr_mark_hits[1] = 0;
+
+	/* block before the handler, or a delivery lands between two statements */
+	ret = sigprocmask(SIG_BLOCK, &set, NULL);
+	CHECK(ret == 0, errno, "block SIGUSR1");
+
+	/* drop a leftover of an earlier test that gave up waiting for its own */
+	ts.tv_sec = 0;
+	ts.tv_nsec = 0;
+	while (sigtimedwait(&set, NULL, &ts) == SIGUSR1)
+		;
+
+	sa.sa_sigaction = tmr_mark_handler;
+	sa.sa_flags = SA_SIGINFO;
+	sigemptyset(&sa.sa_mask);
+	ret = sigaction(SIGUSR1, &sa, &oldsa);
+	CHECK(ret == 0, errno, "sigaction");
+	sa_set = 1;
+
+	ret = tmr_mark_arm(&a, 0);
+	CHECK(ret == 0, -ret, "arm A");
+	a_ok = 1;
+
+	CHECK(tmr_wait_pending(), ETIMEDOUT,
+		"A's notification never queued");
+
+	/* SIG_IGN discards it */
+	sa.sa_flags = 0;
+	sa.sa_handler = SIG_IGN;
+	ret = sigaction(SIGUSR1, &sa, NULL);
+	CHECK(ret == 0, errno, "sigaction SIG_IGN");
+
+	ret = sigpending(&pend);
+	CHECK(ret == 0, errno, "sigpending");
+	CHECK(!sigismember(&pend, SIGUSR1), EBADMSG,
+		"SIG_IGN leaves the notification pending");
+
+	sa.sa_sigaction = tmr_mark_handler;
+	sa.sa_flags = SA_SIGINFO;
+	ret = sigaction(SIGUSR1, &sa, NULL);
+	CHECK(ret == 0, errno, "sigaction handler");
+
+	ret = tmr_mark_arm(&b, 1);
+	CHECK(ret == 0, -ret, "arm B");
+	b_ok = 1;
+
+	/* it must be queued first: the delete below can only retract what is there */
+	CHECK(tmr_wait_pending(), ETIMEDOUT,
+		"B's notification never queued");
+
+	/* deleting A must leave B's notification alone */
+	ret = timer_delete(a);
+	CHECK(ret == 0, errno, "timer_delete(A)");
+	a_ok = 0;
+
+	ret = sigprocmask(SIG_UNBLOCK, &set, NULL);
+	CHECK(ret == 0, errno, "unblock SIGUSR1");
+
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+	while ((tmr_mark_hits[1] == 0) && (test_ms_since(&t0) < TMR_WAIT_MS))
+		usleep(2000);
+
+	/* B was queued above and is unblocked: losing it means A's delete took it */
+	CHECK(tmr_mark_hits[1] > 0, EBADMSG, "B lost after timer_delete(A)");
+	CHECK(tmr_mark_hits[0] == 0, EBADMSG, "discarded A delivered");
+
+out:
+	if (b_ok)
+		timer_delete(b);
+	if (a_ok)
+		timer_delete(a);
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
+	usleep(10 * 1000);	/* drain a leaked notification */
+	if (sa_set)
 		sigaction(SIGUSR1, &oldsa, NULL);
 	TEST_END();
 }

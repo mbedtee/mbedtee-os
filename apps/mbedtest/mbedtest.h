@@ -9,9 +9,10 @@
  *   TEST_START(name)              -- start a top-level test
  *   TEST_START_SIG(name)          -- start a signal-handler test (sub-key)
  *   CHECK(cond, err [,fmt, ...])  -- fatal: goto out if !cond
- *   TEST_ERRNO()                  -- 0 or negative errno/code from CHECK
+ *   TEST_ERRNO()                  -- 0 or the raw err/code from CHECK
  *   TEST_FAILED()                 -- non-zero after a failed CHECK
- *   TEST_END()                    -- end any test; returns 0 or -err
+ *   TEST_END()                    -- end any test; returns 0 or +errno
+ *                                    (child modes exit with this value)
  *
  * Dual-key design:
  *   Two pthread TLS keys (main / sub) keep signal-handler and main-test

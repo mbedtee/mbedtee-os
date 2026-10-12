@@ -404,7 +404,7 @@ out:
  * float_convert_test -- float <-> int and float <-> double conversions.
  * Exercises FCVT / FCVTS / FCVTD instructions.
  */
-void float_convert_test(void)
+static void float_convert_test(void)
 {
 	int i32 = 0;
 	unsigned u32 = 0;

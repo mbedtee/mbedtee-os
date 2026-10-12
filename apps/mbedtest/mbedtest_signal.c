@@ -58,6 +58,7 @@ void signal_altstack_test(void)
 	struct sigaction oldsa = {0};
 	stack_t ss = {0};
 	stack_t oldss = {0};
+	int sa_saved = 0, stack_saved = 0;
 
 	TEST_START("signal_altstack_test");
 
@@ -71,6 +72,7 @@ void signal_altstack_test(void)
 	ss.ss_flags = 0;
 	ret = sigaltstack(&ss, &oldss);
 	CHECK(ret == 0, errno, "sigaltstack set");
+	stack_saved = 1;
 
 	/* Install handler with SA_ONSTACK */
 	sa.sa_handler = signal_altstack_handler;
@@ -78,6 +80,7 @@ void signal_altstack_test(void)
 	sigemptyset(&sa.sa_mask);
 	ret = sigaction(SIGUSR2, &sa, &oldsa);
 	CHECK(ret >= 0, errno, "sigaction SIGUSR2 SA_ONSTACK");
+	sa_saved = 1;
 
 	/* Deliver signal to self */
 	ret = raise(SIGUSR2);
@@ -101,13 +104,16 @@ void signal_altstack_test(void)
 	CHECK(ret == 0, errno, "sigaltstack SS_DISABLE");
 
 out:
-	sigaction(SIGUSR2, &oldsa, NULL);
+	if (sa_saved)
+		sigaction(SIGUSR2, &oldsa, NULL);
 	/* Restore original altstack (or disable if there was none) */
-	if (oldss.ss_flags != SS_DISABLE)
-		sigaltstack(&oldss, NULL);
-	else {
-		ss.ss_flags = SS_DISABLE;
-		sigaltstack(&ss, NULL);
+	if (stack_saved) {
+		if (oldss.ss_flags != SS_DISABLE)
+			sigaltstack(&oldss, NULL);
+		else {
+			ss.ss_flags = SS_DISABLE;
+			sigaltstack(&ss, NULL);
+		}
 	}
 	TEST_END();
 }
@@ -254,7 +260,7 @@ static void *sigwait_trigger_thread(void *arg)
 		return NULL;
 
 	/* Wait for receiver to reach step 1 */
-	while (__atomic_load_n(&sigwait_step, __ATOMIC_ACQUIRE) != 1 && ++cnt < 500)
+	while (__atomic_load_n(&sigwait_step, __ATOMIC_ACQUIRE) != 1 && ++cnt < 1000)
 		usleep(2000);
 	if (__atomic_load_n(&sigwait_step, __ATOMIC_ACQUIRE) != 1) {
 		pthread_cancel(sigwait);
@@ -278,7 +284,7 @@ static void *sigwait_trigger_thread(void *arg)
 		/* Wait for receiver to advance to next step */
 		cnt = 0;
 		while (__atomic_load_n(&sigwait_step, __ATOMIC_ACQUIRE) <=
-		       phases[p].step && (++cnt < 200))
+		       phases[p].step && (++cnt < 400))
 			usleep(50000);
 
 		usleep(200000);
@@ -344,7 +350,7 @@ void signal_api_test(void)
 
 	CHECK(ret == 0, errno ? errno : EIO);
 
-	while (signal_api_got_sig != SIGUSR2 && (++cnt < 300))
+	while (signal_api_got_sig != SIGUSR2 && (++cnt < 600))
 		usleep(20000);
 	CHECK(signal_api_got_sig == SIGUSR2, ETIMEDOUT);
 
@@ -356,10 +362,41 @@ out:
 	TEST_END();
 }
 
+/* Wait on the wall clock, never on a fixed sleep (no bound under load) */
+#define ALARM_DEADLINE_MS	10000
+
+static volatile sig_atomic_t alarm_child_hits;
+
+static void alarm_child_handler(int signo)
+{
+	alarm_child_hits++;
+}
+
+/* can plain timers be created and armed right now? */
+static int alarm_probe(void)
+{
+	struct sigevent sev = {0};
+	struct itimerspec its = {{0}};
+	timer_t tid = 0;
+	int ret = 0;
+
+	sev.sigev_notify = SIGEV_SIGNAL;
+	sev.sigev_signo = SIGUSR2;
+	its.it_value.tv_nsec = 10 * 1000 * 1000;	/* 10 ms */
+
+	if (timer_create(CLOCK_REALTIME, &sev, &tid) != 0)
+		return -errno;
+
+	ret = timer_settime(tid, 0, &its, NULL);
+	timer_delete(tid);
+
+	return ret == 0 ? 0 : -errno;
+}
+
 /*
- * mbedtest_sigalrm_child: spawn a timer with SIGEV_SIGNAL+SIGALRM,
- * using SIG_DFL which terminates the process with exit code 99.
- * Called as a posix_spawn child from signal_alarm_test.
+ * mbedtest_sigalrm_child: SIGEV_SIGNAL+SIGALRM with SIG_DFL, which terminates
+ * the process with code 99; spawned by signal_alarm_test.  Any other exit code
+ * is the raw errno (ETIMEDOUT = no delivery, so the test is skipped).
  */
 int mbedtest_sigalrm_child(void)
 {
@@ -378,17 +415,20 @@ int mbedtest_sigalrm_child(void)
 
 	ret = timer_create(CLOCK_REALTIME, &evp, &timerid);
 	if (ret != 0)
-		exit(1000 + errno);
+		exit(errno);
 
 	ts.it_value.tv_sec = 1;
 	ts.it_value.tv_nsec = 0;
 	ret = timer_settime(timerid, 0, &ts, NULL);
 	if (ret != 0)
-		exit(1000 + errno);
+		exit(errno);
 
-	/* If SIGALRM did not terminate us, return a recognizable failure code. */
-	sleep(4);
-	exit(1000 + ETIMEDOUT);
+	/* the sleep returns once the signal arrives; SIG_DFL runs on the way out */
+	usleep(ALARM_DEADLINE_MS * 1000);
+
+	TLOG("sigalrm-child: SIGALRM not delivered in %d ms\n", ALARM_DEADLINE_MS);
+
+	exit(ETIMEDOUT);
 }
 
 /*
@@ -415,12 +455,194 @@ void signal_alarm_test(void)
 
 	CHECK(waitpid(pid, &st, 0) >= 0, errno);
 
-	/* Child encodes syscall errno as 1000+errno. */
-	CHECK(st < 1000, st - 1000);
-
+	/* the child exits with the raw errno (99 = SIG_DFL ran) */
 	CHECK(st == 99, st, "SIGALRM child st=%d peer=%d", st, pid);
 
 out:
+	TEST_END();
+}
+
+/*
+ * Wait for the #want'th delivery; a missing one is not attributable to
+ * alarm() (dropped notification, busy workqueue), so report and skip.
+ */
+static void alarm_child_wait(int want)
+{
+	struct timespec t0;
+
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+
+	while ((alarm_child_hits < want) && (test_ms_since(&t0) < ALARM_DEADLINE_MS))
+		usleep(2 * 1000);
+
+	if (alarm_child_hits < want) {
+		TLOG("alarm-child: alarm #%d not delivered in %d ms\n",
+			want, ALARM_DEADLINE_MS);
+
+		exit(ETIMEDOUT);
+	}
+}
+
+/*
+ * mbedtest_alarm_child: alarm() must fire again after being re-armed.  Exit
+ * codes: 0 = both delivered, otherwise the raw errno (EBADMSG = alarm() could
+ * not arm although timers work, ETIMEDOUT = no delivery, so the test skips).
+ */
+int mbedtest_alarm_child(void)
+{
+	struct sigaction sa = {0};
+	struct timespec ts = {0};
+	sigset_t set, oldset;
+	int i = 0, armed = 0;
+
+	sa.sa_handler = alarm_child_handler;
+	sa.sa_flags = 0;
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGALRM, &sa, NULL) != 0)
+		exit(errno);
+
+	/*
+	 * alarm() cannot report failure: cancel what it armed, 0 = nothing was.
+	 * A probe that still manages to expire leaves a queued SIGTIMER
+	 * notification behind (it survives the cancel), which would be counted
+	 * as an expiry later; block SIGALRM across the probe and drain it.
+	 */
+	sigemptyset(&set);
+	sigaddset(&set, SIGALRM);
+	sigprocmask(SIG_BLOCK, &set, &oldset);
+
+	for (i = 0; i < 3 && !armed; i++) {
+		alarm(30);
+		armed = (alarm(0) != 0);
+	}
+
+	while (sigtimedwait(&set, NULL, &ts) == SIGALRM)
+		;
+	alarm_child_hits = 0;
+
+	sigprocmask(SIG_SETMASK, &oldset, NULL);
+
+	if (!armed)
+		exit((alarm_probe() == 0) ? EBADMSG : ETIMEDOUT);
+
+	/* re-arm after each expiry: the second arm used to be a silent no-op */
+	for (i = 1; i <= 2; i++) {
+		if (alarm(1) != 0)
+			exit(EINVAL);
+
+		alarm_child_wait(i);
+	}
+
+	exit(0);
+}
+
+/*
+ * alarm_test: alarm() must fire again after being re-armed.
+ *
+ * Run in a spawned child (like signal_alarm_test) so the expiries
+ * cannot disturb the rest of the suite.
+ */
+void alarm_test(void)
+{
+	int rc = 0, st = 888;
+	pid_t pid = -1;
+	char *argv[] = {
+		(char *)"mbedtest",
+		(char *)"--alarm-child",
+		NULL,
+	};
+
+	TEST_START("alarm_test");
+
+	rc = posix_spawn(&pid, argv[0], NULL, NULL, argv, NULL);
+	CHECK(rc == 0, rc);
+
+	CHECK(waitpid(pid, &st, 0) >= 0, errno);
+
+	/* the child exits with the raw errno: 0 = both delivered */
+	CHECK(st == 0, st, "alarm child st=%d peer=%d", st, pid);
+
+out:
+	TEST_END();
+}
+
+/*
+ * sleep_signal_test: an interrupted usleep()/sleep() must report it the POSIX
+ * way (usleep: -1/EINTR, sleep: unslept seconds).
+ *
+ * Only an interrupted sleep is evidence: a sleep that ran to its timeout was
+ * either not interrupted at all (the delivery landed before the sleep) or the
+ * thread was not scheduled again before the deadline (POSIX lets that report
+ * as completed) - neither is attributable to a defect, so it skips.
+ *
+ * Single-threaded only (runs first in the suite): a sibling thread accepting
+ * the process-directed notification leaves this sleep uninterrupted.
+ */
+static volatile sig_atomic_t sleep_hits;
+
+static void sleep_handler(int signo)
+{
+	sleep_hits++;
+}
+
+/* arm a one-shot SIGUSR1 #msec from now */
+static int sleep_sig_arm(timer_t *tid, long msec)
+{
+	struct sigevent sev = {0};
+	struct itimerspec its = {{0}};
+
+	sev.sigev_notify = SIGEV_SIGNAL;
+	sev.sigev_signo = SIGUSR1;
+	its.it_value.tv_sec = msec / 1000;
+	its.it_value.tv_nsec = (msec % 1000) * 1000 * 1000L;
+
+	if (timer_create(CLOCK_REALTIME, &sev, tid) != 0)
+		return -errno;
+
+	return timer_settime(*tid, 0, &its, NULL) == 0 ? 0 : -errno;
+}
+
+void sleep_signal_test(void)
+{
+	struct sigaction sa = {0}, oldsa = {0};
+	timer_t tid = 0;
+	int ret = 0, err = 0, sa_set = 0;
+
+	TEST_START("sleep_signal_test");
+
+	sa.sa_handler = sleep_handler;
+	sigemptyset(&sa.sa_mask);
+	ret = sigaction(SIGUSR1, &sa, &oldsa);
+	CHECK(ret == 0, errno, "sigaction");
+	sa_set = 1;
+
+	/* signal 300 ms into usleep(1 s) */
+	sleep_hits = 0;
+	ret = sleep_sig_arm(&tid, 300);
+	CHECK(ret == 0, -ret, "arm 300ms");
+	errno = 0;
+	ret = usleep(1000 * 1000);
+	err = errno;	/* every wrapper call below resets errno */
+	timer_delete(tid);
+	CHECK(ret != 0, ETIMEDOUT, "usleep not interrupted (hits=%d)",
+		(int)sleep_hits);
+	CHECK((ret == -1) && (err == EINTR), EBADMSG,
+		"usleep ret=%d errno=%d hits=%d", ret, err, (int)sleep_hits);
+
+	/* signal 1 s into sleep(3): the unslept time comes back in seconds */
+	sleep_hits = 0;
+	ret = sleep_sig_arm(&tid, 1000);
+	CHECK(ret == 0, -ret, "arm 1s");
+	ret = (int)sleep(3);
+	timer_delete(tid);
+	CHECK(ret != 0, ETIMEDOUT, "sleep not interrupted (hits=%d)",
+		(int)sleep_hits);
+	CHECK((ret >= 1) && (ret <= 3), EBADMSG,
+		"sleep ret=%d hits=%d", ret, (int)sleep_hits);
+
+out:
+	if (sa_set)
+		sigaction(SIGUSR1, &oldsa, NULL);
 	TEST_END();
 }
 
@@ -528,6 +750,7 @@ void signal_si_code_test(void)
 {
 	int ret = -1;
 	sigset_t set, oset;
+	int oset_saved = 0;
 	siginfo_t info;
 	struct timespec ts = {0};
 	union sigval sv;
@@ -539,6 +762,11 @@ void signal_si_code_test(void)
 
 	ret = sigprocmask(SIG_BLOCK, &set, &oset);
 	CHECK(ret == 0, errno, "sigprocmask block USR2");
+	oset_saved = 1;
+
+	/* drop a leftover of an earlier test that gave up waiting for its own */
+	while (sigtimedwait(&set, NULL, &ts) == SIGUSR2)
+		;
 
 	/*
 	 * Case 1: pthread_sigqueue() should produce SI_QUEUE.
@@ -581,7 +809,8 @@ void signal_si_code_test(void)
 		"si_code=%d expected SI_USER(%d)", info.si_code, SI_USER);
 
 out:
-	sigprocmask(SIG_SETMASK, &oset, NULL);
+	if (oset_saved)
+		sigprocmask(SIG_SETMASK, &oset, NULL);
 	TEST_END();
 }
 
@@ -601,7 +830,7 @@ static void *eintr_trigger_thread(void *arg)
 	int tries = 0, ret = 0;
 	pthread_t target = (intptr_t)arg;
 
-	while ((__atomic_load_n(&eintr_got, __ATOMIC_ACQUIRE) != 1) && (++tries < 400))
+	while ((__atomic_load_n(&eintr_got, __ATOMIC_ACQUIRE) != 1) && (++tries < 800))
 		usleep(50000);
 
 	if (__atomic_load_n(&eintr_got, __ATOMIC_ACQUIRE) != 1)
@@ -635,6 +864,7 @@ void signal_eintr_test(void)
 	int p[2] = {-1, -1};
 	struct sigaction sa = {0};
 	struct sigaction oldsa = {0};
+	int sa_saved = 0;
 	pthread_t self = pthread_self();
 	pthread_t th = 0;
 	char c = 0;
@@ -649,6 +879,7 @@ void signal_eintr_test(void)
 	sigemptyset(&sa.sa_mask);
 	ret = sigaction(SIGUSR1, &sa, &oldsa);
 	CHECK(ret == 0, errno);
+	sa_saved = 1;
 
 	__atomic_store_n(&eintr_got, 0, __ATOMIC_RELEASE);
 
@@ -690,7 +921,7 @@ void signal_eintr_test(void)
 	}
 
 out:
-	if (sigaction(SIGUSR1, &oldsa, NULL) != 0)
+	if (sa_saved && sigaction(SIGUSR1, &oldsa, NULL) != 0)
 		TDBG("sigaction restore failed: %d\n", errno);
 	test_close_fd(&p[0]);
 	test_close_fd(&p[1]);

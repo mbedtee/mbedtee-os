@@ -2,8 +2,8 @@
 /*
  * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
  *
- * mbedtest.c -- Unified test framework: lifecycle, assertions,
- * shared utilities (hex, I/O helpers, path/cleanup).
+ * mbedtest.c -- Unified test framework: test context/lifecycle,
+ * assertions, result accounting and summary.
  */
 
 #include "mbedtest.h"
@@ -183,7 +183,8 @@ int test_end(struct test_ctx *t)
 	else
 		test_set_main(NULL);
 
-	return t->err ? -t->err : 0;
+	/* positive errno as exit code: peers classify it with their own table */
+	return t->err;
 }
 
 int test_check(const char *scope, int line, const char *expr, int ok,
@@ -228,7 +229,7 @@ int test_is_resource_error(int e)
 {
 	return e == EMFILE || e == ENFILE || e == ENOMEM ||
 		e == ENOSPC || e == EDQUOT || e == EFAULT ||
-		e == EINTR || e == ETIMEDOUT || e == ENOSYS ||
+		e == EINTR || e == ETIMEDOUT ||
 		e == ENOTSUP || e == EBUSY;
 }
 

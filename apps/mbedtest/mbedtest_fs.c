@@ -48,6 +48,7 @@ static int fs_basic_rw_test(const char *rootdir)
 		rootdir, gettid(), test_rand(), test_rand());
 
 	test_unlink(name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(fd >= 0, errno, "open %s", name);
@@ -95,7 +96,7 @@ out:
 	test_close_fd(&fd_rd);
 	test_close_fd(&fd_wr);
 	test_close_fd(&fd);
-	test_unlink(name);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -119,6 +120,7 @@ static int fs_pread_pwrite_test(const char *rootdir)
 		rootdir, gettid(), test_rand(), test_rand());
 
 	test_unlink(name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(fd >= 0, errno, "open %s", name);
@@ -175,7 +177,7 @@ static int fs_pread_pwrite_test(const char *rootdir)
 
 out:
 	test_close_fd(&fd);
-	test_unlink(name);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -195,6 +197,9 @@ static int fs_rename_to_existing(const char *rootdir)
 		rootdir, gettid(), test_rand(), test_rand());
 	test_unlink(over_src);
 	test_unlink(over_dst);
+	/* Abort-safe cleanup: unlink on OOM/abort via pthread cleanup. */
+	pthread_cleanup_push((void (*)(void *))test_unlink, over_src);
+	pthread_cleanup_push((void (*)(void *))test_unlink, over_dst);
 
 	over_fd = open(over_src, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(over_fd >= 0, errno, "over_src %s", over_src);
@@ -252,8 +257,8 @@ static int fs_rename_to_existing(const char *rootdir)
 out:
 	test_close_fd(&over_dst_fd);
 	test_close_fd(&over_fd);
-	test_unlink(over_src);
-	test_unlink(over_dst);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -286,6 +291,14 @@ static int fs_rename_to_dir(const char *rootdir)
 	test_unlink(mv_src);
 	test_unlink(mv_src2);
 	test_rmdir(mv_dir);
+	/*
+	 * Abort-safe cleanup: LIFO order so the files (including
+	 * mv_dir/bb) are removed before the directory itself.
+	 */
+	pthread_cleanup_push((void (*)(void *))test_rmdir, mv_dir);
+	pthread_cleanup_push((void (*)(void *))test_unlink, mv_dst);
+	pthread_cleanup_push((void (*)(void *))test_unlink, mv_src2);
+	pthread_cleanup_push((void (*)(void *))test_unlink, mv_src);
 
 	mv_fd = open(mv_src, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(mv_fd >= 0, errno, "mv_src %s", mv_src);
@@ -328,10 +341,10 @@ static int fs_rename_to_dir(const char *rootdir)
 	test_close_fd(&mv_fd);
 
 out:
-	test_unlink(mv_dst);
-	test_unlink(mv_src);
-	test_unlink(mv_src2);
-	test_rmdir(mv_dir);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -353,7 +366,10 @@ static int fs_rename_test(const char *rootdir)
 	int seekval = 0;
 
 	namestr = calloc(1, FS_BUFFER_SIZE * 5);
-	CHECK(namestr, ENOMEM, "alloc rename names");
+	if (!namestr) {
+		TERR("alloc rename names\n");
+		return ENOMEM;
+	}
 
 	name = namestr;
 	name2 = name + FS_BUFFER_SIZE;
@@ -374,6 +390,14 @@ static int fs_rename_test(const char *rootdir)
 	test_unlink(name2);
 	test_rmdir(dir);
 	test_rmdir(dir2);
+	/*
+	 * Abort-safe cleanup: the rename may swap dir<->dir2, so
+	 * remove both names on abort.
+	 */
+	pthread_cleanup_push((void (*)(void *))test_rmdir, dir2);
+	pthread_cleanup_push((void (*)(void *))test_rmdir, dir);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name2);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	keepfd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(keepfd >= 0, errno, "open %s", name);
@@ -465,10 +489,10 @@ out:
 	test_close_fd(&renamefd);
 	test_close_fd(&keepfd);
 	/* On failure we might have renamed dir->dir2, so cleanup both. */
-	test_rmdir(dir);
-	test_rmdir(dir2);
-	test_unlink(name);
-	test_unlink(name2);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
 	free(namestr);
 	return TEST_ERRNO();
 }
@@ -527,6 +551,8 @@ static size_t fs_detect_blksize(const char *rootdir)
 	snprintf(probe, sizeof(probe), "%s/blksz_%04d_%x%d.probe",
 		rootdir, gettid(), test_rand(), test_rand());
 
+	pthread_cleanup_push((void (*)(void *))test_unlink, probe);
+
 	fd = open(probe, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	if (fd >= 0) {
 		if (fstat(fd, &st) == 0 && st.st_blksize > 0)
@@ -534,7 +560,7 @@ static size_t fs_detect_blksize(const char *rootdir)
 		close(fd);
 	}
 
-	test_unlink(probe);
+	pthread_cleanup_pop(1);
 
 	TDBG("%s: blksize=%zu\n", rootdir, blksize);
 
@@ -555,6 +581,7 @@ static int fs_truncate_boundary_test(const char *rootdir, size_t blksize)
 	snprintf(name, FS_BUFFER_SIZE, "%s/fs_trunc_%04d.%x%d.txt",
 			rootdir, gettid(), test_rand(), test_rand());
 	test_unlink(name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	fd3 = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(fd3 >= 0, errno, "open %s", name);
@@ -628,7 +655,7 @@ static int fs_truncate_boundary_test(const char *rootdir, size_t blksize)
 
 out:
 	test_close_fd(&fd3);
-	test_unlink(name);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -645,6 +672,7 @@ static int fs_write_boundary_test(const char *rootdir, size_t blksize)
 	snprintf(name, FS_BUFFER_SIZE, "%s/fs%04d_wbnd.%x%d.txt",
 		rootdir, gettid(), test_rand(), test_rand());
 	test_unlink(name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	fd3 = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(fd3 >= 0, errno, "open %s", name);
@@ -704,7 +732,7 @@ static int fs_write_boundary_test(const char *rootdir, size_t blksize)
 out:
 	free(wbuf);
 	test_close_fd(&fd3);
-	test_unlink(name);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -722,6 +750,7 @@ static int fs_metadata_test(const char *rootdir)
 	snprintf(name, FS_BUFFER_SIZE, "%s/fs_%04d_meta.%x%d",
 		rootdir, gettid(), test_rand(), test_rand());
 	test_unlink(name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(fd >= 0, errno, "open %s", name);
@@ -744,7 +773,7 @@ static int fs_metadata_test(const char *rootdir)
 
 out:
 	test_close_fd(&fd);
-	test_unlink(name);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -763,6 +792,7 @@ static int fs_trunc_append_seek_test(const char *rootdir)
 		rootdir, gettid(), test_rand(), test_rand());
 
 	test_unlink(name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(fd >= 0, errno, "open %s", name);
@@ -804,7 +834,7 @@ static int fs_trunc_append_seek_test(const char *rootdir)
 
 out:
 	test_close_fd(&fd);
-	test_unlink(name);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -824,7 +854,10 @@ static int fs_basic_test(const char *rootdir, size_t blksize)
 	char *name = NULL, *excl_name = NULL;
 
 	namestr = calloc(1, FS_BUFFER_SIZE * 2);
-	CHECK(namestr, ENOMEM, "alloc fs names %s", rootdir);
+	if (!namestr) {
+		TERR("alloc fs names %s\n", rootdir);
+		return ENOMEM;
+	}
 
 	name = namestr;
 	excl_name = name + FS_BUFFER_SIZE;
@@ -837,6 +870,8 @@ static int fs_basic_test(const char *rootdir, size_t blksize)
 	/* Cleanup stale files from previous runs */
 	test_unlink(name);
 	test_unlink(excl_name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, excl_name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	/* Basic read/write test */
 	ret = fs_basic_rw_test(rootdir);
@@ -904,8 +939,8 @@ out:
 	test_close_fd(&fd3);
 	test_close_fd(&fd4);
 	test_close_fd(&fd_excl);
-	test_unlink(name);
-	test_unlink(excl_name);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
 	free(namestr);
 	return TEST_ERRNO();
 }
@@ -923,6 +958,7 @@ static int fs_hole_test(const char *rootdir, size_t blksize)
 	snprintf(name, FS_BUFFER_SIZE, "%s/fs_%04d_hole.%x%d.txt",
 		rootdir, gettid(), test_rand(), test_rand());
 	test_unlink(name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(fd >= 0, errno, "open %s", name);
@@ -947,7 +983,7 @@ static int fs_hole_test(const char *rootdir, size_t blksize)
 
 out:
 	test_close_fd(&fd);
-	test_unlink(name);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -970,6 +1006,7 @@ static int fs_append_test(const char *rootdir, size_t blksize)
 		rootdir, gettid(), test_rand(), test_rand());
 
 	test_unlink(name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(fd >= 0, errno, "open %s", name);
@@ -1055,7 +1092,7 @@ out:
 	test_close_fd(&fd);
 	test_close_fd(&fd_ap1);
 	test_close_fd(&fd_ap2);
-	test_unlink(name);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -1080,6 +1117,8 @@ static int fs_directory_test(const char *rootdir)
 
 	test_unlink(nameatdir);
 	test_rmdir(dir);
+	pthread_cleanup_push((void (*)(void *))test_rmdir, dir);
+	pthread_cleanup_push((void (*)(void *))test_unlink, nameatdir);
 
 	/* Create directory */
 	ret = mkdir(dir, 0600);
@@ -1136,9 +1175,36 @@ static int fs_directory_test(const char *rootdir)
 out:
 	test_close_fd(&fd);
 	closedir(dd);
-	test_unlink(nameatdir);
-	test_rmdir(dir);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
+}
+
+/*
+ * fs_seek_dir_cleanup: remove the fs_readdir_seek_test directory and the
+ * fXX files inside when the test aborts (OOM etc.).
+ */
+static void fs_seek_dir_cleanup(void *arg)
+{
+	const char *dir = arg;
+	char path[FS_BUFFER_SIZE * 2] = {0};
+	struct dirent *de = NULL;
+	DIR *dd = NULL;
+
+	dd = opendir(dir);
+	if (dd) {
+		while ((de = readdir(dd)) != NULL) {
+			if (!strcmp(de->d_name, ".") ||
+			    !strcmp(de->d_name, ".."))
+				continue;
+
+			snprintf(path, sizeof(path), "%s/%s", dir, de->d_name);
+			test_unlink(path);
+		}
+		closedir(dd);
+	}
+
+	test_rmdir(dir);
 }
 
 /*
@@ -1168,6 +1234,7 @@ static int fs_readdir_seek_test(const char *rootdir)
 		rootdir, gettid(), test_rand(), test_rand());
 
 	test_rmdir(dir);
+	pthread_cleanup_push(fs_seek_dir_cleanup, dir);
 
 	ret = mkdir(dir, 0700);
 	CHECK(ret == 0 || errno == EEXIST, errno, "mkdir %s", dir);
@@ -1244,12 +1311,7 @@ static int fs_readdir_seek_test(const char *rootdir)
 
 out:
 	closedir(dd);
-	for (i = 0; i < nfiles; i++) {
-		int cn = snprintf(fname, sizeof(fname), "%s/f%02d", dir, i);
-		if (cn > 0 && (size_t)cn < sizeof(fname))
-			test_unlink(fname);
-	}
-	test_rmdir(dir);
+	pthread_cleanup_pop(1);
 	for (i = 0; i < nfirst; i++)
 		free(names_first[i]);
 	for (i = 0; i < nafter; i++)
@@ -1286,6 +1348,7 @@ static void fs_enospc_test(const char *rootdir)
 	snprintf(name, FS_BUFFER_SIZE, "%s/fs_%04d_enospc.%x%d",
 		rootdir, gettid(), test_rand(), test_rand());
 	test_unlink(name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(fd >= 0, errno, "open %s", name);
@@ -1342,7 +1405,7 @@ static void fs_enospc_test(const char *rootdir)
 
 out:
 	test_close_fd(&fd);
-	test_unlink(name);
+	pthread_cleanup_pop(1);
 	TEST_END();
 }
 
@@ -1560,6 +1623,8 @@ static int fs_dual_fd_trunc_test(const char *rootdir, size_t blksize)
 
 	test_unlink(name);
 	test_unlink(tmpname);
+	pthread_cleanup_push((void (*)(void *))test_unlink, tmpname);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	wbuf = malloc(datasz);
 	rbuf = malloc(datasz);
@@ -1630,8 +1695,8 @@ out:
 	test_close_fd(&fd1);
 	test_close_fd(&fd2);
 	test_close_fd(&fd_tmp);
-	test_unlink(name);
-	test_unlink(tmpname);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
 	free(wbuf);
 	free(rbuf);
 	free(tbuf);
@@ -1659,6 +1724,7 @@ static int fs_lseek_boundary_test(const char *rootdir)
 	snprintf(name, FS_BUFFER_SIZE, "%s/lseek_%04d.%x.txt",
 		rootdir, gettid(), test_rand());
 	test_unlink(name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0666);
 	CHECK(fd >= 0, errno, "open %s", name);
@@ -1690,7 +1756,7 @@ static int fs_lseek_boundary_test(const char *rootdir)
 
 out:
 	test_close_fd(&fd);
-	test_unlink(name);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -1714,6 +1780,8 @@ static int fs_unlink_error_test(const char *rootdir)
 	/* Make sure they don't exist */
 	test_unlink(name);
 	test_rmdir(dir);
+	pthread_cleanup_push((void (*)(void *))test_rmdir, dir);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	/* unlink non-existent -> ENOENT */
 	ret = unlink(name);
@@ -1736,8 +1804,8 @@ static int fs_unlink_error_test(const char *rootdir)
 		"unlink dir ret=%d err=%d", ret, errno);
 
 out:
-	test_rmdir(dir);
-	test_unlink(name);
+	pthread_cleanup_pop(1);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -1756,6 +1824,7 @@ static int fs_access_test(const char *rootdir)
 	snprintf(name, FS_BUFFER_SIZE, "%s/acctst_%04d.%x",
 		rootdir, gettid(), test_rand());
 	test_unlink(name);
+	pthread_cleanup_push((void (*)(void *))test_unlink, name);
 
 	/* F_OK on non-existent -> -1, ENOENT */
 	ret = access(name, F_OK);
@@ -1776,7 +1845,7 @@ static int fs_access_test(const char *rootdir)
 	CHECK(ret == 0, errno, "access R_OK ret=%d", ret);
 
 out:
-	test_unlink(name);
+	pthread_cleanup_pop(1);
 	return TEST_ERRNO();
 }
 
@@ -1858,6 +1927,75 @@ out:
 }
 
 /*
+ * shm_name_rule_test: shm_open() name rules (user/syscall/shm.c).
+ *
+ * - NULL, empty and all-slash names fail with EINVAL;
+ * - a leading '/' is optional and stripped (implementation choice);
+ * - over-long names fail with ENAMETOOLONG (POSIX);
+ * - a '/' after the first position is not validated: it becomes a
+ *   path component and the missing directory gives ENOENT;
+ * - O_CREAT|O_EXCL on an existing object fails with EEXIST.
+ */
+static void shm_name_rule_test(void)
+{
+	char name[128] = {0};
+	char lname[320] = {0};
+	int fd = -1, fd2 = -1;
+	int len = 0;
+
+	TEST_START("shm_name_rule_test");
+
+	/*
+	 * Safety net: unlink the object created below on every exit path
+	 * (test_shm_unlink() no-ops while the name is still empty).
+	 */
+	pthread_cleanup_push((void (*)(void *))test_shm_unlink, name);
+
+	fd = shm_open(NULL, O_RDWR, 0);
+	CHECK(fd < 0 && errno == EINVAL, errno, "NULL name");
+
+	fd = shm_open("", O_RDWR, 0);
+	CHECK(fd < 0 && errno == EINVAL, errno, "empty name");
+
+	fd = shm_open("///", O_RDWR, 0);
+	CHECK(fd < 0 && errno == EINVAL, errno, "all-slash name");
+
+	fd = shm_open("/a/b", O_RDWR, 0);
+	CHECK(fd < 0 && errno == ENOENT, errno, "inner slash fd=%d", fd);
+
+	/* 99 name characters create fine (leading '/' is stripped) */
+	name[0] = '/';
+	len = snprintf(name + 1, sizeof(name) - 1, "mbedtest_shm_%04d_%x",
+		gettid(), test_rand());
+	memset(name + 1 + len, 'a', 99 - len);
+	name[100] = '\0';
+	test_shm_unlink(name);
+
+	fd = shm_open(name, O_RDWR | O_CREAT, 0666);
+	CHECK(fd >= 0, errno, "100-char name fd=%d", fd);
+
+	fd2 = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0666);
+	CHECK(fd2 < 0 && errno == EEXIST, errno, "O_EXCL fd=%d", fd2);
+	test_close_fd(&fd2);
+
+	test_close_fd(&fd);
+	test_shm_unlink(name);
+
+	/* over-long names are ENAMETOOLONG, not EINVAL */
+	lname[0] = '/';
+	memset(lname + 1, 'b', 300 - 1);
+	lname[300] = '\0';
+	fd = shm_open(lname, O_RDWR | O_CREAT, 0666);
+	CHECK(fd < 0 && errno == ENAMETOOLONG, errno, "300-char name fd=%d", fd);
+
+out:
+	test_close_fd(&fd);
+	test_close_fd(&fd2);
+	pthread_cleanup_pop(1);
+	TEST_END();
+}
+
+/*
  * fs_test: entry point -- iterates mount points 5x, randomly
  * selecting rootdir and shmfs/mmaps for repeated stress coverage.
  */
@@ -1900,5 +2038,8 @@ void fs_test(void)
 			fs_test_mnt("/shm/test");
 
 		shmfs_mmap3();
+
+		if (i == 0)
+			shm_name_rule_test();
 	}
 }

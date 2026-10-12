@@ -27,6 +27,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <time.h>
+#include <limits.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -79,8 +80,9 @@ int  test_rand(void);
 int  test_rng(void *ctx, uint8_t *out, size_t len);
 ssize_t test_write_full(int fd, const void *buf, size_t len);
 ssize_t test_read_full(int fd, void *buf, size_t len);
-int  test_mkpath(char *buf, size_t buflen,
-		 const char *dir, const char *suffix);
+
+/* Milliseconds elapsed since #t0 (CLOCK_MONOTONIC). */
+long test_ms_since(const struct timespec *t0);
 
 /* Add milliseconds to a timespec using the standard timespecadd macro. */
 static inline void test_timespec_add_ms(
@@ -164,7 +166,6 @@ void proc_spawn_waitpid_basic_test(void);
 /* float (mbedtest_float.c) */
 void float_test(void);
 void float_corner_test(void);
-void float_convert_test(void);
 int  float_f_test(int rounds);
 int  float_d_test(int rounds);
 int  float_ld_test(int rounds);
@@ -178,6 +179,7 @@ void urandom_test(void);
 void time_test(void);
 void clock_gettime_test(void);
 void clock_getres_test(void);
+void cpuclockid_test(void);
 
 /* io (mbedtest_io.c) */
 void dup_test(void);
@@ -194,6 +196,9 @@ void epoll_et_test(void);
 void eventfd_basic_test(void);
 void select_basic_test(void);
 void pselect_basic_test(void);
+void epoll_create1_test(void);
+void epoll_ctl_error_test(void);
+void ioctl_test(void);
 
 /* pipe (mbedtest_pipe.c) */
 void pipe_basic_test(void);
@@ -209,10 +214,13 @@ void pipe_epollout_backpressure_test(void);
 void signal_test(void);
 void signal_api_test(void);
 void signal_alarm_test(void);
+void alarm_test(void);
+void sleep_signal_test(void);
 void signal_eintr_test(void);
 void signal_altstack_test(void);
 void signal_si_code_test(void);
 int  mbedtest_sigalrm_child(void);
+int  mbedtest_alarm_child(void);
 
 /* pthread (mbedtest_pthread.c) */
 void cond_timedwait_test(void);
@@ -238,6 +246,7 @@ void pthread_exit_test(void);
 void pthread_cancel_disabled_test(void);
 void pthread_tls_null_dtor_test(void);
 void sched_api_test(void);
+void gettid_max_test(void);
 void lock_stress_test(void);
 void cpu_time_test(void);
 void host_affinity_test(pthread_t host);
@@ -268,11 +277,14 @@ void mq_priority_order_test(void);
 void mq_notify_oneshot_thread_test(void);
 void mq_notify_oneshot_signal_test(void);
 void mq_timed_edges_test(void);
+void mq_notify_error_test(void);
+void mq_name_rule_test(void);
 
 /* sem (mbedtest_sem.c) */
 void sem_wait_eintr_test(void);
 void sem_basic_test(void);
 void sem_named_test(void);
+void sem_name_rule_test(void);
 void sem_named_2proc_send(void);
 int  sem_named_2proc_recv(const char *tag);
 void sem_pipe_handshake_test(void);
@@ -283,6 +295,8 @@ int  timer_thd(void);
 int  timer_sig(void);
 int  timer_combo(void);
 void timer_getoverrun_test(void);
+void timer_stale_signal_test(void);
+void timer_ignored_pending_test(void);
 void timer_monotonic_test(void);
 
 /* fs (mbedtest_fs.c) */

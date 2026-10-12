@@ -13,7 +13,8 @@
 __attribute__((weak)) int mbedcrypto_test(int perf)
 {
 	printf("mbedcrypto not included - CONFIG_MBEDTEST_CRYPTO\n");
-	return 0;
+	/* Distinct non-zero status: the suite did NOT run. */
+	return ENOSYS;
 }
 
 /*
@@ -45,25 +46,37 @@ static void mbedtest(void)
 	init_sync_objects(host);
 
 	/* ==== Timer & Clock ==== */
+	/*
+	 * Single-threaded phase: nothing above this point may have created a
+	 * thread yet.  A sibling would accept the process-directed SIGUSR1
+	 * instead (POSIX-legal), and these tests read per-notification state.
+	 */
+	timer_stale_signal_test();
+	timer_getoverrun_test();
+	sleep_signal_test();
+	timer_ignored_pending_test();
 	timer_sig();
 	timer_thd();
 	timer_combo();
-	timer_getoverrun_test();
 	timer_monotonic_test();
 	clock_gettime_test();
 	clock_getres_test();
+	cpuclockid_test();
 
 	/* ==== I/O Multiplexing ==== */
 	poll_test();
 	poll_invalid_fd_test();
 	epoll_test1();
 	epoll_test2();
+	epoll_create1_test();
+	epoll_ctl_error_test();
 	epoll_oneshot_test();
 	epoll_hup_err_test();
 	epoll_et_test();
 	pipe_epollout_backpressure_test();
 	fcntl_flags_test();
 	fcntl_dupfd_test();
+	ioctl_test();
 	eventfd_basic_test();
 	select_basic_test();
 	pselect_basic_test();
@@ -82,10 +95,13 @@ static void mbedtest(void)
 	mq_notify_oneshot_thread_test();
 	mq_notify_oneshot_signal_test();
 	mq_timed_edges_test();
+	mq_notify_error_test();
+	mq_name_rule_test();
 
 	/* ==== Signals ==== */
 	signal_api_test();
 	signal_alarm_test();
+	alarm_test();
 	signal_test();
 	signal_eintr_test();
 	signal_altstack_test();
@@ -103,6 +119,7 @@ static void mbedtest(void)
 	sem_pipe_handshake_test();
 	sem_basic_test();
 	sem_named_test();
+	sem_name_rule_test();
 	sem_named_2proc_send();
 	sem_wait_eintr_test();
 	sem_timedwait_test();
@@ -129,6 +146,7 @@ static void mbedtest(void)
 	pthread_cancel_disabled_test();
 	pthread_tls_null_dtor_test();
 	sched_api_test();
+	gettid_max_test();
 
 	/* ==== Barrier: spawn t1/t2/t3 worker threads ==== */
 	ret = barrier_affinity_test(host, &t1, &t2, &t3);
@@ -156,6 +174,18 @@ out:
 	pthread_cleanup_pop(0);
 }
 
+/*
+ * mbedtest_run -- run the full suite and turn the summary into an exit
+ * status: 0 when no test failed (skips alone do not fail the run),
+ * 1 otherwise.
+ */
+static int mbedtest_run(void)
+{
+	mbedtest();
+	return __atomic_load_n(&g_test_stats.failed_tests, __ATOMIC_RELAXED)
+		? 1 : 0;
+}
+
 static int mbedtest_pipeline_dispatch(int argc, char *argv[])
 {
 	unsigned long long n = 0;
@@ -163,22 +193,22 @@ static int mbedtest_pipeline_dispatch(int argc, char *argv[])
 	int code = 0, fd = -1, len = 0;
 
 	if (argc <= 0)
-		return 2;
+		return EINVAL;
 
 	if (strcmp(argv[0], "exit") == 0) {
 		if (argc != 2)
-			return 2;
+			return EINVAL;
 		exit(atoi(argv[1]));
 		return 0;
 	}
 
 	if (strcmp(argv[0], "exitfile") == 0) {
 		if (argc != 3)
-			return 2;
+			return EINVAL;
 		code = atoi(argv[2]);
 		fd = open(argv[1], O_CREAT | O_TRUNC | O_WRONLY, 0644);
 		if (fd < 0)
-			return 1;
+			return errno;
 		len = snprintf(msg, sizeof(msg), "EXIT:%d\n", code);
 		if (len > 0)
 			write(fd, msg, len);
@@ -189,32 +219,32 @@ static int mbedtest_pipeline_dispatch(int argc, char *argv[])
 
 	if (strcmp(argv[0], "redirchk") == 0) {
 		if (argc != 3)
-			return 2;
+			return EINVAL;
 		pipeline_redirect_chk(argv[1], atoi(argv[2]));
 		return 0;
 	}
 
 	if (strcmp(argv[0], "cat") == 0) {
 		if (argc != 1)
-			return 2;
+			return EINVAL;
 		return pipeline_stdin_to_stdout();
 	}
 
 	if (strcmp(argv[0], "gen") == 0) {
 		if (argc != 2)
-			return 2;
+			return EINVAL;
 		n = strtoull(argv[1], NULL, 0);
 		return pipeline_gen_bytes(n);
 	}
 
 	if (strcmp(argv[0], "sink") == 0) {
 		if (argc != 2)
-			return 2;
+			return EINVAL;
 		n = strtoull(argv[1], NULL, 0);
 		return pipeline_sink_bytes(n);
 	}
 
-	return 2;
+	return EINVAL;
 }
 
 static struct option long_options[] = {
@@ -228,6 +258,7 @@ static struct option long_options[] = {
 	{"pipe",                  required_argument, NULL, 'p'},
 	{"pipeline",              no_argument,       NULL, 'P'},
 	{"sigalrm-child",         no_argument,       NULL, 'a'},
+	{"alarm-child",           no_argument,       NULL, 'A'},
 	{"execve-probe",          required_argument, NULL, 'e'},
 	{"execve-spawn-probe",    required_argument, NULL, 'E'},
 	{0, 0, NULL, 0}
@@ -244,22 +275,19 @@ static int optarg_bad(const char *arg, int need_slash)
 
 int main(int argc, char *argv[])
 {
-	int ret = -EINVAL;
 	int option_index = -1, opt = -1;
 	int show_help = 0;
 
 	if (argc < 2) {
 		/* Backward compat: plain `mbedtest` runs the full test suite */
-		mbedtest();
-		return 0;
+		return mbedtest_run();
 	}
 
-	while ((opt = getopt_long(argc, argv, "thcCm:s:n:p:",
+	while ((opt = getopt_long(argc, argv, "thcCm:s:n:p:P",
 		long_options, &option_index)) != -1) {
 		switch (opt) {
 		case 't':
-			mbedtest();
-			return 0;
+			return mbedtest_run();
 		case 'c':
 			return mbedcrypto_test(0);
 		case 'C':
@@ -285,6 +313,8 @@ int main(int argc, char *argv[])
 				argv + optind);
 		case 'a':
 			return mbedtest_sigalrm_child();
+		case 'A':
+			return mbedtest_alarm_child();
 		case 'e':
 			if (optarg_bad(optarg, 1))
 				goto bad_optarg;
@@ -296,34 +326,36 @@ int main(int argc, char *argv[])
 
 		case 'h':
 			show_help = 1;
-			ret = 0;
 			goto err;
 		default:
 			goto err;
 		}
 	}
 
+	/* the option loop ended without selecting a mode (e.g. `mbedtest foo`) */
+	printf("main: no test mode selected, see --help\n");
+	return EINVAL;
+
 bad_optarg:
 	printf("main: ignoring bad optarg '%c'='%s'\n",
 		opt, optarg ? optarg : "(null)");
-	return 0;
+	/* Non-zero: the requested mode did not run. */
+	return EINVAL;
 
 err:
-	if (ret == -EINVAL || show_help) {
-		printf("help info:\n");
-		printf("--test       run full automated test suite\n");
-		printf("--crypto     run mbedcrypto test suite\n");
-		printf("--crypto-perf run mbedcrypto perf benchmarks\n");
-		printf("--msgq       message-queue 2-proc peer\n");
-		printf("--sendfd     mq fd-passing 2-proc peer\n");
-		printf("--namedsem   named semaphore 2-proc peer\n");
-		printf("--pipe       pipe 2-proc peer\n");
-		printf("--pipeline <subcmd> pipeline/spawn helpers\n");
-		printf("  exit <code> | exitfile <path> <code>\n");
-		printf("  redirchk <path> <code> | cat\n");
-		printf("  gen <nbytes> | sink <nbytes>\n");
-		printf("--execve-probe <path>\n");
-		printf("--execve-spawn-probe <path>\n");
-	}
-	return ret;
+	printf("help info:\n");
+	printf("--test       run full automated test suite\n");
+	printf("--crypto     run mbedcrypto test suite\n");
+	printf("--crypto-perf run mbedcrypto perf benchmarks\n");
+	printf("--msgq       message-queue 2-proc peer\n");
+	printf("--sendfd     mq fd-passing 2-proc peer\n");
+	printf("--namedsem   named semaphore 2-proc peer\n");
+	printf("--pipe       pipe 2-proc peer\n");
+	printf("--pipeline <subcmd> pipeline/spawn helpers\n");
+	printf("  exit <code> | exitfile <path> <code>\n");
+	printf("  redirchk <path> <code> | cat\n");
+	printf("  gen <nbytes> | sink <nbytes>\n");
+	printf("--execve-probe <path>\n");
+	printf("--execve-spawn-probe <path>\n");
+	return show_help ? 0 : EINVAL;
 }

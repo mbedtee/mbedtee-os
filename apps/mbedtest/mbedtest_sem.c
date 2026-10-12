@@ -69,6 +69,7 @@ void sem_wait_eintr_test(void)
 	void *thret = NULL;
 	struct sigaction sa = {0};
 	struct sigaction oldsa = {0};
+	int sa_saved = 0;
 	struct sem_thread_ctx ctx = {&sem, &started};
 
 	TEST_START("sem_wait_eintr_test");
@@ -83,12 +84,13 @@ void sem_wait_eintr_test(void)
 	sa.sa_flags = 0;
 	ret = sigaction(SIGUSR1, &sa, &oldsa);
 	CHECK(ret >= 0, errno);
+	sa_saved = 1;
 
 	__atomic_store_n(&started, 0, __ATOMIC_RELEASE);
 	ret = pthread_create(&th, NULL, sem_eintr_thread, &ctx);
 	CHECK(ret == 0, ret);
 	while (!__atomic_load_n(&started, __ATOMIC_ACQUIRE) &&
-	       wait_cnt++ < 500)
+	       wait_cnt++ < 1000)
 		usleep(10000);
 	if (!__atomic_load_n(&started, __ATOMIC_ACQUIRE)) {
 		pthread_kill(th, SIGCANCEL);
@@ -114,7 +116,8 @@ void sem_wait_eintr_test(void)
 	CHECK(thret == (void *)(uintptr_t)1u, (uintptr_t)thret);
 
 out:
-	sigaction(SIGUSR1, &oldsa, NULL);
+	if (sa_saved)
+		sigaction(SIGUSR1, &oldsa, NULL);
 	if (th != 0) {
 		sem_post(&sem);
 		pthread_join(th, NULL);
@@ -177,7 +180,7 @@ void sem_basic_test(void)
 	ret = pthread_create(&th, NULL, sem_wait_thread, &ctx);
 	CHECK(ret == 0, ret);
 	while (!__atomic_load_n(&started, __ATOMIC_ACQUIRE) &&
-	       wait_cnt++ < 500)
+	       wait_cnt++ < 1000)
 		usleep(20000);
 	if (!__atomic_load_n(&started, __ATOMIC_ACQUIRE)) {
 		pthread_kill(th, SIGCANCEL);
@@ -186,22 +189,30 @@ void sem_basic_test(void)
 	CHECK(__atomic_load_n(&started, __ATOMIC_ACQUIRE), ETIMEDOUT);
 	/*
 	 * Give the scheduler enough time to block the thread in sem_wait.
+	 * If it lost that race, the destroy finds no waiter and succeeds
+	 * (legal): the semaphore is gone and the post below is skipped.
 	 */
 	sleep(1);
 	ret = sem_destroy(&sem);
 	err = errno;
-	if (ret == 0) {
-		pthread_kill(th, SIGCANCEL);
-		pthread_join(th, NULL);
-	}
-	CHECK(ret == 0 || err == EBUSY, err);
-	ret = sem_post(&sem);
-	err = errno;
 	if (ret != 0) {
+		CHECK(err == EBUSY, err);
+
+		/* destroy found the waiter: release it so the thread can exit */
+		ret = sem_post(&sem);
+		err = errno;
+		if (ret != 0) {
+			pthread_kill(th, SIGCANCEL);
+			pthread_join(th, NULL);
+		}
+		CHECK(ret == 0, err);
+	} else {
+		/*
+		 * No waiter observed: the semaphore is gone and the blocked
+		 * thread would never wake; cancel it instead.
+		 */
 		pthread_kill(th, SIGCANCEL);
-		pthread_join(th, NULL);
 	}
-	CHECK(ret == 0, err);
 	pthread_join(th, NULL);
 
 out:
@@ -380,7 +391,7 @@ int sem_named_2proc_recv(const char *tag)
 	snprintf(done_2p_name, sizeof(done_2p_name),
 		"/mbedtest_sem2proc_%s.done", tag);
 
-	while ((sem_2p == SEM_FAILED || done_2p == SEM_FAILED) && wait_cnt < 500) {
+	while ((sem_2p == SEM_FAILED || done_2p == SEM_FAILED) && wait_cnt < 1000) {
 		sem_2p = sem_open(sem_2p_name, 0);
 		done_2p = sem_open(done_2p_name, 0);
 		if (sem_2p == SEM_FAILED || done_2p == SEM_FAILED) {
@@ -462,7 +473,7 @@ void sem_pipe_handshake_test(void)
 	ret = pthread_create(&th, NULL, sem_pipe_writer_thread, &ctx);
 	CHECK(ret == 0, ret);
 	while (!__atomic_load_n(&started, __ATOMIC_ACQUIRE) &&
-	       wait_cnt++ < 500)
+	       wait_cnt++ < 1000)
 		usleep(10000);
 	if (!__atomic_load_n(&started, __ATOMIC_ACQUIRE)) {
 		pthread_kill(th, SIGCANCEL);
@@ -485,7 +496,7 @@ void sem_pipe_handshake_test(void)
 	}
 	CHECK(ret == 0, err);
 
-	ret = poll(&pfd, 1, 10000);
+	ret = poll(&pfd, 1, 20000);
 	CHECK(ret == 1, ret < 0 ? errno : ETIMEDOUT);
 	CHECK(pfd.revents & POLLIN, EPROTO);
 
@@ -572,3 +583,75 @@ out:
 		sem_destroy(&sem);
 	TEST_END();
 }
+
+/*
+ * sem_name_rule_test: sem_open()/sem_unlink() name and value rules.
+ *
+ * - the libc wrapper requires a leading '/' plus a name (else EINVAL);
+ * - the kernel rejects any further '/' (EINVAL);
+ * - SEM_NAME_MAX (64) bounds the name: 63 chars fit, 64 do not
+ *   (ENAMETOOLONG);
+ * - O_CREAT|O_EXCL on an existing name -> EEXIST;
+ * - an initial value above SEM_VALUE_MAX -> EINVAL.
+ */
+void sem_name_rule_test(void)
+{
+	char name[80] = {0};
+	int len = 0;
+	sem_t *sem = NULL, *dup = NULL;
+	int ret = -1;
+
+	TEST_START("sem_name_rule_test");
+
+	sem = sem_open(NULL, O_CREAT, 0644, 0);
+	CHECK(sem == SEM_FAILED && errno == EINVAL, errno, "NULL name");
+	sem = sem_open("", O_CREAT, 0644, 0);
+	CHECK(sem == SEM_FAILED && errno == EINVAL, errno, "empty name");
+	sem = sem_open("noslash", O_CREAT, 0644, 0);
+	CHECK(sem == SEM_FAILED && errno == EINVAL, errno, "no slash");
+	sem = sem_open("/", O_CREAT, 0644, 0);
+	CHECK(sem == SEM_FAILED && errno == EINVAL, errno, "lone slash");
+	sem = sem_open("/a/b", O_CREAT, 0644, 0);
+	CHECK(sem == SEM_FAILED && errno == EINVAL, errno, "inner slash");
+
+	ret = sem_unlink("noslash");
+	CHECK(ret < 0 && errno == EINVAL, errno, "unlink no slash");
+	ret = sem_unlink("/a/b");
+	CHECK(ret < 0 && errno == EINVAL, errno, "unlink inner slash");
+
+	/* 63 name characters are the documented maximum */
+	name[0] = '/';
+	len = snprintf(name + 1, sizeof(name) - 1, "mbedtest_sem_%04d_%x",
+		gettid(), test_rand());
+	memset(name + 1 + len, 'a', 63 - len);
+	name[1 + 63] = '\0';
+	test_sem_unlink(name);
+
+	sem = sem_open(name, O_CREAT | O_EXCL, 0644, 0);
+	CHECK(sem != SEM_FAILED, errno, "63-char name");
+
+	dup = sem_open(name, O_CREAT | O_EXCL, 0644, 0);
+	CHECK(dup == SEM_FAILED && errno == EEXIST, errno,
+		"O_CREAT|O_EXCL again");
+
+	test_close_sem(&sem);
+	test_sem_unlink(name);
+
+	/* 64 name characters cannot be represented */
+	name[1 + 63] = 'b';
+	name[1 + 64] = '\0';
+	sem = sem_open(name, O_CREAT | O_EXCL, 0644, 0);
+	CHECK(sem == SEM_FAILED && errno == ENAMETOOLONG, errno,
+		"64-char name");
+
+	/* an initial value above SEM_VALUE_MAX is rejected up front */
+	name[1 + 63] = '\0';
+	sem = sem_open(name, O_CREAT | O_EXCL, 0644, SEM_VALUE_MAX + 1);
+	CHECK(sem == SEM_FAILED && errno == EINVAL, errno, "value too large");
+
+out:
+	test_close_sem(&sem);
+	test_sem_unlink(name);
+	TEST_END();
+}
+

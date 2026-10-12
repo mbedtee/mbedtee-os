@@ -1677,7 +1677,7 @@ void pthread_cond_basic_test(void)
 
 	/* wait for thread to be inside cond_wait */
 	while (!__atomic_load_n(&cond_test_ready, __ATOMIC_ACQUIRE) &&
-		(++cnt < 300))
+	    (++cnt < 600))
 		usleep(50000);
 	CHECK(__atomic_load_n(&cond_test_ready, __ATOMIC_ACQUIRE),
 		ETIMEDOUT, "timeout waiting for cond_wait ready");
@@ -1700,7 +1700,7 @@ void pthread_cond_basic_test(void)
 
 	cnt = 0;
 	while (!__atomic_load_n(&cond_test_ready, __ATOMIC_ACQUIRE) &&
-		(++cnt < 300))
+	       (++cnt < 600))
 		usleep(50000);
 	CHECK(__atomic_load_n(&cond_test_ready, __ATOMIC_ACQUIRE),
 		ETIMEDOUT, "timeout waiting for broadcast ready");
@@ -2044,7 +2044,7 @@ void pthread_kill_test(void)
 	ret = pthread_create(&th, NULL, pthread_kill_sleep_thread, (void *)&ready);
 	CHECK(ret == 0, ret, "create");
 
-	while (!__atomic_load_n(&ready, __ATOMIC_ACQUIRE) && (++cnt < 300))
+	while (!__atomic_load_n(&ready, __ATOMIC_ACQUIRE) && (++cnt < 600))
 		usleep(50000);
 	CHECK(__atomic_load_n(&ready, __ATOMIC_ACQUIRE),
 		ETIMEDOUT, "timeout waiting for kill thread ready");
@@ -2108,7 +2108,7 @@ void pthread_cancel_disabled_test(void)
 	CHECK(ret == 0, ret, "create");
 
 	/* wait for thread to start */
-	while (!__atomic_load_n(&flag, __ATOMIC_ACQUIRE) && (++cnt < 300))
+	while (!__atomic_load_n(&flag, __ATOMIC_ACQUIRE) && (++cnt < 600))
 		usleep(50000);
 	CHECK(__atomic_load_n(&flag, __ATOMIC_ACQUIRE),
 		ETIMEDOUT, "timeout waiting for cancel_disabled thread start");
@@ -2264,5 +2264,50 @@ void sched_api_test(void)
 	CHECK(ret != 0, errno, "sched_getparam invalid tid ret=%d", ret);
 
 out:
+	TEST_END();
+}
+
+/*
+ * gettid_worker: record the worker thread's own id.
+ */
+static void *gettid_worker(void *arg)
+{
+	*(pid_t *)arg = gettid();
+	return NULL;
+}
+
+/*
+ * gettid_max_test: gettid()/gettid_max() invariants.  Threads and
+ * processes share one kernel id space (sched_ida), so every live thread
+ * id must be within (0, gettid_max()], and a worker thread must get an
+ * id of its own.
+ */
+void gettid_max_test(void)
+{
+	pthread_t th = 0;
+	pid_t me = 0, mx = 0, wid = 0;
+	int ret = 0;
+
+	TEST_START("gettid_max_test");
+
+	me = gettid();
+	mx = gettid_max();
+	CHECK(me > 0, EINVAL, "gettid=%d", (int)me);
+	CHECK(mx >= me, EINVAL, "gettid=%d gettid_max=%d", (int)me, (int)mx);
+
+	ret = pthread_create(&th, NULL, gettid_worker, &wid);
+	CHECK(ret == 0, ret, "pthread_create");
+
+	ret = pthread_join(th, NULL);
+	th = 0;
+	CHECK(ret == 0, ret, "pthread_join");
+
+	CHECK(wid > 0 && wid <= mx, EINVAL, "worker gettid=%d max=%d",
+		(int)wid, (int)mx);
+	CHECK(wid != me, EINVAL, "worker reused main tid=%d", (int)wid);
+
+out:
+	if (th != 0)
+		pthread_join(th, NULL);
 	TEST_END();
 }

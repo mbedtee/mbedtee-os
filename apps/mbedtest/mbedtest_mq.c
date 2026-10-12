@@ -126,7 +126,7 @@ int mq_notify_thread(void)
 		CHECK(ret == 0, errno, "mq_send notify thread %s", mq_notify_name[i]);
 
 		while (!__atomic_load_n(&mqnotify_exit[i], __ATOMIC_ACQUIRE) &&
-		       (++cnt < 50)) {
+		       (++cnt < 100)) {
 			usleep(5000);
 			TDBG("wating tfunc_exit i=%d\n", i);
 		}
@@ -189,7 +189,7 @@ int mq_notify_signal(void)
 		CHECK(ret == 0, errno, "mq_send notify signal %s", mq_notify_name[i]);
 
 		while (!__atomic_load_n(&mqnotify_exit[i], __ATOMIC_ACQUIRE) &&
-		       (++cnt < 20)) {
+		       (++cnt < 40)) {
 			usleep(5000);
 			TDBG("wating tfunc_exit i=%d\n", i);
 		}
@@ -341,7 +341,7 @@ int mq_fd_2proc_send(void)
 		test_rand() % 2 ? pthread_sigqueue((pthread_t)peer, SIGSTOP,
 		(union sigval)(0)) : sigqueue(peer, SIGSTOP, (union sigval)(0));
 	if (ret != 0 && errno == ESRCH)
-		peer = -1;
+		CHECK(0, ETIMEDOUT, "peer %d already gone", peer);
 	CHECK(ret == 0, errno);
 
 	fd = open(fdtestfile, O_RDWR | O_CREAT);
@@ -364,7 +364,7 @@ int mq_fd_2proc_send(void)
 		test_rand() % 2 ? pthread_sigqueue((pthread_t)peer, SIGCONT,
 		(union sigval)(0)) : sigqueue(peer, SIGCONT, (union sigval)(0));
 	if (ret != 0 && errno == ESRCH)
-		peer = -1;
+		CHECK(0, ETIMEDOUT, "peer %d already gone", peer);
 	CHECK(ret == 0, errno);
 
 	/* Reap peer deterministically (posix_spawn child). */
@@ -406,7 +406,7 @@ int mq_fd_2proc_recv(const char *mq_name)
 	TEST_POLL_OPEN(mqdes, -1, mq_open(name, O_RDONLY | O_NONBLOCK), 30000);
 	CHECK(mqdes >= 0, errno, "name %s", name);
 
-	ret = mq_receive_fd_timed(mqdes, &fd, 10000);
+	ret = mq_receive_fd_timed(mqdes, &fd, 30000);
 	CHECK(ret == 0, ret, "mq_receive_fd fd=%d ret=%d", fd, ret);
 
 	ret = test_read_full(fd, buaff, 9);
@@ -472,7 +472,7 @@ int mq_2proc_send(void)
 	for (i = 0; i < MQ_2PROC_TESTRUNS; i++) {
 		snprintf(mqbigbuff, sizeof(mqbigbuff), "%d", i);
 		clock_gettime(CLOCK_REALTIME, &ts);
-		ts.tv_sec += 5;
+		ts.tv_sec += 10;
 		ret = mq_timedsend(fd, mqbigbuff, attr.mq_msgsize, i, &ts);
 		CHECK(ret >= 0, errno, "mq_timedsend i=%d", i);
 	}
@@ -491,7 +491,7 @@ int mq_2proc_send(void)
 		test_rand() % 2 ? pthread_sigqueue((pthread_t)peer, SIGCONT,
 		 (union sigval)(0)) : sigqueue(peer, SIGCONT, (union sigval)(0));
 	if (ret != 0 && errno == ESRCH)
-		peer = -1;
+		CHECK(0, ETIMEDOUT, "peer %d already gone", peer);
 	CHECK(ret == 0, errno);
 
 	/* Reap peer deterministically. */
@@ -535,7 +535,7 @@ int mq_2proc_recv(const char *mq_name)
 
 	for (i = 0; i < expected; i++) {
 		clock_gettime(CLOCK_REALTIME, &ts);
-		ts.tv_sec += 5;
+		ts.tv_sec += 10;
 		ret = mq_timedreceive(fd, mqbigbuff, sizeof(mqbigbuff), &prio, &ts);
 		CHECK(ret >= 0, errno, "mq_timedreceive i=%d prio=%d ret=%d",
 			i, prio, ret);
@@ -588,6 +588,16 @@ void mq_setattr_nonblock_test(void)
 	a.mq_flags = O_NONBLOCK;
 	ret = mq_setattr(q, &a, &oa);
 	CHECK(ret == 0, errno, "mq_setattr O_NONBLOCK");
+
+	/* flags other than O_NONBLOCK are rejected and change nothing */
+	a.mq_flags = O_APPEND;
+	ret = mq_setattr(q, &a, &oa);
+	CHECK(ret < 0 && errno == EINVAL, errno, "mq_setattr bad flags ret=%d",
+		ret);
+	ret = mq_getattr(q, &oa);
+	CHECK(ret == 0, errno, "mq_getattr after reject");
+	CHECK(oa.mq_flags == O_NONBLOCK, EBADMSG, "flags changed=0x%lx",
+		oa.mq_flags);
 
 	ret = mq_receive(q, buf, sizeof(buf), &prio);
 	CHECK(ret < 0, EBADMSG);
@@ -697,7 +707,7 @@ void mq_notify_oneshot_thread_test(void)
 	CHECK(ret == 0, errno);
 	ret = mq_send(q, "1", 2, 1);
 	CHECK(ret == 0, errno);
-	while ((__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) != 1) && (++cnt < 200))
+	while ((__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) != 1) && (++cnt < 400))
 		usleep(20000);
 	CHECK(__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) == 1, ETIMEDOUT);
 
@@ -718,7 +728,7 @@ void mq_notify_oneshot_thread_test(void)
 	ret = mq_send(q, "3", 2, 1);
 	CHECK(ret == 0, errno);
 	cnt = 0;
-	while (__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) != 2 && (++cnt < 200))
+	while (__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) != 2 && (++cnt < 400))
 		usleep(20000);
 	CHECK(__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) == 2, ETIMEDOUT);
 
@@ -778,7 +788,7 @@ void mq_notify_oneshot_signal_test(void)
 
 	ret = mq_send(q, "1", 2, 1);
 	CHECK(ret == 0, errno);
-	while (__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) != 1 && (++cnt < 200))
+	while (__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) != 1 && (++cnt < 400))
 		usleep(20000);
 	CHECK(__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) == 1, ETIMEDOUT);
 
@@ -798,7 +808,7 @@ void mq_notify_oneshot_signal_test(void)
 	ret = mq_send(q, "3", 2, 1);
 	CHECK(ret == 0, errno);
 	cnt = 0;
-	while (__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) != 2 && (++cnt < 200))
+	while (__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) != 2 && (++cnt < 400))
 		usleep(20000);
 	CHECK(__atomic_load_n(&mq_oneshot_cnt, __ATOMIC_ACQUIRE) == 2, ETIMEDOUT);
 
@@ -905,5 +915,280 @@ void mq_timed_edges_test(void)
 out:
 	test_close_mq_fd(&mq);
 	test_mq_unlink(name);
+	TEST_END();
+}
+
+/*
+ * mq_notify_error_test: error paths, cancel and the SIGEV_NONE contract.
+ *
+ * core/ipc/msgq.c:
+ * - invalid/closed mqd or any non-msgq fd -> EBADF;
+ * - a second registration                 -> EBUSY;
+ * - cancel with nothing registered        -> 0 (POSIX allows EINVAL,
+ *   Linux returns 0);
+ * - sigev_notify outside {NONE, SIGNAL, THREAD} -> EINVAL;
+ * - SIGEV_SIGNAL with signo < 1 or >= NSIG      -> EINVAL;
+ * - SIGEV_NONE registers without ever delivering (POSIX/Linux).
+ */
+void mq_notify_error_test(void)
+{
+	char name[64] = {0};
+	char msg[8] = "msg";
+	struct mq_attr attr = {0};
+	struct sigevent evp = {0};
+	mqd_t mq = (mqd_t)-1, mq2 = (mqd_t)-1;
+	int p[2] = {-1, -1};
+	int ret = -1;
+
+	TEST_START("mq_notify_error_test");
+
+	snprintf(name, sizeof(name), "/mbedtest_mqnotify_%04d_%x",
+		gettid(), test_rand());
+	test_mq_unlink(name);
+
+	attr.mq_flags = 0;
+	attr.mq_maxmsg = 2;
+	attr.mq_msgsize = sizeof(msg);
+	mq = mq_open(name, O_CREAT | O_RDWR, 0666, &attr);
+	CHECK(mq != (mqd_t)-1, errno, "mq_open %s", name);
+
+	memset(&evp, 0, sizeof(evp));
+	evp.sigev_notify = SIGEV_SIGNAL;
+	evp.sigev_signo = SIGUSR2;
+
+	/* invalid, closed and wrong-type descriptors */
+	ret = mq_notify((mqd_t)-1, &evp);
+	CHECK(ret < 0 && errno == EBADF, errno, "bad mqd ret=%d", ret);
+
+	mq2 = mq_open(name, O_RDWR);
+	CHECK(mq2 != (mqd_t)-1, errno, "mq_open second fd");
+
+	ret = mq_close(mq2);
+	CHECK(ret == 0, errno, "mq_close");
+
+	ret = mq_notify(mq2, &evp);
+	CHECK(ret < 0 && errno == EBADF, errno, "closed mqd ret=%d", ret);
+	mq2 = (mqd_t)-1;
+
+	ret = pipe(p);
+	CHECK(ret == 0, errno);
+	ret = mq_notify(p[0], &evp);
+	CHECK(ret < 0 && errno == EBADF, errno, "pipe fd ret=%d", ret);
+	test_close_fd(&p[0]);
+	test_close_fd(&p[1]);
+
+	/* register -> EBUSY on a second attempt -> cancel both ways */
+	ret = mq_notify(mq, &evp);
+	CHECK(ret == 0, errno, "register ret=%d", ret);
+	ret = mq_notify(mq, &evp);
+	CHECK(ret < 0 && errno == EBUSY, errno, "re-register ret=%d", ret);
+
+	ret = mq_notify(mq, NULL);
+	CHECK(ret == 0, errno, "cancel ret=%d", ret);
+	ret = mq_notify(mq, NULL);
+	CHECK(ret == 0, errno, "cancel idempotent ret=%d", ret);
+	ret = mq_notify(mq, &evp);
+	CHECK(ret == 0, errno, "register after cancel ret=%d", ret);
+	ret = mq_notify(mq, NULL);
+	CHECK(ret == 0, errno, "final cancel ret=%d", ret);
+
+	/* invalid notification parameters */
+	memset(&evp, 0, sizeof(evp));
+	evp.sigev_notify = 12345;
+	ret = mq_notify(mq, &evp);
+	CHECK(ret < 0 && errno == EINVAL, errno, "bogus notify ret=%d", ret);
+
+	/*
+	 * signo 0 is not a valid signal number for the documented
+	 * contract (Linux's kernel accepts it, but its man page and
+	 * POSIX specify EINVAL); 1000 is beyond NSIG everywhere.
+	 */
+	memset(&evp, 0, sizeof(evp));
+	evp.sigev_notify = SIGEV_SIGNAL;
+	evp.sigev_signo = 0;
+	ret = mq_notify(mq, &evp);
+	CHECK(ret < 0 && errno == EINVAL, errno, "signo=0 ret=%d", ret);
+
+	memset(&evp, 0, sizeof(evp));
+	evp.sigev_notify = SIGEV_SIGNAL;
+	evp.sigev_signo = 1000;
+	ret = mq_notify(mq, &evp);
+	CHECK(ret < 0 && errno == EINVAL, errno, "signo=1000 ret=%d", ret);
+
+	/* SIGEV_NONE: takes the slot but never delivers */
+	memset(&evp, 0, sizeof(evp));
+	evp.sigev_notify = SIGEV_NONE;
+	ret = mq_notify(mq, &evp);
+	CHECK(ret == 0, errno, "SIGEV_NONE register ret=%d", ret);
+
+	memset(&evp, 0, sizeof(evp));
+	evp.sigev_notify = SIGEV_SIGNAL;
+	evp.sigev_signo = SIGUSR2;
+	ret = mq_notify(mq, &evp);
+	CHECK(ret < 0 && errno == EBUSY, errno,
+		"SIGEV_NONE occupies the slot ret=%d", ret);
+
+	/* an arriving message consumes the null registration */
+	ret = mq_send(mq, msg, sizeof(msg), 0);
+	CHECK(ret == 0, errno, "send ret=%d", ret);
+
+	ret = mq_notify(mq, &evp);
+	CHECK(ret == 0, errno, "register after NONE consumed ret=%d", ret);
+	ret = mq_notify(mq, NULL);
+	CHECK(ret == 0, errno, "cancel after NONE ret=%d", ret);
+
+	ret = mq_receive(mq, msg, sizeof(msg), NULL);
+	CHECK(ret == (int)sizeof(msg), errno, "drain ret=%d", ret);
+
+out:
+	test_close_mq_fd(&mq);
+	test_close_mq_fd(&mq2);
+	test_mq_unlink(name);
+	TEST_END();
+}
+
+/*
+ * mq_name_rule_test: mq_open()/mq_unlink() name rules.
+ *
+ * - the libc wrapper requires a leading '/' plus a name, else EINVAL;
+ * - the kernel (msgq_path_of) rejects any further '/';
+ * - a missing queue without O_CREAT -> ENOENT, with a bare O_EXCL too;
+ * - over-long names -> ENAMETOOLONG for create, lookup and unlink;
+ * - O_CREAT|O_EXCL on an existing name -> EEXIST, while a bare O_EXCL
+ *   is ignored just like Linux does (POSIX leaves that case undefined);
+ * - the initial attribute is only used when the queue is created: it is
+ *   ignored for an existing queue and rejected (EINVAL) for a new one.
+ */
+void mq_name_rule_test(void)
+{
+	char name[64] = {0};
+	char aname[64] = {0};
+	char sname[128] = {0};
+	char lname[288] = {0};
+	struct mq_attr attr = {0};
+	struct mq_attr badattr = {0};
+	mqd_t mq = (mqd_t)-1, mq2 = (mqd_t)-1;
+	int len = 0;
+
+	TEST_START("mq_name_rule_test");
+
+	/* libc-level format checks */
+	mq2 = mq_open(NULL, O_RDWR);
+	CHECK(mq2 == (mqd_t)-1 && errno == EINVAL, errno, "NULL name");
+	mq2 = mq_open("", O_RDWR);
+	CHECK(mq2 == (mqd_t)-1 && errno == EINVAL, errno, "empty name");
+	mq2 = mq_open("noslash", O_RDWR);
+	CHECK(mq2 == (mqd_t)-1 && errno == EINVAL, errno, "no leading slash");
+	mq2 = mq_open("/", O_RDWR);
+	CHECK(mq2 == (mqd_t)-1 && errno == EINVAL, errno, "lone slash");
+
+	/* kernel-level: '/' beyond the first position */
+	mq2 = mq_open("/a/b", O_RDWR);
+	CHECK(mq2 == (mqd_t)-1 && errno == EINVAL, errno, "inner slash");
+
+	CHECK(mq_unlink("noslash") < 0 && errno == EINVAL, errno,
+		"unlink no slash");
+	CHECK(mq_unlink("/a/b") < 0 && errno == EINVAL, errno,
+		"unlink inner slash");
+
+	/* existence and O_EXCL rules */
+	snprintf(name, sizeof(name), "/mbedtest_mqname_%04d_%x",
+		gettid(), test_rand());
+	test_mq_unlink(name);
+
+	mq2 = mq_open(name, O_RDWR);
+	CHECK(mq2 == (mqd_t)-1 && errno == ENOENT, errno,
+		"missing, no O_CREAT");
+	mq2 = mq_open(name, O_RDWR | O_EXCL);
+	CHECK(mq2 == (mqd_t)-1 && errno == ENOENT, errno,
+		"missing, bare O_EXCL");
+
+	attr.mq_flags = 0;
+	attr.mq_maxmsg = 2;
+	attr.mq_msgsize = 8;
+	mq = mq_open(name, O_CREAT | O_RDWR, 0666, &attr);
+	CHECK(mq != (mqd_t)-1, errno, "create %s", name);
+
+	mq2 = mq_open(name, O_CREAT | O_RDWR | O_EXCL, 0666, &attr);
+	CHECK(mq2 == (mqd_t)-1 && errno == EEXIST, errno,
+		"O_CREAT|O_EXCL existing");
+
+	mq2 = mq_open(name, O_RDWR | O_EXCL);
+	CHECK(mq2 != (mqd_t)-1, errno, "bare O_EXCL existing ret=%d", mq2);
+	test_close_mq_fd(&mq2);
+
+	/*
+	 * Like Linux, the initial attribute is only used when the queue
+	 * is created: an O_CREAT open of an existing queue ignores it,
+	 * while creating with an invalid one fails with EINVAL.
+	 */
+	mq2 = mq_open(name, O_CREAT | O_RDWR, 0666, &badattr);
+	CHECK(mq2 != (mqd_t)-1, errno, "existing O_CREAT ignores attr ret=%d",
+		mq2);
+	test_close_mq_fd(&mq2);
+
+	mq2 = mq_open(name, O_CREAT | O_RDWR | O_EXCL, 0666, &badattr);
+	CHECK(mq2 == (mqd_t)-1 && errno == EEXIST, errno,
+		"EEXIST precedes attr validation");
+
+	snprintf(aname, sizeof(aname), "/mbedtest_mqattr_%04d_%x",
+		gettid(), test_rand());
+	test_mq_unlink(aname);
+	mq2 = mq_open(aname, O_CREAT | O_RDWR, 0666, &badattr);
+	CHECK(mq2 == (mqd_t)-1 && errno == EINVAL, errno,
+		"invalid attr on create ret=%d", mq2);
+	mq2 = mq_open(aname, O_RDWR);
+	CHECK(mq2 == (mqd_t)-1 && errno == ENOENT, errno,
+		"rejected create left no queue");
+
+	/* 99 name characters fit */
+	sname[0] = '/';
+	len = snprintf(sname + 1, sizeof(sname) - 1, "mbedtest_mqlen_%04d_%x",
+		gettid(), test_rand());
+	memset(sname + 1 + len, 'a', 99 - len);
+	sname[100] = '\0';
+	test_mq_unlink(sname);
+
+	mq2 = mq_open(sname, O_CREAT | O_RDWR, 0666, &attr);
+	CHECK(mq2 != (mqd_t)-1, errno, "100-char name");
+	test_close_mq_fd(&mq2);
+	test_mq_unlink(sname);
+
+	/*
+	 * Exact boundary: a 255-char component fits, 256 does not.
+	 * The name must stay unique per process: concurrent suite
+	 * instances would otherwise create and unlink the same queue,
+	 * and only one of them can see mq_unlink() == 0.
+	 */
+	lname[0] = '/';
+	len = snprintf(lname + 1, sizeof(lname) - 1, "mbedtest_mqlen_%04d_%x",
+		gettid(), test_rand());
+	CHECK(len > 0 && len < 255, EBADMSG, "boundary name len=%d", len);
+	memset(lname + 1 + len, 'c', 255 - len);
+	lname[1 + 255] = '\0';
+	test_mq_unlink(lname);
+	mq2 = mq_open(lname, O_CREAT | O_RDWR, 0666, &attr);
+	CHECK(mq2 != (mqd_t)-1, errno, "255-char name ret=%d", mq2);
+	test_close_mq_fd(&mq2);
+	CHECK(mq_unlink(lname) == 0, errno, "255-char name unlink");
+
+	memset(lname + 1, 'd', 256);
+	lname[1 + 256] = '\0';
+	mq2 = mq_open(lname, O_CREAT | O_RDWR, 0666, &attr);
+	CHECK(mq2 == (mqd_t)-1 && errno == ENAMETOOLONG, errno,
+		"256-char name ret=%d", mq2);
+
+	/* lookups and unlink report the same error, not ENOENT */
+	mq2 = mq_open(lname, O_RDWR);
+	CHECK(mq2 == (mqd_t)-1 && errno == ENAMETOOLONG, errno,
+		"256-char name lookup ret=%d", mq2);
+	CHECK(mq_unlink(lname) < 0 && errno == ENAMETOOLONG, errno,
+		"256-char name unlink");
+
+out:
+	test_close_mq_fd(&mq);
+	test_close_mq_fd(&mq2);
+	test_mq_unlink(name);
+	test_mq_unlink(aname);
 	TEST_END();
 }

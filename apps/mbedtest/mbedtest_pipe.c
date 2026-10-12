@@ -109,18 +109,22 @@ int pipe_2proc_recv(const char *mq_name)
 	TEST_POLL_OPEN(mqdes, -1, mq_open(name, O_RDONLY | O_NONBLOCK), 30000);
 	CHECK(mqdes >= 0, errno ? errno : ETIMEDOUT);
 
-	ret = mq_receive_fd_timed(mqdes, &data_rfd, 10000);
+	/*
+	 * Peer waits must survive multi-second scheduling stalls under
+	 * burn-in load (>10 s observed); 30 s matches the mq_open budget.
+	 */
+	ret = mq_receive_fd_timed(mqdes, &data_rfd, 30000);
 	CHECK(ret == 0, ret, "mq_receive_fd data fd=%d ret=%d", data_rfd, ret);
 	CHECK(data_rfd >= 0, EBADMSG, "mq_receive_fd data invalid fd=%d", data_rfd);
 
-	ret = mq_receive_fd_timed(mqdes, &ack_wfd, 10000);
+	ret = mq_receive_fd_timed(mqdes, &ack_wfd, 30000);
 	CHECK(ret == 0, ret, "mq_receive_fd ack fd=%d ret=%d", ack_wfd, ret);
 	CHECK(ack_wfd >= 0, EBADMSG, "mq_receive_fd ack invalid fd=%d", ack_wfd);
 
 	pfd.fd = data_rfd;
 	pfd.events = POLLIN;
-	ret = poll(&pfd, 1, 10000);
-	CHECK(ret > 0, errno);
+	ret = poll(&pfd, 1, 30000);
+	CHECK(ret > 0, errno ? errno : ETIMEDOUT);
 	CHECK(pfd.revents & (POLLIN | POLLHUP), EPROTO);
 
 	ret = read(data_rfd, buf, msglen);
@@ -130,8 +134,8 @@ int pipe_2proc_recv(const char *mq_name)
 	/* Parent should close writer; verify EOF */
 	pfd.fd = data_rfd;
 	pfd.events = POLLIN | POLLHUP;
-	ret = poll(&pfd, 1, 10000);
-	CHECK(ret > 0, errno);
+	ret = poll(&pfd, 1, 30000);
+	CHECK(ret > 0, errno ? errno : ETIMEDOUT);
 	CHECK(pfd.revents & (POLLIN | POLLHUP), EPROTO);
 
 	ret = read(data_rfd, buf, 1);
@@ -203,7 +207,8 @@ void pipe_2proc_send(void)
 	test_close_fd(&ack_p[1]);
 
 	ret = write(data_p[1], msg, msglen);
-	CHECK(ret == msglen, errno,
+	/* EPIPE: peer aborted before reading; its own result is reported there */
+	CHECK(ret == msglen, errno == EPIPE ? ETIMEDOUT : errno,
 		"pipe data write ret=%d expected=%zu", ret, msglen);
 
 	/* Close writer to signal EOF to peer */
@@ -212,7 +217,7 @@ void pipe_2proc_send(void)
 	/* Wait for peer ack */
 	pfd.fd = ack_p[0];
 	pfd.events = POLLIN;
-	ret = poll(&pfd, 1, 10000);
+	ret = poll(&pfd, 1, 30000);
 	if (ret <= 0 && mq_test_peer_died(peer))
 		peer = -1;
 	CHECK(ret > 0 || peer >= 0, ENOMEM);
@@ -220,7 +225,8 @@ void pipe_2proc_send(void)
 	CHECK(pfd.revents & POLLIN, EPROTO);
 
 	ret = read(ack_p[0], &ack, 1);
-	CHECK(ret == 1, errno);
+	/* EOF: peer aborted without acking; that failure is reported on its side */
+	CHECK(ret == 1, ret == 0 ? ETIMEDOUT : errno);
 	CHECK(ack == 'K', EBADMSG);
 
 	/* Reap peer deterministically. */
@@ -234,6 +240,14 @@ out:
 	if (peer >= 0) {
 		waitpid(peer, &st, 0);
 		peer = -1;
+		/*
+		 * A peer that failed on its own must surface even when this
+		 * side skipped (e.g. EPIPE), so the run's exit status cannot
+		 * stay clean; a hard failure of this side is never downgraded
+		 * to the peer's code.
+		 */
+		if (test_is_resource_error(TEST_ERRNO()))
+			CHECK(st == 0, st, "peer status=%d", st);
 	}
 
 	test_close_mq_fd(&mqdes);
@@ -347,7 +361,7 @@ void pipe_blocking_read_eof_on_close_test(void)
 	__atomic_store_n(&started, 0, __ATOMIC_RELEASE);
 	ret = pthread_create(&th, NULL, pipe_read_eof_thread, &ctx);
 	CHECK(ret == 0, ret);
-	while (!__atomic_load_n(&started, __ATOMIC_ACQUIRE) && ++tries < 200)
+	while (!__atomic_load_n(&started, __ATOMIC_ACQUIRE) && ++tries < 400)
 		usleep(20000);
 	if (!__atomic_load_n(&started, __ATOMIC_ACQUIRE))
 		pthread_kill(th, SIGCANCEL);
@@ -360,7 +374,7 @@ void pipe_blocking_read_eof_on_close_test(void)
 	test_close_fd(&p[1]);
 
 	for (tries = 0; !__atomic_load_n(&done, __ATOMIC_ACQUIRE) &&
-	     tries < 200; tries++)
+	     tries < 400; tries++)
 		usleep(50000);
 	if (!__atomic_load_n(&done, __ATOMIC_ACQUIRE)) {
 		pthread_kill(th, SIGCANCEL);
@@ -483,7 +497,7 @@ void pipe_blocking_write_epipe_on_close_test(void)
 		signal(SIGPIPE, old);
 	CHECK(ret == 0, ret);
 	while (!__atomic_load_n(&started, __ATOMIC_ACQUIRE) &&
-	       wait_cnt++ < 500)
+	       wait_cnt++ < 1000)
 		usleep(10000);
 	if (!__atomic_load_n(&started, __ATOMIC_ACQUIRE)) {
 		pthread_kill(th, SIGCANCEL);
@@ -498,7 +512,7 @@ void pipe_blocking_write_epipe_on_close_test(void)
 	test_close_fd(&p[0]);
 
 	for (ret = 0; !__atomic_load_n(&done, __ATOMIC_ACQUIRE) &&
-	     ret < 200; ret++)
+	     ret < 400; ret++)
 		usleep(50000);
 	if (!__atomic_load_n(&done, __ATOMIC_ACQUIRE)) {
 		pthread_kill(th, SIGCANCEL);

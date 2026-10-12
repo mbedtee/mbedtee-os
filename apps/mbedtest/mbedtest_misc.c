@@ -2,7 +2,7 @@
 /*
  * Copyright (c) 2019 Xing Loong <xing.xl.loong@gmail.com>
  *
- * mbedtest_misc.c -- Shared utility helpers (cleanup, mkpath, I/O).
+ * mbedtest_misc.c -- Shared utility helpers (cleanup, I/O, timing).
  */
 
 #include "mbedtest.h"
@@ -27,20 +27,23 @@ static void test_retry_cleanup(int (*fn)(const char *),
 {
 	int ret = -1, err = 0, retry = 0;
 
-	if (!path)
+	if (!path || !path[0])
 		return;
 
-	do {
+	for (;;) {
 		ret = fn(path);
 		err = errno;
-		if (ret != 0 && err != ok_err1 && err != ok_err2) {
-			if (++retry > 3000) {
-				TERR("%s %s failed %d\n", opname, path, err);
-				break;
-			}
-			usleep(20000);
+		if (ret == 0 || err == ok_err1 || err == ok_err2)
+			break;
+
+		/* EINVAL/ENAMETOOLONG never succeed on retry */
+		if (err == EINVAL || err == ENAMETOOLONG || ++retry > 3000) {
+			TERR("%s %s failed %d\n", opname, path, err);
+			break;
 		}
-	} while (ret != 0 && err != ok_err1 && err != ok_err2);
+
+		usleep(20000);
+	}
 }
 
 /*
@@ -81,28 +84,6 @@ void test_mq_unlink(const char *path)
 void test_sem_unlink(const char *path)
 {
 	test_retry_cleanup(sem_unlink, path, "sem_unlink", ENOENT, -1);
-}
-
-/*
- * test_mkpath: format a unique path from dir/suffix, pid and random seed.
- * Returns snprintf length on success, -1 on overflow or null arguments.
- */
-int test_mkpath(char *buf, size_t buflen,
-		const char *dir, const char *suffix)
-{
-	int len;
-
-	if (!buf || buflen == 0 || !dir || !suffix)
-		return -1;
-
-	len = snprintf(buf, buflen, "%s/%s_%d_%x",
-		       dir, suffix, (int)getpid(),
-		       (unsigned)test_rand());
-
-	if (len < 0 || (size_t)len >= buflen)
-		return -1;
-
-	return len;
 }
 
 /*
@@ -163,4 +144,14 @@ ssize_t test_read_full(int fd, void *buf, size_t len)
 	}
 
 	return off;
+}
+
+long test_ms_since(const struct timespec *t0)
+{
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+
+	return (now.tv_sec - t0->tv_sec) * 1000L +
+		(now.tv_nsec - t0->tv_nsec) / 1000000L;
 }
