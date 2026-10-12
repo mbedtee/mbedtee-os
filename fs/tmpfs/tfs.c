@@ -131,9 +131,14 @@ struct tfs_node *tfs_get_node(
 		p++;
 
 	for (;;) {
-		if (*p && *p != '/')
+		if (*p && *p != '/') {
+			/* leave room for the terminating NUL */
+			if (len >= FS_NAME_MAX - 1) {
+				n = NULL;
+				break;
+			}
 			name[len++] = *p++;
-		else {
+		} else {
 			if (len == 0)
 				break;
 			name[len] = 0;
@@ -166,12 +171,12 @@ int tfs_make_node(struct tfs *fs,
 
 	for (;;) {
 		if (*p && *p != '/') {
-			name[len++] = *p++;
-			if ((len == FS_NAME_MAX) &&
-				(*p != '/') && (*p)) {
+			/* leave room for the terminating NUL */
+			if (len >= FS_NAME_MAX - 1) {
 				ret = -ENAMETOOLONG;
 				goto out;
 			}
+			name[len++] = *p++;
 		} else {
 			if (len == 0) {
 				ret = -EINVAL;

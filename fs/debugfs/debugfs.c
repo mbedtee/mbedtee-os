@@ -312,13 +312,21 @@ static ssize_t debugfs_read(struct file *f, void *buf, size_t cnt)
 
 	tfs_lock_node(n);
 
-	if (!d->buf) {
-		ret = debugfs_alloc(d);
-		if (ret != 0)
-			goto out;
-	}
-
 	if (d->cnt == 0) {
+		/*
+		 * Content already fully generated once: report EOF
+		 * instead of regenerating forever (cat would never end).
+		 * No buffer is needed on this path.
+		 */
+		if (d->eof)
+			goto out;
+
+		if (!d->buf) {
+			ret = debugfs_alloc(d);
+			if (ret != 0)
+				goto out;
+		}
+
 		do {
 			ret = dn->fops->read(d);
 			if (ret != 0)
@@ -338,6 +346,8 @@ static ssize_t debugfs_read(struct file *f, void *buf, size_t cnt)
 			if (ret != 0)
 				goto out;
 		} while (1);
+
+		d->eof = 1;
 	}
 
 	ret = min(cnt, d->cnt);

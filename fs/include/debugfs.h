@@ -38,6 +38,8 @@ struct debugfs_file {
 	size_t required;
 /* consumption position */
 	off_t pos;
+/* content fully generated; next read at cnt==0 returns EOF(0) */
+	int eof;
 
 /* link to tfs node @ debugfs_fnode */
 	struct tfs_node *n;
