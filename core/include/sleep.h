@@ -38,7 +38,7 @@ long msleep_interruptible(unsigned long msecs);
  *
  * Returns the number of remaining microseconds.
  */
-int usleep_interruptible(useconds_t usecs);
+long usleep_interruptible(useconds_t usecs);
 
 #ifdef __cplusplus
 }

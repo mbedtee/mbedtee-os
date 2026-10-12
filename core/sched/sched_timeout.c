@@ -43,7 +43,8 @@ void sched_timespec(struct timespec *time, int interruptible)
 		assert(!in_interrupt());
 
 		sched_timed_dequeue(s, SCHED_SLEEPING, time);
-		thread_schedule(current, interruptible);
+
+		thread_schedule(current, false);
 
 		local_irq_restore(flags);
 

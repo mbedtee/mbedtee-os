@@ -139,12 +139,12 @@ static long syscall_ftruncate(struct thread_ctx *regs)
 
 static long syscall_usleep(struct thread_ctx *regs)
 {
-	return usleep(regs->r[ARG_REG + 1]);
+	return usleep_interruptible(regs->r[ARG_REG + 1]);
 }
 
 static long syscall_msleep(struct thread_ctx *regs)
 {
-	return msleep(regs->r[ARG_REG + 1]);
+	return msleep_interruptible(regs->r[ARG_REG + 1]);
 }
 
 static long syscall_sched_setscheduler(struct thread_ctx *regs)

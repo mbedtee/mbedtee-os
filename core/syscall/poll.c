@@ -294,10 +294,9 @@ long do_syscall_poll(struct pollfd *ufds, nfds_t nfds, int timemsecs)
 	int ret = -1, i = 0, cnt = 0;
 	int nfds_inline = ARRAY_SIZE(pq.inlinefds);
 
-	if (nfds == 0) {
-		msleep_interruptible(timemsecs);
-		return 0;
-	}
+	/* no fds: a plain interruptible sleep, 0 on timeout (POSIX) */
+	if (nfds == 0)
+		return (msleep_interruptible(timemsecs) > 0) ? -EINTR : 0;
 
 	if (!ufds)
 		return -EINVAL;
@@ -338,10 +337,9 @@ int poll(struct pollfd *fds, nfds_t nfds, int timemsecs)
 	int ret = -1, i = 0, cnt = 0;
 	int nfds_inline = ARRAY_SIZE(pq.inlinefds);
 
-	if (nfds == 0) {
-		msleep_interruptible(timemsecs);
-		return 0;
-	}
+	/* no fds: a plain interruptible sleep, 0 on timeout (POSIX) */
+	if (nfds == 0)
+		return (msleep_interruptible(timemsecs) > 0) ? -EINTR : 0;
 
 	if (!fds)
 		return -EINVAL;

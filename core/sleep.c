@@ -8,8 +8,49 @@
 #include <trace.h>
 #include <sched.h>
 #include <thread.h>
+#include <ksignal.h>
 
 #include <sleep.h>
+
+/*
+ * Linux do_nanosleep(): only the timeout or a pending signal ends a sleep;
+ * any other wakeup sleeps off the remainder.
+ */
+static bool sleep_aborted(int interruptible)
+{
+	if (interruptible)
+		return is_sigpending(current);
+
+	/* an uninterruptible sleeper still has to stay killable */
+	return !!(sigppending(current) &
+		(BIT(SIGKILL) | BIT(SIGCANCEL) | BIT(SIGSTOP)));
+}
+
+static long sleep_msecs(unsigned long msecs, int interruptible)
+{
+	uint64_t remain = msecs;
+
+	while (remain != 0) {
+		remain = sched_msecs(remain, interruptible);
+		if ((remain == 0) || sleep_aborted(interruptible))
+			break;
+	}
+
+	return remain;
+}
+
+static long sleep_usecs(useconds_t usecs, int interruptible)
+{
+	uint64_t remain = usecs;
+
+	while (remain != 0) {
+		remain = sched_usecs(remain, interruptible);
+		if ((remain == 0) || sleep_aborted(interruptible))
+			break;
+	}
+
+	return remain;
+}
 
 /*
  * This function sleeps for given number of milliseconds
@@ -18,7 +59,7 @@
  */
 long msleep(unsigned long msecs)
 {
-	return sched_msecs(msecs, false);
+	return sleep_msecs(msecs, false);
 }
 
 /*
@@ -28,7 +69,7 @@ long msleep(unsigned long msecs)
  */
 int usleep(useconds_t usecs)
 {
-	return sched_usecs(usecs, false);
+	return sleep_usecs(usecs, false);
 }
 
 /*
@@ -38,7 +79,7 @@ int usleep(useconds_t usecs)
  */
 long msleep_interruptible(unsigned long msecs)
 {
-	return sched_msecs(msecs, true);
+	return sleep_msecs(msecs, true);
 }
 
 /*
@@ -46,8 +87,8 @@ long msleep_interruptible(unsigned long msecs)
  *
  * Returns the remaining microseconds.
  */
-int usleep_interruptible(useconds_t usecs)
+long usleep_interruptible(useconds_t usecs)
 {
-	return sched_usecs(usecs, true);
+	return sleep_usecs(usecs, true);
 }
 
