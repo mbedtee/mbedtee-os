@@ -56,6 +56,7 @@ struct sem_handle {
 	struct tfs *fs;
 	struct tfs_node *node; /* named: node ref held while external ref exists */
 	struct list_head gnode;
+	pid_t owner; /* process that opened it; handles die with their process */
 };
 
 static LIST_HEAD(sem_handles);
@@ -112,27 +113,11 @@ static int sem_handle_get(const sem_t *sem, struct sem_handle **out)
 	return 0;
 }
 
-static void sem_handle_put(struct sem_handle *h)
+/* Release a handle with no remaining references (already off the list). */
+static void sem_handle_free(struct sem_handle *h)
 {
-	unsigned long flags = 0;
-	bool do_free = false;
-	struct tfs *fs = NULL;
-	struct tfs_node *n = NULL;
-
-	if (!h)
-		return;
-
-	spin_lock_irqsave(&sem_handles_lock, flags);
-	if (--h->refc == 0) {
-		list_del(&h->gnode);
-		do_free = true;
-		fs = h->fs;
-		n = h->node;
-	}
-	spin_unlock_irqrestore(&sem_handles_lock, flags);
-
-	if (!do_free)
-		return;
+	struct tfs *fs = h->fs;
+	struct tfs_node *n = h->node;
 
 	if (h->named && fs && n) {
 		tfs_lock(fs);
@@ -143,6 +128,25 @@ static void sem_handle_put(struct sem_handle *h)
 	}
 
 	kfree(h);
+}
+
+static void sem_handle_put(struct sem_handle *h)
+{
+	unsigned long flags = 0;
+	bool do_free = false;
+
+	if (!h)
+		return;
+
+	spin_lock_irqsave(&sem_handles_lock, flags);
+	if (--h->refc == 0) {
+		list_del(&h->gnode);
+		do_free = true;
+	}
+	spin_unlock_irqrestore(&sem_handles_lock, flags);
+
+	if (do_free)
+		sem_handle_free(h);
 }
 
 static struct sem_handle *sem_handle_alloc_unnamed(unsigned int value)
@@ -171,6 +175,7 @@ static struct sem_handle *sem_handle_alloc_unnamed(unsigned int value)
 	h->obj = o;
 	h->fs = NULL;
 	h->node = NULL;
+	h->owner = current->proc->id;
 	INIT_LIST_HEAD(&h->gnode);
 
 	spin_lock_irqsave(&sem_handles_lock, flags);
@@ -196,6 +201,7 @@ static struct sem_handle *sem_handle_alloc_named(struct tfs *fs, struct tfs_node
 	h->obj = &sem_fnode_of(n)->obj;
 	h->fs = fs;
 	h->node = n;
+	h->owner = current->proc->id;
 	INIT_LIST_HEAD(&h->gnode);
 
 	spin_lock_irqsave(&sem_handles_lock, flags);
@@ -807,6 +813,36 @@ static int sem_unlink_file(struct file_system *pfs, const char *path)
 	tfs_unlock(fs);
 	return ret;
 }
+
+/*
+ * Reclaim all semaphore handles owned by an exiting process.
+ * POSIX: a process's open semaphore references are released when it
+ * terminates, no matter how (sem_close implicit on exit).  Without
+ * this, kill -9 of a process holding named semaphores leaks the
+ * handle, the tmpfs node and its name forever.
+ */
+static void sem_process_cleanup(struct process *proc)
+{
+	unsigned long flags = 0;
+	struct sem_handle *h = NULL, *t = NULL;
+	LIST_HEAD(dead);
+
+	/* detach every handle owned by the exiting process */
+	spin_lock_irqsave(&sem_handles_lock, flags);
+	list_for_each_entry_safe(h, t, &sem_handles, gnode) {
+		if (h->owner != proc->id)
+			continue;
+		h->closing = true;
+		h->refc = 0;
+		list_move_tail(&h->gnode, &dead);
+	}
+	spin_unlock_irqrestore(&sem_handles_lock, flags);
+
+	/* release outside the lock: tfs_put_node() may take fs->lock */
+	list_for_each_entry_safe(h, t, &dead, gnode)
+		sem_handle_free(h);
+}
+DECLARE_CLEANUP_LOW(sem_process_cleanup);
 
 static struct tfs sem_tfs = {
 	.alloc = sem_alloc_node,

@@ -35,18 +35,26 @@
 
 static int msgq_path_of(char *out, size_t outlen, const char *name)
 {
-	const char *p = name;
+	size_t len = 0;
 
 	if (!out || outlen == 0 || !name)
 		return -EINVAL;
 
-	/* glibc/Linux convention: syscall passes name without leading '/' */
-	if (*p == 0)
-		return -EINVAL;
-	if (*p == '/' || strchr(p, '/'))
+	/*
+	 * glibc convention: name has no leading '/'; single component that
+	 * fits (over-long must fail here, else the fs lookup degrades it to
+	 * ENOENT).
+	 */
+	while (name[len] && name[len] != '/') {
+		if (len >= FS_NAME_MAX - 1)
+			return -ENAMETOOLONG;
+		len++;
+	}
+
+	if (len == 0 || name[len] == '/')
 		return -EINVAL;
 
-	if (snprintf(out, outlen, "%s/%s", MSGQ_FS_MOUNT, p) >= (int)outlen)
+	if (snprintf(out, outlen, "%s/%s", MSGQ_FS_MOUNT, name) >= (int)outlen)
 		return -ENAMETOOLONG;
 
 	return 0;
@@ -170,7 +178,8 @@ static int msgq_do_open(struct tfs *fs,
 
 	tfs_lock_node(n);
 
-	if (flags & O_EXCL) {
+	/* bare O_EXCL is ignored (Linux); EEXIST only for O_CREAT|O_EXCL */
+	if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) {
 		ret = -EEXIST;
 		goto out;
 	}
@@ -232,14 +241,6 @@ static int msgq_open(struct file *f,
 	struct tfs *fs = file2tfs(f);
 	int isdir = fspath_isdir(f->path);
 
-	if (f->flags & O_CREAT) {
-		if (attr && ((attr->mq_maxmsg > MQ_MSGMAX) ||
-			(attr->mq_msgsize > MQ_MSGSIZEMAX) ||
-			(attr->mq_maxmsg <= 0) ||
-			(attr->mq_msgsize <= 0)))
-			return -EINVAL;
-	}
-
 	tfs_lock(fs);
 
 	n = tfs_get_node(fs, f->path);
@@ -251,6 +252,16 @@ static int msgq_open(struct file *f,
 			goto out;
 		}
 	} else {
+		/* attr only matters on create; existing queue ignores it (Linux) */
+		if ((f->flags & O_CREAT) && attr &&
+			((attr->mq_maxmsg > MQ_MSGMAX) ||
+			(attr->mq_msgsize > MQ_MSGSIZEMAX) ||
+			(attr->mq_maxmsg <= 0) ||
+			(attr->mq_msgsize <= 0))) {
+			ret = -EINVAL;
+			goto out;
+		}
+
 		/* refc is 1 after creation */
 		ret = msgq_do_create(fs, &n, isdir, f, mode);
 		if (ret != 0)
@@ -315,6 +326,10 @@ static void evp_notify(struct msgq_fnode *msgn)
 {
 	int ret = -1;
 	struct process *proc = NULL;
+
+	/* SIGEV_NONE: the registration is consumed with no delivery */
+	if (msgn->evp.sigev_notify == SIGEV_NONE)
+		return;
 
 	proc = process_get(msgn->evppid);
 	if (!proc)
@@ -698,10 +713,6 @@ int mq_notify(mqd_t mqdes, const struct sigevent *evp)
 		ret = -EBUSY;
 		goto out;
 	}
-	if (!msgn->evpset && !evp) {
-		ret = -EINVAL;
-		goto out;
-	}
 	if (msgn->evp_err != 0 && !msgn->evpset && evp) {
 		ret = msgn->evp_err;
 		msgn->evp_err = 0;
@@ -729,6 +740,8 @@ int mq_notify(mqd_t mqdes, const struct sigevent *evp)
 				ret = -EINVAL;
 				goto out;
 			}
+		} else if (msgn->evp.sigev_notify == SIGEV_NONE) {
+			/* null notification: registered, nothing is sent */
 		} else {
 			ret = -EINVAL;
 			goto out;
@@ -736,6 +749,7 @@ int mq_notify(mqd_t mqdes, const struct sigevent *evp)
 		msgn->evpset = true;
 		msgn->evppid = curr->proc->id;
 	} else {
+		/* cancel is idempotent: POSIX allows EINVAL, Linux returns 0 */
 		msgn->evpset = false;
 	}
 
